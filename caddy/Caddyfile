@@ -1,0 +1,30 @@
+{
+  email {$ACME_EMAIL:admin@computecoin.ai}
+  admin off
+}
+
+{$DOMAIN:localhost} {
+  encode zstd gzip
+
+  # API Endpoints
+  handle /v1/* {
+    reverse_proxy api:8000
+  }
+
+  handle /health {
+    reverse_proxy api:8000
+  }
+
+  handle /docs* {
+    reverse_proxy api:8000
+  }
+
+  handle /openapi.json {
+    reverse_proxy api:8000
+  }
+
+  # Frontend Next.js Web Application
+  handle {
+    reverse_proxy web:3000
+  }
+}

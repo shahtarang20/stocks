@@ -1,0 +1,193 @@
+# ==============================================================================
+# ComputeCoin — Production Stack Orchestration (docker-compose.prod.yml)
+# ==============================================================================
+# Standalone self-hosted or cloud VPS production deployment.
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # Caddy Reverse Proxy & Automatic SSL
+  # ----------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: computecoin-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    networks:
+      - computecoin-net
+
+  # ----------------------------------------------------------------------------
+  # Next.js Production Web Application
+  # ----------------------------------------------------------------------------
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: computecoin-prod-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://api.computecoin.ai}
+    networks:
+      - computecoin-net
+
+  # ----------------------------------------------------------------------------
+  # ComputeCoin REST API (FastAPI + Uvicorn)
+  # ----------------------------------------------------------------------------
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: computecoin-prod-api
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      PORT: 8000
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+      LOG_LEVEL: INFO
+      STRUCTURED_LOGGING: "true"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://computecoin:${POSTGRES_PASSWORD}@postgres:5432/computecoin}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-computecoin-artifacts}
+      FRONTEND_URL: ${FRONTEND_URL:-https://computecoin.ai}
+      AUTH_SECRET: ${AUTH_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-resend}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-ComputeCoin <noreply@computecoin.ai>}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      SETTLEMENT_ENABLED: ${SETTLEMENT_ENABLED:-true}
+      SETTLEMENT_CHAIN_ID: ${SETTLEMENT_CHAIN_ID:-11155111}
+      SETTLEMENT_CONTRACT_ADDRESS: ${SETTLEMENT_CONTRACT_ADDRESS:-}
+      COMPUTE_TOKEN_ADDRESS: ${COMPUTE_TOKEN_ADDRESS:-}
+      PLATFORM_SIGNER_PRIVATE_KEY: ${PLATFORM_SIGNER_PRIVATE_KEY:-}
+      PLATFORM_TREASURY_ADDRESS: ${PLATFORM_TREASURY_ADDRESS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - computecoin-net
+
+  # ----------------------------------------------------------------------------
+  # Dedicated Lease Sweeper & Scheduler Worker Process
+  # ----------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: computecoin-prod-worker
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      STRUCTURED_LOGGING: "true"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://computecoin:${POSTGRES_PASSWORD}@postgres:5432/computecoin}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      SWEEP_INTERVAL_SECONDS: 15
+      AUTH_SECRET: ${AUTH_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - computecoin-net
+
+  # ----------------------------------------------------------------------------
+  # PostgreSQL Database (16-Alpine)
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: computecoin-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: computecoin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: computecoin
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U computecoin -d computecoin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - computecoin-net
+
+  # ----------------------------------------------------------------------------
+  # Redis Cache & Rate Limiting
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: computecoin-prod-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.prod}", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - computecoin-net
+
+  # ----------------------------------------------------------------------------
+  # S3 Object Storage (MinIO or Cloud S3)
+  # ----------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: computecoin-prod-minio
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-computecoinadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env.prod}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - computecoin-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  computecoin-net:
+    driver: bridge

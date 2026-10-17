@@ -32,9 +32,24 @@ from app.api.routers import (
     telemetry,
 )
 from app.core.config import settings
+from app.core.logging import setup_logging
 
-logging.basicConfig(level=settings.LOG_LEVEL.upper())
+setup_logging()
 logger = logging.getLogger("computecoin.sweeper")
+
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.ENVIRONMENT,
+            traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+            profiles_sample_rate=settings.SENTRY_PROFILES_SAMPLE_RATE,
+            send_default_pii=False,
+        )
+        logging.getLogger("computecoin.api").info("Sentry monitoring initialized for %s", settings.ENVIRONMENT)
+    except Exception as exc:
+        logging.getLogger("computecoin.api").warning("Could not initialize Sentry: %s", exc)
 
 
 async def _recovery_sweeper() -> None:

@@ -39,10 +39,24 @@ class Settings(BaseSettings):
     EMAIL_VERIFICATION_TTL_SECONDS: int = 60 * 60 * 24  # 24 hours
     PASSWORD_RESET_TTL_SECONDS: int = 60 * 60  # 1 hour
 
-    # Environment / logging
+    # Environment / logging / monitoring
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
+    STRUCTURED_LOGGING: bool | None = None
     FRONTEND_URL: str = "http://localhost:3000"
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.1
+    SENTRY_PROFILES_SAMPLE_RATE: float = 0.1
+
+    # Email provider configuration ("console" | "resend" | "smtp")
+    EMAIL_PROVIDER: str = "console"
+    RESEND_API_KEY: str = ""
+    EMAIL_FROM: str = "ComputeCoin <noreply@computecoin.ai>"
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_TLS: bool = True
 
     # Auth cookies & CSRF
     COOKIE_SECURE: bool | None = None
@@ -180,6 +194,16 @@ class Settings(BaseSettings):
         if self.COOKIE_SECURE is not None:
             return self.COOKIE_SECURE
         return self.ENVIRONMENT.lower() in {"production", "prod"}
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() in {"production", "prod"}
+
+    @property
+    def use_structured_logging(self) -> bool:
+        if self.STRUCTURED_LOGGING is not None:
+            return self.STRUCTURED_LOGGING
+        return self.ENVIRONMENT.lower() in {"production", "prod", "staging"}
 
 
 @lru_cache

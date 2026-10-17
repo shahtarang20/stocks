@@ -11,6 +11,8 @@
     "create:pool": "npm --prefix contracts run create:pool",
     "deploy:settlement": "npm --prefix contracts run deploy:settlement",
     "verify:contracts": "npm --prefix contracts run verify:contracts",
-    "testnet:e2e": "npm --prefix contracts run testnet:e2e"
+    "testnet:e2e": "npm --prefix contracts run testnet:e2e",
+    "smoke:test": "bash scripts/smoke-test.sh",
+    "load:test": "python3 scripts/staging-load-test.py"
   }
 }

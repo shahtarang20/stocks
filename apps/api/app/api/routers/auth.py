@@ -51,6 +51,7 @@ from app.services.auth import (
     revoke_chain,
     revoke_session,
 )
+from app.services.email import send_password_reset_email, send_verification_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -148,6 +149,7 @@ async def register(
         resource_type="user", resource_id=str(user.id),
     )
     await db.flush()
+    await send_verification_email(user.email, raw_token)
 
     return RegisterResponse(
         user_id=user.id,
@@ -399,6 +401,7 @@ async def password_reset_request(
             db, action="auth.password_reset_request", outcome="success",
             actor_user_id=user.id, ip=ip,
         )
+        await send_password_reset_email(user.email, raw_token)
     await db.flush()
 
     # Generic message either way to avoid user enumeration.

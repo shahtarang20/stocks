@@ -85,3 +85,20 @@ jobs:
           python -m pip install -U pip
           pip install -e ".[dev]" || pip install -e .
       - run: pytest -q || echo "no tests yet"
+
+  contracts:
+    name: Contracts (Hardhat tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+      - run: npm ci || npm install
+      - run: npm test
+

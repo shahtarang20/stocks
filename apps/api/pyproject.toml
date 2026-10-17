@@ -23,6 +23,7 @@ dependencies = [
     "python-multipart==0.0.20",
     "eth-account>=0.14.0",
     "stripe>=11.0.0",
+    "sentry-sdk>=2.0.0",
 ]
 
 [project.optional-dependencies]

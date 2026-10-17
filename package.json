@@ -8,6 +8,9 @@
     "lint": "npm --prefix apps/web run lint",
     "typecheck": "npm --prefix apps/web run typecheck",
     "deploy:token": "npm --prefix contracts run deploy:token",
-    "create:pool": "npm --prefix contracts run create:pool"
+    "create:pool": "npm --prefix contracts run create:pool",
+    "deploy:settlement": "npm --prefix contracts run deploy:settlement",
+    "verify:contracts": "npm --prefix contracts run verify:contracts",
+    "testnet:e2e": "npm --prefix contracts run testnet:e2e"
   }
 }

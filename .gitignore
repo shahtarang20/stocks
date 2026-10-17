@@ -25,7 +25,10 @@ contracts/cache/
 # ---- Env / secrets (NEVER commit) ----
 .env
 .env.*
+*.env
 !.env.example
+contracts/deployments/localhost*
+contracts/deployments/*.env
 *.pem
 *.key
 secrets/

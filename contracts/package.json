@@ -8,7 +8,10 @@
     "build": "hardhat compile",
     "compile": "hardhat compile",
     "deploy:token": "hardhat run scripts/deploy-token.js",
-    "create:pool": "hardhat run scripts/create-liquidity-pool.js"
+    "create:pool": "hardhat run scripts/create-liquidity-pool.js",
+    "deploy:settlement": "hardhat run scripts/deploy-settlement.js",
+    "verify:contracts": "hardhat run scripts/verify-contracts.js",
+    "testnet:e2e": "hardhat run scripts/e2e-testnet-settlement.js"
   },
   "keywords": [],
   "type": "module",

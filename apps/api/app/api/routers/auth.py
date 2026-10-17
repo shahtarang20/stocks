@@ -120,7 +120,7 @@ async def register(
 ) -> RegisterResponse:
     ip = client_ip(request)
     _enforce_rate_limit(
-        f"register:{ip}", settings.REGISTER_RATE_LIMIT, settings.REGISTER_RATE_WINDOW_SECONDS
+        f"register:{ip}", settings.register_rate_limit, settings.REGISTER_RATE_WINDOW_SECONDS
     )
 
     email = body.email.strip().lower()
@@ -196,7 +196,7 @@ async def login(
     email = body.email.strip().lower()
     # Rate limit by IP and by target email to curb credential stuffing.
     _enforce_rate_limit(
-        f"login:{ip}", settings.LOGIN_RATE_LIMIT, settings.LOGIN_RATE_WINDOW_SECONDS
+        f"login:{ip}", settings.login_ip_rate_limit, settings.LOGIN_IP_RATE_WINDOW_SECONDS
     )
     _enforce_rate_limit(
         f"login:{email}", settings.LOGIN_RATE_LIMIT, settings.LOGIN_RATE_WINDOW_SECONDS

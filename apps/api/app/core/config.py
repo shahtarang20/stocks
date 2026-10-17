@@ -69,7 +69,9 @@ class Settings(BaseSettings):
     # Rate limiting (requests per window)
     LOGIN_RATE_LIMIT: int = 5
     LOGIN_RATE_WINDOW_SECONDS: int = 60
-    REGISTER_RATE_LIMIT: int = 5
+    LOGIN_IP_RATE_LIMIT: int = 50
+    LOGIN_IP_RATE_WINDOW_SECONDS: int = 60
+    REGISTER_RATE_LIMIT: int = 50
     REGISTER_RATE_WINDOW_SECONDS: int = 60
     PASSWORD_RESET_RATE_LIMIT: int = 5
     PASSWORD_RESET_RATE_WINDOW_SECONDS: int = 60
@@ -183,6 +185,18 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.ENVIRONMENT.lower() in {"test", "testing"}
+
+    @property
+    def register_rate_limit(self) -> int:
+        if self.ENVIRONMENT.lower() in _DEV_ENVS:
+            return max(self.REGISTER_RATE_LIMIT, 500)
+        return self.REGISTER_RATE_LIMIT
+
+    @property
+    def login_ip_rate_limit(self) -> int:
+        if self.ENVIRONMENT.lower() in _DEV_ENVS:
+            return max(self.LOGIN_IP_RATE_LIMIT, 500)
+        return self.LOGIN_IP_RATE_LIMIT
 
     @property
     def expose_dev_tokens(self) -> bool:

@@ -16,8 +16,14 @@ from app.db.base import utcnow
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user
 from app.models.enums import Role
-from app.models.provider import EnrollmentToken, Provider
+from app.models.provider import EnrollmentToken, MachineAttestation, Provider
 from app.models.user import UserRole
+from app.schemas.attestation import (
+    AttestationChallengeResponse,
+    AttestationReportOut,
+    AttestationSubmitRequest,
+    AttestationVerifyResponse,
+)
 from app.schemas.auth import CurrentUser
 from app.schemas.provider import (
     EnrollmentTokenCreate,
@@ -427,3 +433,184 @@ async def list_payouts(
         )
     ).scalars().all()
     return [_shape_payout(p) for p in rows]
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: Remote Hardware Attestation
+# ---------------------------------------------------------------------------
+@router.post(
+    "/machines/{machine_id}/attestation/challenge",
+    response_model=AttestationChallengeResponse,
+)
+async def create_attestation_challenge(
+    machine_id: uuid.UUID,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AttestationChallengeResponse:
+    """Issue a fresh cryptographic challenge nonce to prevent replay attacks."""
+    import secrets
+
+    provider = await _require_provider(db, current)
+    machine = await get_owned_machine(db, provider.id, machine_id)
+    if machine is None:
+        raise _MACHINE_NOT_FOUND
+
+    nonce = secrets.token_hex(24)
+    health = dict(machine.last_health or {})
+    health["latest_attestation_nonce"] = nonce
+    health["latest_attestation_nonce_created_at"] = utcnow().isoformat()
+    machine.last_health = health
+    await db.flush()
+    return AttestationChallengeResponse(machine_id=machine.id, nonce=nonce)
+
+
+@router.post(
+    "/machines/{machine_id}/attestation/verify",
+    response_model=AttestationVerifyResponse,
+)
+async def verify_machine_attestation(
+    machine_id: uuid.UUID,
+    body: AttestationSubmitRequest,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AttestationVerifyResponse:
+    """Cryptographically verify an attestation quote from a provider machine."""
+    import hashlib
+    import hmac
+    import json
+
+    provider = await _require_provider(db, current)
+    machine = await get_owned_machine(db, provider.id, machine_id)
+    if machine is None:
+        raise _MACHINE_NOT_FOUND
+
+    # 1. Nonce freshness check
+    health = dict(machine.last_health or {})
+    stored_nonce = health.get("latest_attestation_nonce")
+    if not stored_nonce or stored_nonce != body.nonce:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_or_expired_nonce",
+        )
+
+    # 2. Quote verification (platform PCR hash + nonce)
+    quote_hasher = hashlib.sha384()
+    quote_hasher.update(body.nonce.encode("utf-8"))
+    for k in sorted(body.pcr_measurements.keys()):
+        quote_hasher.update(f"{k}:{body.pcr_measurements[k]}".encode("utf-8"))
+    computed_quote = quote_hasher.hexdigest()
+    if not hmac.compare_digest(body.platform_quote, computed_quote):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="platform_quote_tampered",
+        )
+
+    # 3. Signature verification against machine hardware signing key
+    measurements_json = json.dumps(body.pcr_measurements, sort_keys=True)
+    canonical_str = (
+        f"{machine.id}\n"
+        f"{body.isolation_tier}\n"
+        f"{body.nonce}\n"
+        f"{body.timestamp}\n"
+        f"{measurements_json}\n"
+        f"{body.platform_quote}"
+    )
+    expected_sig = hmac.new(
+        machine.signing_key.encode("utf-8"),
+        canonical_str.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(body.signature, expected_sig):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="signature_verification_failed",
+        )
+
+    now = utcnow()
+    # Consume nonce
+    health.pop("latest_attestation_nonce", None)
+    machine.last_health = health
+
+    # Record attestation in DB
+    attestation = MachineAttestation(
+        machine_id=machine.id,
+        isolation_tier=body.isolation_tier,
+        nonce=body.nonce,
+        pcr_measurements=body.pcr_measurements,
+        platform_quote=body.platform_quote,
+        signature=body.signature,
+        verification_status="verified",
+        verified_at=now,
+        details={"ip": client_ip(request)},
+    )
+    db.add(attestation)
+
+    # Promote machine capability
+    if machine.capability:
+        existing_tiers = list(machine.capability.supported_isolation_tiers or ["container"])
+        if body.isolation_tier not in existing_tiers:
+            existing_tiers.append(body.isolation_tier)
+        machine.capability.supported_isolation_tiers = existing_tiers
+        machine.capability.verification_status = "VERIFIED"
+    if machine.hardware:
+        machine.hardware.verification_status = "VERIFIED"
+
+    await record_audit(
+        db,
+        action="machine.attestation.verify",
+        outcome="success",
+        actor_user_id=current.id,
+        ip=client_ip(request),
+        resource_type="machine",
+        resource_id=str(machine.id),
+        reason=body.isolation_tier,
+    )
+    await db.flush()
+
+    return AttestationVerifyResponse(
+        verified=True,
+        machine_id=machine.id,
+        isolation_tier=body.isolation_tier,
+        verification_status="VERIFIED",
+        verified_at=now,
+        attestation_id=attestation.id,
+        details={"pcr_count": len(body.pcr_measurements)},
+    )
+
+
+@router.get(
+    "/machines/{machine_id}/attestation/history",
+    response_model=list[AttestationReportOut],
+)
+async def list_machine_attestations(
+    machine_id: uuid.UUID,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AttestationReportOut]:
+    """Retrieve the audit trail of remote attestations for a provider machine."""
+    provider = await _require_provider(db, current)
+    machine = await get_owned_machine(db, provider.id, machine_id)
+    if machine is None:
+        raise _MACHINE_NOT_FOUND
+
+    rows = (
+        await db.execute(
+            select(MachineAttestation)
+            .where(MachineAttestation.machine_id == machine.id)
+            .order_by(MachineAttestation.created_at.desc())
+        )
+    ).scalars().all()
+    return [
+        AttestationReportOut(
+            attestation_id=a.id,
+            machine_id=a.machine_id,
+            isolation_tier=a.isolation_tier,
+            verification_status=a.verification_status,
+            nonce=a.nonce,
+            pcr_measurements=a.pcr_measurements or {},
+            verified_at=a.verified_at,
+            created_at=a.created_at,
+        )
+        for a in rows
+    ]

@@ -132,9 +132,34 @@ class ProviderCapability(Base, TimestampMixin):
         index=True,
     )
     supported_workloads: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    supported_isolation_tiers: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: ["container"])
     verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="detected")
 
     machine: Mapped["ProviderMachine"] = relationship(back_populates="capability")
+
+
+class MachineAttestation(Base, TimestampMixin):
+    """Cryptographic remote attestation report from a machine (Phase 8)."""
+
+    __tablename__ = "machine_attestations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    machine_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("provider_machines.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    isolation_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="confidential")
+    nonce: Mapped[str] = mapped_column(String(64), nullable=False)
+    pcr_measurements: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    platform_quote: Mapped[str] = mapped_column(String(1024), nullable=False)
+    signature: Mapped[str] = mapped_column(String(512), nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="verified")
+    verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    machine: Mapped["ProviderMachine"] = relationship()
 
 
 class EnrollmentToken(Base):

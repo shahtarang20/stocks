@@ -32,6 +32,9 @@ const decimal = (v: string) => /^\d+(\.\d{1,2})?$/.test(v.trim());
 const schema = z
   .object({
     workload_type: z.enum(["text-generation", "batch-inference"]),
+    isolation_tier: z
+      .enum(["container", "gvisor", "microvm", "confidential"])
+      .default("container"),
     model: z.string().trim().min(1, "Model is required"),
     prompt: z.string().optional(),
     max_tokens: z
@@ -124,6 +127,7 @@ export default function NewJobPage() {
     resolver: zodResolver(schema),
     defaultValues: {
       workload_type: "text-generation",
+      isolation_tier: "container",
       model: "echo-sim-v1",
       prompt: "",
       max_tokens: "64",
@@ -162,6 +166,7 @@ export default function NewJobPage() {
 
     const payload: CreateJobInput = {
       workload_type: values.workload_type,
+      isolation_tier: values.isolation_tier,
       model: values.model.trim(),
       input,
       gpu_count: Number(values.gpu_count),
@@ -216,7 +221,7 @@ export default function NewJobPage() {
               </div>
             ) : null}
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="workload_type">Workload type</Label>
                 <select
@@ -226,6 +231,19 @@ export default function NewJobPage() {
                 >
                   <option value="text-generation">text-generation</option>
                   <option value="batch-inference">batch-inference</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="isolation_tier">Isolation Tier</Label>
+                <select
+                  id="isolation_tier"
+                  className={selectClass}
+                  {...register("isolation_tier")}
+                >
+                  <option value="container">Standard Container (Shared Kernel)</option>
+                  <option value="gvisor">gVisor Sandbox (runsc)</option>
+                  <option value="microvm">microVM (Kata / Firecracker)</option>
+                  <option value="confidential">Confidential Computing (AMD SEV-SNP)</option>
                 </select>
               </div>
               <div className="space-y-1.5">

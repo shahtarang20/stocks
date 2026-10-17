@@ -69,6 +69,12 @@ class HardwareUnavailableError(ExecutorError):
     it surfaces this instead so the job is reported ``failed`` (or requeued)."""
 
 
+class IsolationUnavailableError(HardwareUnavailableError):
+    """Raised when a specific isolation tier (gVisor, microVM, confidential)
+    is requested by a job but the required runtime/hardware is unavailable on the host.
+    Per ADR-0003, workloads must NOT be silently downgraded to weaker isolation."""
+
+
 # --------------------------------------------------------------------------- #
 # Result / artifact value objects
 # --------------------------------------------------------------------------- #
@@ -127,6 +133,7 @@ class JobSpec:
     execution_mode: str = "simulated"
     image_digest: Optional[str] = None
     limits: dict[str, Any] = field(default_factory=dict)
+    isolation_tier: str = "container"
 
     @classmethod
     def from_claim(cls, data: dict[str, Any]) -> "JobSpec":
@@ -138,6 +145,7 @@ class JobSpec:
             execution_mode=data.get("execution_mode", "simulated"),
             image_digest=data.get("image_digest"),
             limits=data.get("limits") or {},
+            isolation_tier=data.get("isolation_tier") or "container",
         )
 
 
@@ -261,6 +269,7 @@ class SimulatedExecutor(Executor):
             "execution_mode": "simulated",
             "simulated": True,
             "tokens": tokens,
+            "isolation_tier": job_spec.isolation_tier,
         }
 
     def _batch_inference(self, job_spec: JobSpec) -> dict[str, Any]:
@@ -286,6 +295,7 @@ class SimulatedExecutor(Executor):
             "model": job_spec.model,
             "execution_mode": "simulated",
             "simulated": True,
+            "isolation_tier": job_spec.isolation_tier,
         }
 
 
@@ -354,12 +364,24 @@ class DockerExecutor(Executor):
         runner: DockerRunner = _subprocess_runner,
         docker_available: Callable[[], bool] = _default_docker_available,
         nvidia_available: Callable[[], bool] = _default_nvidia_available,
+        gvisor_available: Optional[Callable[[], bool]] = None,
+        microvm_available: Optional[Callable[[], bool]] = None,
+        confidential_available: Optional[Callable[[], bool]] = None,
         output_root: Optional[str] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        from .isolation import (
+            probe_confidential_computing,
+            probe_gvisor,
+            probe_microvm,
+        )
+
         self._runner = runner
         self._docker_available = docker_available
         self._nvidia_available = nvidia_available
+        self._gvisor_available = gvisor_available or probe_gvisor
+        self._microvm_available = microvm_available or probe_microvm
+        self._confidential_available = confidential_available or probe_confidential_computing
         self._output_root = output_root
         self._clock = clock
 
@@ -418,6 +440,39 @@ class DockerExecutor(Executor):
                     "unavailable on this host"
                 )
             argv += ["--gpus", str(gpu_count)]
+
+        # --- Phase 8: Isolation Tier Enforcement ---
+        from .isolation import (
+            TIER_CONFIDENTIAL,
+            TIER_CONTAINER,
+            TIER_GVISOR,
+            TIER_MICROVM,
+        )
+
+        tier = (job_spec.isolation_tier or TIER_CONTAINER).lower()
+        if tier == TIER_GVISOR:
+            if not self._gvisor_available():
+                raise IsolationUnavailableError(
+                    "gVisor isolation requested but runsc runtime is not available on this host. "
+                    "Workload cannot be silently downgraded to ordinary container isolation."
+                )
+            argv += ["--runtime", "runsc"]
+        elif tier == TIER_MICROVM:
+            if not self._microvm_available():
+                raise IsolationUnavailableError(
+                    "microVM isolation requested but Kata Containers / microVM runtime is not available on this host. "
+                    "Workload cannot be silently downgraded to ordinary container isolation."
+                )
+            argv += ["--runtime", "kata-qemu"]
+        elif tier == TIER_CONFIDENTIAL:
+            if not self._confidential_available():
+                raise IsolationUnavailableError(
+                    "Confidential computing isolation requested but hardware enclave / attestation is not available on this host. "
+                    "Workload cannot be silently downgraded."
+                )
+            argv += ["--runtime", "kata-qemu-sev"]
+        elif tier != TIER_CONTAINER:
+            raise ExecutorError(f"Unsupported isolation_tier: {job_spec.isolation_tier!r}")
 
         # The pinned image is the LAST positional before the (implicit) entrypoint.
         argv.append(job_spec.image_digest)

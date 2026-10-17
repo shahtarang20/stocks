@@ -35,6 +35,9 @@ class JobCreate(BaseModel):
     max_runtime_seconds: int | None = Field(default=None, gt=0)
     retry_policy: RetryPolicy | None = None
     priority: int = Field(default=0, ge=0)
+    isolation_tier: str = Field(
+        default="container", pattern="^(container|gvisor|microvm|confidential)$"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +54,7 @@ class JobOut(BaseModel):
     input: dict
     status: str
     execution_mode: str
+    isolation_tier: str = "container"
     machine_id: uuid.UUID | None = None
     reservation_id: uuid.UUID | None = None
     gpu_count: int
@@ -147,6 +151,7 @@ class ClaimResponse(BaseModel):
     model: str
     input: dict
     execution_mode: str
+    isolation_tier: str = "container"
     limits: ClaimLimits
     image_digest: str | None = None
     artifact_upload: ArtifactUploadGrant

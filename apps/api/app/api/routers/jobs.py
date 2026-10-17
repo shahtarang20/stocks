@@ -56,6 +56,7 @@ def shape_job(job: Job) -> JobOut:
         input=job.input,
         status=job.status,
         execution_mode=job.execution_mode,
+        isolation_tier=getattr(job, "isolation_tier", "container") or "container",
         machine_id=job.machine_id,
         reservation_id=job.reservation_id,
         gpu_count=job.gpu_count,
@@ -124,6 +125,7 @@ async def create_job(
         retry_policy=retry_policy,
         priority=body.priority,
         execution_mode="simulated",
+        isolation_tier=body.isolation_tier or "container",
         idempotency_key=idempotency_key,
         machine_id=body.machine_id,
     )

@@ -1,6 +1,6 @@
 # ComputeCoin — Implementation Checklist (10-phase plan)
 
-Tracks the build phase by phase. Phases 0 through 7 are complete; Phase 8 is next.
+Tracks the build phase by phase. Phases 0 through 8 are complete; Phase 9 is next.
 `[x]` done · `[~]` in progress / skeleton · `[ ]` not started.
 
 ## Phase 0 — Foundations & decisions ✅ DONE
@@ -96,10 +96,16 @@ Tracks the build phase by phase. Phases 0 through 7 are complete; Phase 8 is nex
 - [x] Provider console & workflows: onboarding, hardware inventory, live earnings accrued from the double-entry ledger, and payout requests.
 - [x] Test suite: **6 admin integration tests passing** covering RBAC, user suspension/reinstatement, self-suspension blocking, audit logs, and platform stats (116 total backend tests passing). All 43 frontend routes compiling cleanly.
 
-## Phase 8 — Stronger isolation
+## Phase 8 — Stronger isolation ✅ DONE
+Shipped per `docs/architecture/decisions/0003-workload-isolation-and-sandbox-tiers.md`. Enforces strict tier matching with "no silent downgrade".
 
-- [ ] gVisor → microVMs (Firecracker/Kata) → dedicated hosts.
-- [ ] Confidential computing + attestation (protect customer from provider).
+- [x] Host capability probes & isolation tier detection (`container`, `gvisor`, `microvm`, `confidential`) in `provider-agent/computecoin_agent/isolation.py`.
+- [x] Runtime argv flags appended dynamically (`--runtime runsc`, `--runtime kata-qemu`, `--runtime kata-qemu-sev`) and strict "no silent downgrade" enforcement via `IsolationUnavailableError` in `executor.py`.
+- [x] Cryptographic remote hardware attestation lifecycle: challenge-nonce exchange, HMAC-SHA256 measurement quotes, quote verification with timestamp freshness, and promotion to `VERIFIED` status in `apps/api/app/api/routers/providers.py` and `provider-agent/computecoin_agent/attestation.py`.
+- [x] Database migrations and schemas: Alembic migration `0006_isolation_phase8`, `Job.isolation_tier`, `ProviderCapability.supported_isolation_tiers`, and `MachineAttestation` audit logs.
+- [x] Explainable scheduler matching & targeted machine validation ensuring no job is scheduled to an unverified or incapable node.
+- [x] Frontend UI: Isolation tier selection in job submission (`apps/web/src/app/dashboard/jobs/new/page.tsx`), isolation badges on job detail and platform-wide admin job tables.
+- [x] Test suite: **12 provider-agent unit tests** (56/56 passing), **4 backend integration tests** (120/120 passing), **43/43 Next.js static pages compiling cleanly**.
 
 ## Phase 9 — Telemetry at scale
 

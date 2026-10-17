@@ -162,6 +162,7 @@ async def enroll(
         ProviderCapability(
             machine_id=machine.id,
             supported_workloads=report.supported_workloads,
+            supported_isolation_tiers=getattr(report, "isolation_tiers", None) or ["container"],
             verification_status="detected",
         )
     )
@@ -323,6 +324,7 @@ async def claim_job(
         model=job.model,
         input=job.input,
         execution_mode=job.execution_mode,
+        isolation_tier=getattr(job, "isolation_tier", "container") or "container",
         limits=ClaimLimits(
             max_runtime_seconds=job.max_runtime_seconds,
             memory_mb=2048,

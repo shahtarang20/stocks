@@ -268,6 +268,14 @@ export default function JobDetailPage() {
                 <dd className="mt-0.5 font-medium">{job.workload_type}</dd>
               </div>
               <div>
+                <dt className="text-muted-foreground">Isolation</dt>
+                <dd className="mt-0.5">
+                  <Badge variant="outline" className="font-mono text-xs uppercase">
+                    {job.isolation_tier || "container"}
+                  </Badge>
+                </dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">Model</dt>
                 <dd className="mt-0.5 font-mono text-xs">{job.model}</dd>
               </div>

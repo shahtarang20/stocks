@@ -67,6 +67,7 @@ class CapabilityReport(BaseModel):
     disk_free_gb: int
     gpus: list[GPUInfo] = Field(default_factory=list)
     gpu_available: bool = False
+    isolation_tiers: list[str] = Field(default_factory=lambda: ["container"])
     # Overall trust level for the report as a whole. Always DETECTED here.
     status: VerificationStatus = VerificationStatus.DETECTED
     notes: list[str] = Field(default_factory=list)
@@ -111,6 +112,7 @@ class CapabilityReport(BaseModel):
             "cpu_cores": self.cpu.logical_cores,
             "ram_mb": self.ram_total_mb,
             "disk_gb": self.disk_total_gb,
+            "isolation_tiers": list(self.isolation_tiers),
             "gpus": [
                 {
                     "model": g.name,
@@ -256,10 +258,13 @@ def detect_gpus() -> tuple[list[GPUInfo], list[str]]:
 
 def build_capability_report(disk_path: str = "/") -> CapabilityReport:
     """Assemble the full capability report. Safe on CPU-only hosts."""
+    from .isolation import detect_supported_isolation_tiers
+
     cpu = detect_cpu()
     ram = detect_ram_mb()
     disk_total, disk_free = detect_disk(disk_path)
     gpus, notes = detect_gpus()
+    isolation_tiers = detect_supported_isolation_tiers()
     if not gpus:
         notes.append("No GPU detected: reporting CPU-only capabilities.")
     return CapabilityReport(
@@ -271,6 +276,7 @@ def build_capability_report(disk_path: str = "/") -> CapabilityReport:
         disk_free_gb=disk_free,
         gpus=gpus,
         gpu_available=bool(gpus),
+        isolation_tiers=isolation_tiers,
         status=VerificationStatus.DETECTED,
         notes=notes,
     )

@@ -113,6 +113,7 @@ export interface Machine {
   last_heartbeat_at: string | null;
   hardware: MachineHardware;
   supported_workloads: string[];
+  supported_isolation_tiers?: string[];
   created_at: string;
   /** Present on GET /provider/machines/{id}. */
   last_health?: unknown;
@@ -306,6 +307,8 @@ export interface Job {
   max_runtime_seconds?: number;
   /** "simulated" | "hardware" — MUST be surfaced wherever output is shown. */
   execution_mode: JobExecutionMode;
+  /** Workload isolation tier ("container" | "gvisor" | "microvm" | "confidential"). */
+  isolation_tier?: "container" | "gvisor" | "microvm" | "confidential" | string;
   match_explanation?: JobMatchExplanation | null;
   verification?: Record<string, unknown> | null;
   /** Decimal string; null in Phase 4 (nothing is charged yet). */
@@ -385,6 +388,7 @@ export interface CreateJobInput {
   max_cost: string;
   max_runtime_seconds: number;
   retry_policy?: { max_retries: number };
+  isolation_tier?: "container" | "gvisor" | "microvm" | "confidential";
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +647,7 @@ export interface AdminJob {
   model: string;
   status: JobStatus;
   execution_mode: string;
+  isolation_tier?: string;
   created_at: string;
   final_cost?: string | null;
   error_code?: string | null;

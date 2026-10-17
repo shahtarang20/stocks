@@ -72,6 +72,7 @@ class Job(Base, TimestampMixin):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
 
     execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="simulated")
+    isolation_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="container")
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     lease_expires_at: Mapped[dt.datetime | None] = mapped_column(

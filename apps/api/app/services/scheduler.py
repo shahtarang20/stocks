@@ -140,6 +140,14 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
         machine_gpus = target.hardware.gpu_count if target.hardware else 0
         if job.gpu_count > machine_gpus:
             raise JobValidationError("gpu_count_exceeds_machine")
+        target_tiers = (
+            target.capability.supported_isolation_tiers
+            if target.capability and getattr(target.capability, "supported_isolation_tiers", None)
+            else ["container"]
+        )
+        tier = getattr(job, "isolation_tier", "container") or "container"
+        if tier != "container" and tier not in (target_tiers or []):
+            raise JobValidationError("isolation_tier_not_supported_by_machine", status.HTTP_409_CONFLICT)
 
     # 4) Estimated cost <= budget cap.
     if job.max_cost is not None:
@@ -177,15 +185,31 @@ async def _eligible_machines(
     candidates: list[_Candidate] = []
     for m in result.scalars().all():
         if m.status == "deregistered" or m.asking_price_per_hour is None:
+            print(f"DEBUG SKIP 1: m={m.hostname}")
             continue
         if m.availability != "online" or derive_status(m, now) != "online":
+            print(f"DEBUG SKIP 2: m={m.hostname}, avail={m.availability}, derived={derive_status(m, now)}")
             continue
         workloads = m.capability.supported_workloads if m.capability else []
         if job.workload_type not in (workloads or []):
+            print(f"DEBUG SKIP 3: m={m.hostname}, workloads={workloads}")
             continue
         machine_gpus = m.hardware.gpu_count if m.hardware else 0
         if machine_gpus < job.gpu_count:
+            print(f"DEBUG SKIP 4: m={m.hostname}, gpus={machine_gpus}")
             continue
+        # Phase 8: Isolation tier matching (ADR-0003: No silent downgrade)
+        req_tier = (getattr(job, "isolation_tier", None) or "container").lower()
+        machine_tiers = (
+            m.capability.supported_isolation_tiers
+            if m.capability and getattr(m.capability, "supported_isolation_tiers", None)
+            else ["container"]
+        )
+        if req_tier != "container" and req_tier not in (machine_tiers or []):
+            continue
+        if req_tier == "confidential":
+            if not m.capability or m.capability.verification_status != "VERIFIED":
+                continue
         used = await active_reservation_slots(db, m.id, now)
         free = m.max_concurrent_jobs - used
         if free < job.gpu_count:

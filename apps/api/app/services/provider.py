@@ -96,6 +96,12 @@ def _workloads(machine: ProviderMachine) -> list[str]:
     return list(machine.capability.supported_workloads)
 
 
+def _isolation_tiers(machine: ProviderMachine) -> list[str]:
+    if machine.capability is None or not getattr(machine.capability, "supported_isolation_tiers", None):
+        return ["container"]
+    return list(machine.capability.supported_isolation_tiers)
+
+
 def shape_machine(machine: ProviderMachine) -> MachineOut:
     return MachineOut(
         machine_id=machine.id,
@@ -112,6 +118,7 @@ def shape_machine(machine: ProviderMachine) -> MachineOut:
         last_heartbeat_at=ensure_aware(machine.last_heartbeat_at),
         hardware=_hardware_out(machine),
         supported_workloads=_workloads(machine),
+        supported_isolation_tiers=_isolation_tiers(machine),
         created_at=machine.created_at,
     )
 

@@ -78,6 +78,7 @@ class MachineOut(BaseModel):
     last_heartbeat_at: dt.datetime | None
     hardware: HardwareOut
     supported_workloads: list[str]
+    supported_isolation_tiers: list[str] = Field(default_factory=lambda: ["container"])
     created_at: dt.datetime
 
 
@@ -91,6 +92,7 @@ class MachineUpdate(BaseModel):
     max_concurrent_jobs: int | None = Field(default=None, ge=1)
     region: str | None = Field(default=None, max_length=64)
     supported_workloads: list[str] | None = None
+    supported_isolation_tiers: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +112,7 @@ class CapabilityReport(BaseModel):
     disk_gb: int = 0
     gpus: list[GpuReport] = Field(default_factory=list)
     supported_workloads: list[str] = Field(default_factory=list)
+    isolation_tiers: list[str] = Field(default_factory=lambda: ["container"])
 
 
 class AgentEnrollRequest(BaseModel):

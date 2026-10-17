@@ -91,6 +91,7 @@ export default function AdminJobsPage() {
                 <TableHead>Model</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Mode</TableHead>
+                <TableHead>Isolation</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Cost</TableHead>
                 <TableHead>Error</TableHead>
@@ -128,6 +129,11 @@ export default function AdminJobsPage() {
                     <TableCell>
                       <Badge variant={job.execution_mode === "simulated" ? "warning" : "neutral"}>
                         {job.execution_mode ?? "simulated"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="font-mono text-xs">
+                        {job.isolation_tier || "container"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">

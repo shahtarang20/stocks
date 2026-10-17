@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   BookOpen,
   Briefcase,
+  Cpu,
   Lock,
   MessageSquareWarning,
   Scale,
@@ -20,6 +21,7 @@ const SECTIONS: NavSection[] = [
     title: "Overview",
     items: [
       { href: "/admin/overview", label: "Overview", icon: Activity },
+      { href: "/admin/telemetry", label: "Telemetry & health", icon: Cpu },
     ],
   },
   {

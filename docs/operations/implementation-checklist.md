@@ -1,6 +1,6 @@
 # ComputeCoin — Implementation Checklist (10-phase plan)
 
-Tracks the build phase by phase. Phases 0 through 8 are complete; Phase 9 is next.
+Tracks the build phase by phase. Phases 0 through 9 are complete; Phase 10 is next.
 `[x]` done · `[~]` in progress / skeleton · `[ ]` not started.
 
 ## Phase 0 — Foundations & decisions ✅ DONE
@@ -107,9 +107,16 @@ Shipped per `docs/architecture/decisions/0003-workload-isolation-and-sandbox-tie
 - [x] Frontend UI: Isolation tier selection in job submission (`apps/web/src/app/dashboard/jobs/new/page.tsx`), isolation badges on job detail and platform-wide admin job tables.
 - [x] Test suite: **12 provider-agent unit tests** (56/56 passing), **4 backend integration tests** (120/120 passing), **43/43 Next.js static pages compiling cleanly**.
 
-## Phase 9 — Telemetry at scale
+## Phase 9 — Telemetry at scale ✅ DONE
+Shipped per `docs/architecture/ADR-0001-database.md` time-series telemetry requirements. Keeps the high-volume metrics firehose partitioned and structured away from OLTP transactional paths.
 
-- [ ] TimescaleDB for high-volume GPU telemetry, dashboards, alerting.
+- [x] Time-series data model & TimescaleDB hypertable compatible schema: `MachineTelemetry` (per-GPU utilization, VRAM usage, temperatures, power, fan speed) and `JobTelemetry` (throughput tokens/sec, steps, loss) in [`apps/api/app/models/telemetry.py`](file:///home/root509/stocks/apps/api/app/models/telemetry.py).
+- [x] Database migration: Alembic `0007_telemetry_phase9` with compound time-series indexes on `(machine_id, timestamp)`, `(machine_id, gpu_index, timestamp)`, and `(job_id, timestamp)`.
+- [x] Ingestion & operational alerting engine: Batch ingestion endpoints (`POST /v1/telemetry/machine`, `POST /v1/telemetry/job`) with HMAC signature authentication and automatic threshold alert triggers (`temp_c >= 85°C`, `mem_util_pct >= 95%`) in [`apps/api/app/services/telemetry.py`](file:///home/root509/stocks/apps/api/app/services/telemetry.py).
+- [x] Time-window aggregation & platform stats: Fast time-bucketed rollups (`1m`, `5m`, `1h`) calculating min/max/avg metrics, and live fleet-wide health KPIs (`GET /v1/telemetry/stats`).
+- [x] Provider agent telemetry collector: In [`provider-agent/computecoin_agent/telemetry.py`](file:///home/root509/stocks/provider-agent/computecoin_agent/telemetry.py), sliding buffer with NVML GPU metric sampling and signed batch reporting.
+- [x] Frontend UI: Admin Telemetry & Health Dashboard at [`apps/web/src/app/admin/telemetry/page.tsx`](file:///home/root509/stocks/apps/web/src/app/admin/telemetry/page.tsx) with live auto-refresh, KPI cards, interactive alert acknowledgement/resolution, and machine metric inspection.
+- [x] Test suite: **4 provider-agent unit tests** (60/60 passing), **4 backend integration tests** (124/124 passing), **44/44 Next.js static pages compiling cleanly**.
 
 ## Phase 10 — On-chain settlement (contracts)
 

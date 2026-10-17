@@ -664,6 +664,81 @@ export interface AdminPlatformStats {
   currency: string;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 9 — Telemetry & Time-series at scale
+// ---------------------------------------------------------------------------
+export interface MetricBucketPoint {
+  timestamp: string;
+  avg_gpu_util_pct?: number | null;
+  max_gpu_util_pct?: number | null;
+  avg_temp_c?: number | null;
+  max_temp_c?: number | null;
+  avg_mem_used_mb?: number | null;
+  avg_power_w?: number | null;
+  samples: number;
+}
+
+export interface MachineTelemetryCurrent {
+  timestamp?: string | null;
+  gpu_index?: number | null;
+  gpu_util_pct?: number | null;
+  mem_util_pct?: number | null;
+  mem_used_mb?: number | null;
+  mem_total_mb?: number | null;
+  temp_c?: number | null;
+  power_w?: number | null;
+  [key: string]: unknown;
+}
+
+export interface MachineTelemetryResponse {
+  machine_id: string;
+  start_time: string;
+  end_time: string;
+  bucket_seconds: number;
+  points: MetricBucketPoint[];
+  current?: MachineTelemetryCurrent | null;
+}
+
+export interface JobMetricBucketPoint {
+  timestamp: string;
+  avg_gpu_util_pct?: number | null;
+  avg_tokens_per_sec?: number | null;
+  max_tokens_per_sec?: number | null;
+  avg_mem_used_mb?: number | null;
+  samples: number;
+}
+
+export interface JobTelemetryResponse {
+  job_id: string;
+  points: JobMetricBucketPoint[];
+  total_samples: number;
+  avg_tokens_per_sec?: number | null;
+}
+
+export interface PlatformTelemetryStats {
+  active_gpus: number;
+  fleet_avg_gpu_util_pct: number;
+  fleet_avg_temp_c: number;
+  fleet_total_power_kw: number;
+  active_alerts_count: number;
+  critical_alerts_count: number;
+}
+
+export interface TelemetryAlert {
+  id: string;
+  machine_id?: string | null;
+  job_id?: string | null;
+  alert_type: string;
+  severity: "info" | "warning" | "critical" | string;
+  message: string;
+  metric_value?: number | null;
+  threshold?: number | null;
+  status: "active" | "acknowledged" | "resolved" | string;
+  acknowledged_at?: string | null;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
 /** Normalized API error surfaced to the UI layer. */
 export class ApiError extends Error {
   status: number;
@@ -1279,6 +1354,62 @@ export const api = {
       method: "GET",
       token: accessToken,
     });
+  },
+
+  // --- Telemetry & Operational Health (Phase 9) ---
+  getMachineTelemetry(
+    accessToken: string,
+    machineId: string,
+    bucketSeconds: number = 60
+  ): Promise<MachineTelemetryResponse> {
+    return request<MachineTelemetryResponse>(
+      `/v1/telemetry/machines/${machineId}?bucket_seconds=${bucketSeconds}`,
+      { method: "GET", token: accessToken }
+    );
+  },
+
+  getJobTelemetry(
+    accessToken: string,
+    jobId: string,
+    bucketSeconds: number = 60
+  ): Promise<JobTelemetryResponse> {
+    return request<JobTelemetryResponse>(
+      `/v1/telemetry/jobs/${jobId}?bucket_seconds=${bucketSeconds}`,
+      { method: "GET", token: accessToken }
+    );
+  },
+
+  getPlatformTelemetryStats(accessToken: string): Promise<PlatformTelemetryStats> {
+    return request<PlatformTelemetryStats>("/v1/telemetry/stats", {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  listTelemetryAlerts(
+    accessToken: string,
+    status?: string,
+    limit: number = 50
+  ): Promise<TelemetryAlert[]> {
+    const q = status ? `&status=${status}` : "";
+    return request<TelemetryAlert[]>(`/v1/telemetry/alerts?limit=${limit}${q}`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  acknowledgeAlert(accessToken: string, alertId: string): Promise<{ id: string; status: string }> {
+    return request<{ id: string; status: string }>(
+      `/v1/telemetry/alerts/${alertId}/acknowledge`,
+      { method: "POST", token: accessToken }
+    );
+  },
+
+  resolveAlert(accessToken: string, alertId: string): Promise<{ id: string; status: string }> {
+    return request<{ id: string; status: string }>(
+      `/v1/telemetry/alerts/${alertId}/resolve`,
+      { method: "POST", token: accessToken }
+    );
   },
 };
 

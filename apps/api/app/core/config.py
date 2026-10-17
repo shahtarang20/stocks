@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     INFERENCE_EMBEDDING_DIM: int = 256
     INFERENCE_MAX_INPUT_ITEMS: int = 100  # max batch items for embeddings
 
+    # Phase 9 — Telemetry & Time-series at scale
+    TIMESCALE_ENABLED: bool = False
+    TIMESCALE_URL: str = ""
+    TELEMETRY_BATCH_MAX_SIZE: int = 500
+    TELEMETRY_RETENTION_DAYS: int = 30
+    ALERT_TEMP_THRESHOLD_C: float = 85.0
+    ALERT_MEM_UTIL_THRESHOLD_PCT: float = 95.0
+
     @property
     def artifact_content_types(self) -> set[str]:
         return {c.strip() for c in self.ARTIFACT_CONTENT_TYPES.split(",") if c.strip()}

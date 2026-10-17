@@ -48,6 +48,12 @@ from app.models.user import (
     UserSession,
 )
 
+from app.models.telemetry import (
+    JobTelemetry,
+    MachineTelemetry,
+    TelemetryAlert,
+)
+
 __all__ = [
     "Role",
     "UserStatus",
@@ -87,4 +93,7 @@ __all__ = [
     "Refund",
     "ProviderPayout",
     "Dispute",
+    "MachineTelemetry",
+    "JobTelemetry",
+    "TelemetryAlert",
 ]

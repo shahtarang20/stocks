@@ -19,14 +19,21 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, ApiError, type CurrentUser } from "./api";
+import {
+  api,
+  ApiError,
+  clearStoredTokens,
+  getStoredAccessToken,
+  getStoredRefreshToken,
+  type CurrentUser,
+} from "./api";
 
 interface AuthContextValue {
   user: CurrentUser | null;
   email: string | null;
   /**
-   * Sentinel token for compatibility with components checking `enabled: Boolean(accessToken)`.
-   * Real auth is handled transparently by browser httpOnly cookies on every fetch call.
+   * Access token: returns the real JWT access token when available, falling back
+   * to "cookie-session" sentinel for pure ambient cookie sessions.
    */
   accessToken: string | null;
   isAuthenticated: boolean;
@@ -46,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [isReady, setIsReady] = useState(false);
 
-  // Rehydrate session from httpOnly cookie on mount via GET /auth/me
+  // Rehydrate session from stored Bearer token or httpOnly cookie on mount via GET /auth/me
   useEffect(() => {
     let cancelled = false;
 
@@ -59,14 +66,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch (err) {
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          // Attempt silent refresh via httpOnly refresh cookie
+          // Attempt silent refresh via stored refresh_token or httpOnly refresh cookie
           try {
-            await api.refresh();
+            await api.refresh(getStoredRefreshToken() ?? undefined);
             const me = await api.getMe();
             if (!cancelled) {
               setUser(me);
             }
           } catch {
+            clearStoredTokens();
             if (!cancelled) {
               setUser(null);
             }
@@ -102,6 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    clearStoredTokens();
     api.logout().catch(() => {});
     setUser(null);
   }, []);
@@ -114,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       user,
       email: user?.email ?? null,
-      accessToken: user ? "cookie-session" : null,
+      accessToken: user ? (getStoredAccessToken() || "cookie-session") : null,
       isAuthenticated: Boolean(user),
       isReady,
       role: primaryRole,

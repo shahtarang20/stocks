@@ -68,12 +68,13 @@ def set_auth_cookies(
     expires_in: int,
 ) -> None:
     """Set hardened httpOnly authentication cookies and double-submit CSRF cookie."""
+    samesite = "none" if settings.cookie_secure else settings.COOKIE_SAMESITE
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite=settings.COOKIE_SAMESITE,
+        samesite=samesite,
         max_age=expires_in,
         path="/",
     )
@@ -82,7 +83,7 @@ def set_auth_cookies(
         value=refresh_token,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite=settings.COOKIE_SAMESITE,
+        samesite=samesite,
         max_age=settings.REFRESH_TOKEN_TTL_SECONDS,
         path="/",
     )
@@ -91,7 +92,7 @@ def set_auth_cookies(
         value=csrf_token,
         httponly=False,  # Readable by client JS to double-submit in X-CSRF-Token header
         secure=settings.cookie_secure,
-        samesite=settings.COOKIE_SAMESITE,
+        samesite=samesite,
         max_age=settings.REFRESH_TOKEN_TTL_SECONDS,
         path="/",
     )
@@ -99,9 +100,10 @@ def set_auth_cookies(
 
 def clear_auth_cookies(response: Response) -> None:
     """Clear all authentication and CSRF cookies on logout."""
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
-    response.delete_cookie("csrf_token", path="/")
+    samesite = "none" if settings.cookie_secure else settings.COOKIE_SAMESITE
+    response.delete_cookie("access_token", path="/", samesite=samesite, secure=settings.cookie_secure)
+    response.delete_cookie("refresh_token", path="/", samesite=samesite, secure=settings.cookie_secure)
+    response.delete_cookie("csrf_token", path="/", samesite=samesite, secure=settings.cookie_secure)
 
 
 def _enforce_rate_limit(key: str, limit: int, window: int) -> None:

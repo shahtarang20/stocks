@@ -15,6 +15,8 @@ export const API_BASE_URL =
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
+  csrf_token?: string;
+  expires_in?: number;
 }
 
 export interface AuthCredentials {
@@ -851,6 +853,82 @@ export interface CurrentUser {
   roles: string[];
 }
 
+let _memoryAccessToken: string | null = null;
+let _memoryRefreshToken: string | null = null;
+let _memoryCsrfToken: string | null = null;
+
+export function setStoredTokens(
+  accessToken: string | null,
+  refreshToken?: string | null,
+  csrfToken?: string | null
+) {
+  _memoryAccessToken = accessToken;
+  if (refreshToken !== undefined) _memoryRefreshToken = refreshToken;
+  if (csrfToken !== undefined) _memoryCsrfToken = csrfToken;
+
+  if (typeof window !== "undefined") {
+    try {
+      if (accessToken) {
+        localStorage.setItem("computecoin_access_token", accessToken);
+      } else {
+        localStorage.removeItem("computecoin_access_token");
+      }
+      if (refreshToken) {
+        localStorage.setItem("computecoin_refresh_token", refreshToken);
+      } else if (accessToken === null) {
+        localStorage.removeItem("computecoin_refresh_token");
+      }
+      if (csrfToken) {
+        localStorage.setItem("computecoin_csrf_token", csrfToken);
+      } else if (accessToken === null) {
+        localStorage.removeItem("computecoin_csrf_token");
+      }
+    } catch {
+      // Storage access may be blocked in strict private browsing modes
+    }
+  }
+}
+
+export function clearStoredTokens() {
+  setStoredTokens(null, null, null);
+}
+
+export function getStoredAccessToken(): string | null {
+  if (_memoryAccessToken) return _memoryAccessToken;
+  if (typeof window !== "undefined") {
+    try {
+      return localStorage.getItem("computecoin_access_token");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function getStoredRefreshToken(): string | null {
+  if (_memoryRefreshToken) return _memoryRefreshToken;
+  if (typeof window !== "undefined") {
+    try {
+      return localStorage.getItem("computecoin_refresh_token");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function getStoredCsrfToken(): string | null {
+  if (_memoryCsrfToken) return _memoryCsrfToken;
+  if (typeof window !== "undefined") {
+    try {
+      return localStorage.getItem("computecoin_csrf_token");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function getCsrfToken(): string | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
@@ -870,15 +948,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     ...(headers as Record<string, string> | undefined),
   };
 
-  // Only pass Bearer header if a real token is provided (not our cookie-session sentinel)
-  if (token && token !== "cookie-session") {
-    finalHeaders.Authorization = `Bearer ${token}`;
+  // 1. Bearer header resolution: explicit token (if not sentinel) or stored token fallback
+  const effectiveToken =
+    token && token !== "cookie-session" ? token : getStoredAccessToken();
+  if (effectiveToken) {
+    finalHeaders.Authorization = `Bearer ${effectiveToken}`;
   }
 
-  // Double-submit CSRF protection on mutating requests
+  // 2. Double-submit CSRF protection on mutating requests
   const upperMethod = method.toUpperCase();
   if (upperMethod !== "GET" && upperMethod !== "HEAD" && !finalHeaders["X-CSRF-Token"]) {
-    const csrf = getCsrfToken();
+    const csrf = getCsrfToken() || getStoredCsrfToken();
     if (csrf) {
       finalHeaders["X-CSRF-Token"] = csrf;
     }
@@ -931,18 +1011,27 @@ export const api = {
     });
   },
 
-  login(credentials: AuthCredentials): Promise<TokenPair> {
-    return request<TokenPair>("/auth/login", {
+  async login(credentials: AuthCredentials): Promise<TokenPair> {
+    const tokens = await request<TokenPair>("/auth/login", {
       method: "POST",
       body: credentials,
     });
+    if (tokens?.access_token) {
+      setStoredTokens(tokens.access_token, tokens.refresh_token, tokens.csrf_token);
+    }
+    return tokens;
   },
 
-  refresh(refreshToken?: string): Promise<TokenPair> {
-    return request<TokenPair>("/auth/refresh", {
+  async refresh(refreshToken?: string): Promise<TokenPair> {
+    const rToken = refreshToken || getStoredRefreshToken() || undefined;
+    const tokens = await request<TokenPair>("/auth/refresh", {
       method: "POST",
-      body: refreshToken ? { refresh_token: refreshToken } : undefined,
+      body: rToken ? { refresh_token: rToken } : undefined,
     });
+    if (tokens?.access_token) {
+      setStoredTokens(tokens.access_token, tokens.refresh_token, tokens.csrf_token);
+    }
+    return tokens;
   },
 
   getMe(): Promise<CurrentUser> {
@@ -951,10 +1040,14 @@ export const api = {
     });
   },
 
-  logout(): Promise<{ message: string }> {
-    return request<{ message: string }>("/auth/logout", {
-      method: "POST",
-    });
+  async logout(): Promise<{ message: string }> {
+    try {
+      return await request<{ message: string }>("/auth/logout", {
+        method: "POST",
+      });
+    } finally {
+      clearStoredTokens();
+    }
   },
 
   getProjects(accessToken: string): Promise<Project[]> {

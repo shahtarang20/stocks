@@ -410,6 +410,19 @@ export interface BillingAccount {
   [key: string]: unknown;
 }
 
+export interface CheckoutSessionInput {
+  amount: string;
+  success_url?: string;
+  cancel_url?: string;
+}
+
+export interface CheckoutSession {
+  session_id: string;
+  url: string;
+  amount: string;
+  currency: string;
+}
+
 export type LedgerDirection = "debit" | "credit";
 
 /** One append-only ledger entry (the customer's own). Amount is a decimal string. */
@@ -1234,6 +1247,18 @@ export const api = {
     input: PurchaseCreditsInput,
   ): Promise<BillingAccount> {
     return request<BillingAccount>("/v1/billing/credits/purchase", {
+      method: "POST",
+      token: accessToken,
+      body: input,
+    });
+  },
+
+  /** POST /v1/billing/checkout/session — create a Stripe Checkout session for buying credits. */
+  createCheckoutSession(
+    accessToken: string,
+    input: CheckoutSessionInput,
+  ): Promise<CheckoutSession> {
+    return request<CheckoutSession>("/v1/billing/checkout/session", {
       method: "POST",
       token: accessToken,
       body: input,

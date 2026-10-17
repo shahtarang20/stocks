@@ -184,7 +184,7 @@ class Invoice(Base):
 
 
 class Payment(Base):
-    """A simulated credit top-up (credit_purchase)."""
+    """A credit top-up (credit_purchase via simulated or Stripe)."""
 
     __tablename__ = "payments"
 
@@ -199,6 +199,10 @@ class Payment(Base):
     transaction_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("ledger_transactions.id", ondelete="SET NULL"), nullable=True
     )
+    external_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    stripe_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -226,6 +230,7 @@ class Refund(Base):
     transaction_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("ledger_transactions.id", ondelete="SET NULL"), nullable=True
     )
+    stripe_refund_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

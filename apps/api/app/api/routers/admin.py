@@ -7,6 +7,7 @@ silent balance mutation).
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -14,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.deps import client_ip, require_roles
@@ -21,6 +23,7 @@ from app.models.billing import (
     BillingAccount,
     Dispute,
     Invoice,
+    Payment,
     ProviderPayout,
     Refund,
 )
@@ -48,6 +51,8 @@ from app.schemas.billing import (
 from app.services import billing as billing_svc
 from app.services import ledger
 from app.services.audit import record_audit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -120,6 +125,33 @@ async def create_refund(
     refund.transaction_id = txn.id
     if invoice is not None:
         invoice.status = "refunded"
+
+    # If payment was made via Stripe and Stripe is active, dispatch Stripe refund
+    if settings.PAYMENT_PROVIDER == "stripe":
+        payment_query = await db.execute(
+            select(Payment)
+            .where(
+                Payment.customer_id == job.customer_id,
+                Payment.provider_configuration == "stripe",
+                Payment.stripe_payment_intent_id.is_not(None),
+            )
+            .order_by(Payment.created_at.desc())
+        )
+        payment = payment_query.scalars().first()
+        if payment and payment.stripe_payment_intent_id:
+            try:
+                from app.services.stripe_payment import get_payment_provider
+                provider = get_payment_provider()
+                res = await provider.refund_payment(
+                    db,
+                    payment_intent_id=payment.stripe_payment_intent_id,
+                    amount_minor=amount_minor,
+                    reason=body.reason,
+                )
+                refund.stripe_refund_id = res.get("refund_id")
+            except Exception as exc:
+                logger.warning("Stripe refund dispatch error: %s", exc)
+
     await record_audit(
         db, action="admin.refund", outcome="success", actor_user_id=current.id,
         ip=client_ip(request), resource_type="refund", resource_id=str(refund.id),

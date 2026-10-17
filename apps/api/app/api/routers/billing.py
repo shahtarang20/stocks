@@ -8,9 +8,10 @@ GET  /v1/usage                     — spend summary + usage records
 
 from __future__ import annotations
 
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,14 +29,25 @@ from app.schemas.auth import CurrentUser
 from app.schemas.billing import (
     AccountOut,
     AmountIn,
+    CheckoutSessionCreate,
+    CheckoutSessionOut,
     LedgerEntryOut,
     LedgerPageOut,
+    StripeWebhookOut,
     UsageRecordOut,
     UsageSummaryOut,
 )
 from app.services import billing as billing_svc
 from app.services import ledger
 from app.services.audit import record_audit
+from app.services.stripe_payment import (
+    PaymentProviderError,
+    StripePaymentProvider,
+    StripeSignatureError,
+    get_payment_provider,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["billing"])
 
@@ -112,6 +124,82 @@ async def purchase_credits(
     out = await _account_out(db, current.id)
     await db.commit()
     return out
+
+
+@router.post("/billing/checkout/session", response_model=CheckoutSessionOut)
+async def create_checkout_session(
+    body: CheckoutSessionCreate,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CheckoutSessionOut:
+    """Create a Stripe Checkout Session for purchasing ComputeCoin credits."""
+    provider = get_payment_provider()
+    try:
+        session_data = await provider.create_checkout_session(
+            customer_id=current.id,
+            amount=body.amount,
+            success_url=body.success_url,
+            cancel_url=body.cancel_url,
+        )
+    except PaymentProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    await record_audit(
+        db,
+        action="billing.checkout.session.create",
+        outcome="success",
+        actor_user_id=current.id,
+        ip=client_ip(request),
+        resource_type="checkout_session",
+        resource_id=session_data["session_id"],
+        reason=str(body.amount),
+    )
+    await db.commit()
+    return CheckoutSessionOut(
+        session_id=session_data["session_id"],
+        url=session_data["url"],
+        amount=session_data["amount"],
+        currency=session_data["currency"],
+    )
+
+
+@router.post("/billing/webhooks/stripe", response_model=StripeWebhookOut)
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str = Header(default="", alias="Stripe-Signature"),
+    db: AsyncSession = Depends(get_db),
+) -> StripeWebhookOut:
+    """Public webhook receiver for signed Stripe events.
+
+    Verifies the HMAC signature against STRIPE_WEBHOOK_SECRET, then posts an
+    idempotent credit_purchase ledger transaction keyed by the Stripe event id.
+    """
+    raw_body = await request.body()
+    provider = StripePaymentProvider()
+    try:
+        result = await provider.handle_webhook_event(
+            db,
+            payload=raw_body,
+            signature_header=stripe_signature,
+        )
+    except StripeSignatureError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message)
+    except Exception as exc:
+        logger.error("Error processing Stripe webhook: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="webhook_processing_error"
+        )
+
+    await db.commit()
+    return StripeWebhookOut(
+        received=True,
+        event_id=result.get("event_id", ""),
+        event_type=result.get("event_type"),
+        status=result.get("status", "ok"),
+        transaction_id=result.get("transaction_id"),
+    )
+
 
 
 @router.get("/billing/ledger", response_model=LedgerPageOut)

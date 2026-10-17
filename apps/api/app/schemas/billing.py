@@ -169,3 +169,33 @@ class ReconciliationOut(BaseModel):
     imbalance: str
     currency: str = CURRENCY
     accounts: list[ReconciliationAccountOut]
+
+
+# ---------------------------------------------------------------------------
+# Stripe Checkout / Payments (Workstream C)
+# ---------------------------------------------------------------------------
+class CheckoutSessionCreate(BaseModel):
+    amount: decimal.Decimal = Field(gt=0, description="Amount in USD to purchase credits for")
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _coerce(cls, v):
+        return decimal.Decimal(str(v))
+
+
+class CheckoutSessionOut(BaseModel):
+    session_id: str
+    url: str
+    amount: str
+    currency: str = "usd"
+
+
+class StripeWebhookOut(BaseModel):
+    received: bool = True
+    event_id: str
+    event_type: str | None = None
+    status: str
+    transaction_id: str | None = None
+

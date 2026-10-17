@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     BILLING_CURRENCY: str = "USDC_CREDITS"
     BILLING_CURRENCY_EXPONENT: int = 2
     PAYMENT_PROVIDER_CONFIGURATION: str = "simulated"
+    PAYMENT_PROVIDER: str = "simulated"  # "simulated" | "stripe"
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_SUCCESS_URL_DEFAULT: str = "http://localhost:3000/billing?status=success"
+    STRIPE_CANCEL_URL_DEFAULT: str = "http://localhost:3000/billing?status=cancelled"
 
     # Phase 6 — inference endpoints
     INFERENCE_RATE_LIMIT: int = 60

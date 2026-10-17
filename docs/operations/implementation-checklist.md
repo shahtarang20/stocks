@@ -1,6 +1,6 @@
 # ComputeCoin — Implementation Checklist (10-phase plan)
 
-Tracks the build phase by phase. Phase 0 is done; Phase 1 is in progress.
+Tracks the build phase by phase. Phases 0 through 7 are complete; Phase 8 is next.
 `[x]` done · `[~]` in progress / skeleton · `[ ]` not started.
 
 ## Phase 0 — Foundations & decisions ✅ DONE
@@ -19,7 +19,7 @@ Tracks the build phase by phase. Phase 0 is done; Phase 1 is in progress.
       future contracts, with residual risk.
 - [x] Repo scaffolding for `provider-agent/`, `sdk/`, `docs/`.
 
-## Phase 1 — Agent, SDK & contracts skeleton 🔨 IN PROGRESS
+## Phase 1 — Agent, SDK & contracts skeleton ✅ DONE
 
 - [x] provider-agent package `computecoin_agent` (Python 3.12).
 - [x] Hardware detection (CPU/RAM/disk/GPU), CPU-safe, mocked GPU; typed
@@ -29,42 +29,43 @@ Tracks the build phase by phase. Phase 0 is done; Phase 1 is in progress.
 - [x] Signed heartbeats with injectable transport.
 - [x] CLI: `detect`, `enroll`, `run`, `security-info`.
 - [x] provider-agent tests green (CPU-only, no-VERIFIED, signed heartbeat,
-      0600 config). **17 passed.**
+      0600 config).
 - [x] Python SDK `computecoin` (register/login/refresh/projects/api-keys/
-      chat_completions/embeddings), 404/501 → EndpointNotAvailableError. **6 passed.**
+      chat_completions/embeddings), 404/501 → EndpointNotAvailableError.
 - [x] TypeScript SDK `@computecoin/sdk` mirroring Python; `tsc --noEmit` passes;
-      vitest **3 passed**.
+      vitest passing.
 - [x] READMEs for agent + both SDKs.
-- [ ] Backend FastAPI: auth endpoints (register/login/refresh) wired to Postgres.
-- [ ] Backend: projects + API keys persisted.
-- [ ] Agent↔API enroll exchange (server-issued machine_id) and heartbeat ingest.
-- [ ] CI running all three test suites.
+- [x] Backend FastAPI: auth endpoints (register/login/refresh) wired to Postgres.
+- [x] Backend: projects + API keys persisted.
+- [x] Agent↔API enroll exchange (server-issued machine_id) and heartbeat ingest.
+- [x] Monorepo automated test suites passing.
 
-## Phase 2 — Core API & billing ledger
+## Phase 2 — Core API & billing ledger ✅ DONE
 
-- [ ] Postgres schema + migrations (users, projects, api_keys, machines,
+- [x] Postgres schema + migrations (users, projects, api_keys, machines,
       ledger, reservations) with FKs/constraints.
-- [ ] Double-entry ledger with exact NUMERIC; reserve/capture/release in one txn.
-- [ ] RBAC enforcement + audit log.
-- [ ] Rate limiting + quotas (Redis).
+- [x] Double-entry ledger with exact NUMERIC; reserve/capture/release in one txn.
+- [x] RBAC enforcement + audit log.
+- [x] Rate limiting + quotas (Redis/in-memory token bucket).
 
-## Phase 3 — Scheduler & leases
+## Phase 3 — Scheduler & leases ✅ DONE
 
-- [ ] Job submission + validation; funds reservation on QUEUED.
-- [ ] Matching engine; Redis TTL leases; lease expiry → release funds.
-- [ ] Job FSM enforcement + transition audit.
+- [x] Job submission + validation; funds reservation on QUEUED.
+- [x] Matching engine; Redis TTL leases; lease expiry → release funds.
+- [x] Job FSM enforcement + transition audit.
 
-## Phase 4 — Job execution & isolation (agent)
+## Phase 4 — Job execution & isolation (agent) ✅ DONE
 
-- [ ] Hardened container runtime (non-root, no docker socket, no host mounts,
+- [x] Hardened container runtime (non-root, no docker socket, no host mounts,
       dropped caps, seccomp, read-only rootfs, restricted egress, quotas).
-- [ ] Artifact upload/download (signed URLs, checksums).
-- [ ] Heartbeat-driven job status; timeouts → EXPIRED.
+- [x] Artifact upload/download (signed URLs, checksums).
+- [x] Heartbeat-driven job status; timeouts → EXPIRED.
 
-## Phase 5 — Verification
+## Phase 5 — Verification & Billing ✅ DONE
 
-- [ ] Benchmark/attest GPU capabilities; promote DETECTED→BENCHMARKED/VERIFIED.
-- [ ] Periodic re-verification + result spot-checks; reputation signals.
+- [x] Benchmark/attest GPU capabilities; promote DETECTED→BENCHMARKED/VERIFIED.
+- [x] Invoices, credit purchases, payout requests, provider earnings from settled ledger.
+- [x] Periodic re-verification + result spot-checks; reputation signals.
 
 ## Phase 6 — Inference endpoints ✅ DONE
 

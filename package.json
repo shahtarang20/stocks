@@ -6,6 +6,8 @@
     "build": "npm --prefix apps/web run build",
     "start": "npm --prefix apps/web start",
     "lint": "npm --prefix apps/web run lint",
-    "typecheck": "npm --prefix apps/web run typecheck"
+    "typecheck": "npm --prefix apps/web run typecheck",
+    "deploy:token": "npm --prefix contracts run deploy:token",
+    "create:pool": "npm --prefix contracts run create:pool"
   }
 }

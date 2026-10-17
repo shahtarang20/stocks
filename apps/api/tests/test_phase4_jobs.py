@@ -601,3 +601,93 @@ async def test_stuck_reserved_job_is_recovered(client):
     # The hold is returned — no credit leak.
     acct1 = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()
     assert acct1["reserved"] == "0.00"
+
+
+# ===========================================================================
+# Workstream B — Hardware Execution & Metered Billing
+# ===========================================================================
+async def test_hardware_job_lifecycle_pinned_digest_and_metered_billing(client):
+    """Workstream B: Hardware model job execution flow.
+    1. Customer submits a text-generation job for tinyllama-1.1b-chat-v1.
+    2. Scheduler matches provider and reserves capacity; execution_mode is 'hardware'.
+    3. Provider claims job; response carries pinned image_digest and execution_mode 'hardware'.
+    4. Provider completes execution and submits result with actual duration.
+    5. Job completes with valid verification and is settled based on actual runtime.
+    """
+    from tests.helpers import seed_hardware_model
+
+    await seed_hardware_model()
+    m = await create_listable_machine(client, "p-hw@x.com", hostname="gpu-node-01")
+    cust = await _customer(client, "c-hw@x.com")
+
+    # 1. Submit hardware job
+    sub = await submit_job(
+        client,
+        cust,
+        model="tinyllama-1.1b-chat-v1",
+        input={"prompt": "Explain distributed systems in one sentence."},
+        estimated_minutes=10,
+        max_cost="10.00",
+    )
+    assert sub.status_code == 201, sub.text
+    job_data = sub.json()
+    job_id = job_data["job_id"]
+    assert job_data["status"] == "reserved"
+    assert job_data["execution_mode"] == "hardware"
+
+    # 2. Agent claims job
+    claim_resp = await claim(client, m["machine_id"], m["secret"])
+    assert claim_resp.status_code == 200, claim_resp.text
+    claim_data = claim_resp.json()
+    assert claim_data["job_id"] == job_id
+    assert claim_data["execution_mode"] == "hardware"
+    assert claim_data["image_digest"] is not None
+    assert "@sha256:" in claim_data["image_digest"]
+
+    # 3. Agent uploads output artifact
+    token = claim_data["artifact_upload"]["token"]
+    output_body = {
+        "text": "A distributed system is a collection of autonomous computing entities that communicate via networks.",
+        "model": "tinyllama-1.1b-chat-v1",
+        "execution_mode": "hardware",
+        "simulated": False,
+        "tokens": 16,
+    }
+    up = await client.put(
+        f"/v1/artifacts/upload/{token}",
+        content=json.dumps(output_body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    assert up.status_code == 201
+    artifact_id = up.json()["artifact_id"]
+
+    # 4. Agent submits result with actual duration (5.2 seconds)
+    result = await post_result(
+        client,
+        m["machine_id"],
+        m["secret"],
+        job_id,
+        {
+            "status": "success",
+            "execution_mode": "hardware",
+            "output": output_body,
+            "artifacts": [{"artifact_id": artifact_id, "kind": "output"}],
+            "metrics": {
+                "duration_seconds": 5.2,
+                "gpu_util_pct": 82.0,
+                "max_memory_mb": 2100,
+            },
+        },
+    )
+    assert result.status_code == 200
+    assert result.json()["status"] == "completed"
+
+    # 5. Customer verifies job completion and honest hardware status
+    got = (await client.get(f"/v1/jobs/{job_id}", headers=auth_headers(cust))).json()
+    assert got["status"] == "completed"
+    assert got["execution_mode"] == "hardware"
+    assert got["verification"]["valid"] is True
+    assert got["metrics"]["duration_seconds"] == 5.2
+    assert got["metrics"]["gpu_util_pct"] == 82.0
+    assert got["final_cost"] is not None
+

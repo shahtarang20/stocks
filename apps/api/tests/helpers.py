@@ -64,3 +64,44 @@ async def get_user_id(user_email: str) -> uuid.UUID:
             select(User).where(User.email == user_email.strip().lower())
         )
         return result.scalar_one().id
+
+
+async def seed_hardware_model() -> None:
+    """Seed the approved hardware model tinyllama-1.1b-chat-v1 for tests."""
+    from app.models.model_registry import Model, ModelVersion
+
+    sm = get_sessionmaker()
+    async with sm() as s:
+        existing = (
+            await s.execute(
+                select(ModelVersion).where(ModelVersion.version_tag == "tinyllama-1.1b-chat-v1")
+            )
+        ).scalar_one_or_none()
+        if existing:
+            return
+        model = (
+            await s.execute(select(Model).where(Model.name == "tinyllama-1.1b-chat"))
+        ).scalar_one_or_none()
+        if not model:
+            model = Model(
+                name="tinyllama-1.1b-chat",
+                display_name="TinyLlama 1.1B Chat (Hardware)",
+                trust_status="approved",
+            )
+            s.add(model)
+            await s.flush()
+        s.add(
+            ModelVersion(
+                model_id=model.id,
+                version_tag="tinyllama-1.1b-chat-v1",
+                runtime="hardware",
+                image_digest=(
+                    "ghcr.io/computecoin/model-runners/tinyllama-v1@sha256:"
+                    "4a382c2b3e83b429d2f2d93e2b243888365671158d3493864a66a1523497c654"
+                ),
+                supported_workloads=["text-generation"],
+                trust_status="approved",
+            )
+        )
+        await s.commit()
+

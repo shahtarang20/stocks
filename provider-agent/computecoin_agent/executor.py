@@ -430,6 +430,17 @@ class DockerExecutor(Executor):
             # per-job writable output dir (an isolated, agent-owned dir):
             "--mount",
             f"type=bind,source={output_dir},target={self.CONTAINER_OUT}",
+            # Standardized container environment variables
+            "-e",
+            f"COMPUTECOIN_INPUT={self.CONTAINER_OUT}/input.json",
+            "-e",
+            f"COMPUTECOIN_OUTPUT={self.CONTAINER_OUT}/output.json",
+            "-e",
+            f"COMPUTECOIN_JOB_ID={job_spec.job_id}",
+            "-e",
+            f"COMPUTECOIN_MODEL={job_spec.model}",
+            "-e",
+            f"COMPUTECOIN_WORKLOAD_TYPE={job_spec.workload_type}",
         ]
 
         # GPU only when requested AND the toolkit is present.
@@ -499,6 +510,36 @@ class DockerExecutor(Executor):
             output_dir = tempfile.mkdtemp(prefix="ccoin-job-")
             created_tmp = True
         os.makedirs(output_dir, exist_ok=True)
+        try:
+            os.chmod(output_dir, 0o777)
+        except OSError:
+            pass
+
+        # Materialize input.json inside output_dir for container reading
+        input_path = os.path.join(output_dir, "input.json")
+        try:
+            with open(input_path, "w", encoding="utf-8") as fh:
+                json.dump(job_spec.input, fh)
+            try:
+                os.chmod(input_path, 0o666)
+            except OSError:
+                pass
+        except OSError as exc:
+            return ExecutionResult(
+                status="failed",
+                execution_mode=self.execution_mode,
+                metrics={
+                    "duration_seconds": 0.0,
+                    "max_memory_mb": None,
+                    "gpu_util_pct": None,
+                },
+                logs=[f"[hardware] failed to write input.json: {exc}"],
+                output_schema_valid=False,
+                error={
+                    "code": "input_write_error",
+                    "message": f"failed to materialize input.json: {exc}",
+                },
+            )
 
         argv = self.build_argv(job_spec, output_dir)
         logs = [f"[hardware] docker run for job {job_spec.job_id}"]
@@ -553,15 +594,35 @@ class DockerExecutor(Executor):
             filename="output.json",
         )
         schema_ok = validate_output(job_spec.workload_type, output)
+
+        # Collect hardware metrics if available (honest NVML readings; never fabricated)
+        gpu_util_pct = None
+        max_mem_mb = None
+        if self._nvidia_available():
+            try:
+                from .telemetry import sample_gpu_metrics
+                samples = sample_gpu_metrics(simulated=False)
+                if samples and samples[0].extra_metrics is None:
+                    gpu_util_pct = samples[0].gpu_util_pct
+                    max_mem_mb = samples[0].mem_used_mb
+            except Exception:
+                pass
+
+        metrics = {
+            "duration_seconds": round(duration, 6),
+            "max_memory_mb": max_mem_mb,
+            "gpu_util_pct": gpu_util_pct,
+        }
+        if isinstance(output.get("tokens"), (int, float)):
+            metrics["tokens"] = int(output["tokens"])
+        if isinstance(output.get("metrics"), dict):
+            metrics.update(output["metrics"])
+
         return ExecutionResult(
             status="success",
             output=output,
             execution_mode=self.execution_mode,
-            metrics={
-                "duration_seconds": round(duration, 6),
-                "max_memory_mb": None,
-                "gpu_util_pct": None,
-            },
+            metrics=metrics,
             logs=logs + _split_lines(run_result.stdout),
             artifacts=[artifact],
             output_schema_valid=schema_ok,

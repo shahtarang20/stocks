@@ -18,7 +18,7 @@ from __future__ import annotations
 import decimal
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -325,7 +325,27 @@ async def refund(
     captured_platform = await _txn_credit_to(db, capture.id, platform_rev.id)
     captured_provider = await _txn_credit_to(db, capture.id, provider_acct.id)
     captured_total = captured_platform + captured_provider
-    if captured_total <= 0 or amount_minor <= 0 or amount_minor > captured_total:
+
+    # Cumulative cap: the sum of ALL refunds for this job (prior + this one) must
+    # never exceed what was captured. Without this, repeated refunds each pass the
+    # single-shot `amount <= captured_total` check and mint money (C2).
+    prior_refunded = int(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(LedgerEntry.amount_minor), 0))
+                .select_from(LedgerEntry)
+                .join(LedgerTransaction, LedgerEntry.transaction_id == LedgerTransaction.id)
+                .where(
+                    LedgerTransaction.kind == "refund",
+                    LedgerTransaction.reference_id == str(job.id),
+                    LedgerEntry.account_id == customer.id,
+                    LedgerEntry.direction == "credit",
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    if captured_total <= 0 or amount_minor <= 0 or prior_refunded + amount_minor > captured_total:
         raise ValueError("invalid_refund_amount")
 
     # Proportional split (provider share by ratio; platform takes the remainder).

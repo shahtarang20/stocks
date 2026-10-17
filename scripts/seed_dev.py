@@ -234,6 +234,17 @@ async def seed_provider_machines(db: AsyncSession, provider_user: User):
 
 
 async def main():
+    # Safety guard: this script plants well-known-password administrator accounts.
+    # Refuse to run against a non-dev environment unless explicitly forced.
+    from app.core.config import settings
+
+    if settings.ENVIRONMENT.lower() not in {"development", "dev", "test", "testing", "local"} and "--force" not in sys.argv:
+        raise SystemExit(
+            f"Refusing to seed dev data in ENVIRONMENT={settings.ENVIRONMENT!r}. "
+            "This creates admin accounts with known passwords. Re-run with --force "
+            "only if you are certain this is a disposable environment."
+        )
+
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as db:
         # 1. Admin accounts

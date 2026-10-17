@@ -399,15 +399,20 @@ async def request_payout(
     )
     db.add(payout)
     await db.flush()
-    txn = await ledger.post_transaction(
-        db,
-        kind="payout_request",
-        legs=[(account, "debit", amount_minor), (payout_pending, "credit", amount_minor)],
-        idempotency_key=f"payout_request:{payout.id}",
-        reference_type="payout",
-        reference_id=str(payout.id),
-        actor_user_id=current.id,
-    )
+    try:
+        txn = await ledger.post_transaction(
+            db,
+            kind="payout_request",
+            legs=[(account, "debit", amount_minor), (payout_pending, "credit", amount_minor)],
+            idempotency_key=f"payout_request:{payout.id}",
+            reference_type="payout",
+            reference_id=str(payout.id),
+            actor_user_id=current.id,
+        )
+    except ledger.InsufficientFunds:
+        # Concurrent payouts could both pass the pre-check above; the ledger's
+        # no-negative guard on provider_earnings refuses the overdraw (H4).
+        raise _INSUFFICIENT_EARNINGS
     payout.request_txn_id = txn.id
     await record_audit(
         db, action="provider.payout.request", outcome="success", actor_user_id=current.id,

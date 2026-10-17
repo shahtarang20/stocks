@@ -558,3 +558,46 @@ async def test_customer_b_cannot_see_a_job(client):
     ).status_code == 404
     # A can see it.
     assert (await client.get(f"/v1/jobs/{job_id}", headers=auth_headers(cust_a))).status_code == 200
+
+
+# ===========================================================================
+# Audit fix H6 — a RESERVED job that is never claimed and whose reservation
+# expired is recovered (not stuck forever), and its hold is released.
+# ===========================================================================
+async def test_stuck_reserved_job_is_recovered(client):
+    from app.models.provider import ProviderMachine
+    from app.services.leases import run_recovery_cycle
+
+    await seed_echo_model()
+    m = await create_listable_machine(client, "p-stuck@x.com", hostname="stuck")
+    cust = await _customer(client, "c-stuck@x.com")
+    sub = await submit_job(client, cust, machine_id=m["machine_id"])
+    assert sub.json()["status"] == "reserved"
+    job_id = uuid.UUID(sub.json()["job_id"])
+
+    # The hold is outstanding while reserved.
+    acct0 = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()
+    assert acct0["reserved"] != "0.00"
+
+    # Expire the reservation and take the machine offline so a reschedule fails.
+    sm = get_sessionmaker()
+    async with sm() as s:
+        job = await s.get(Job, job_id)
+        res = await s.get(ResourceReservation, job.reservation_id)
+        res.expires_at = utcnow() - dt.timedelta(seconds=10)
+        machine = await s.get(ProviderMachine, uuid.UUID(m["machine_id"]))
+        machine.availability = "offline"
+        await s.commit()
+
+    # One recovery cycle must un-stick the job.
+    async with sm() as s:
+        await run_recovery_cycle(s)
+        await s.commit()
+
+    got = (await client.get(f"/v1/jobs/{job_id}", headers=auth_headers(cust))).json()
+    assert got["status"] == "failed"
+    assert got["error_code"] == "no_provider"
+
+    # The hold is returned — no credit leak.
+    acct1 = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()
+    assert acct1["reserved"] == "0.00"

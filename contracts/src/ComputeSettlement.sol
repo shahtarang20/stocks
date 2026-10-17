@@ -158,9 +158,11 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
      * @param jobId Unique identifier of the compute job.
      * @param signature Optional signature from platformSigner, or empty if after deadline.
      */
+    // NOTE: intentionally NOT `whenNotPaused` — a customer must always be able to
+    // reclaim their escrow (especially the post-deadline self-refund), so an
+    // emergency pause cannot freeze user funds indefinitely.
     function refundJob(bytes32 jobId, bytes memory signature)
         external
-        whenNotPaused
         nonReentrant
     {
         EscrowLock storage escrow = escrows[jobId];

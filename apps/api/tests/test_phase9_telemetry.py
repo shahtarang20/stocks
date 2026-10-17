@@ -310,3 +310,38 @@ async def test_platform_telemetry_stats(client: AsyncClient, db_engine):
     assert "fleet_avg_gpu_util_pct" in data
     assert "fleet_total_power_kw" in data
     assert "active_alerts_count" in data
+
+
+@pytest.mark.asyncio
+async def test_job_telemetry_cross_tenant_injection_dropped(client: AsyncClient, db_engine):
+    """A machine cannot inject telemetry for a job assigned to a DIFFERENT machine
+    (audit M2). Points for non-owned jobs are dropped (accepted == 0)."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    prov_a, _ = await _create_test_user(db_engine, "prov-ta@test.io", Role.provider)
+    prov_b, _ = await _create_test_user(db_engine, "prov-tb@test.io", Role.provider)
+    _, machine_a = await _setup_provider_machine(db_engine, prov_a, "node-a", "key-a")
+    _, machine_b = await _setup_provider_machine(db_engine, prov_b, "node-b", "key-b")
+    cust, _ = await _create_test_user(db_engine, "cust-ti@test.io", Role.customer)
+
+    sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm() as db:
+        job = Job(
+            customer_id=cust.id,
+            machine_id=machine_a.id,  # job belongs to machine A
+            workload_type="text-generation",
+            model="test-model",
+            input={"prompt": "hi"},
+            status="running",
+        )
+        db.add(job)
+        await db.commit()
+        job_id = job.id
+
+    # Machine B signs a batch targeting machine A's job.
+    points = [{"job_id": str(job_id), "gpu_util_pct": 99.0, "mem_used_mb": 1, "step_count": 1}]
+    payload = json.dumps({"points": points}, separators=(",", ":")).encode("utf-8")
+    headers = _sign_machine_request(str(machine_b.id), "key-b", payload, int(time.time()))
+    resp = await client.post("/v1/telemetry/job", content=payload, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] == 0  # cross-tenant point dropped

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.api.routers import (
@@ -30,13 +34,55 @@ from app.api.routers import (
 from app.core.config import settings
 
 logging.basicConfig(level=settings.LOG_LEVEL.upper())
+logger = logging.getLogger("computecoin.sweeper")
+
+
+async def _recovery_sweeper() -> None:
+    """Background loop that recovers expired leases / stuck RESERVED jobs and
+    re-drives stuck QUEUED jobs, so a disconnected provider never strands a job
+    or leaks held credits/capacity (audit H5)."""
+    from app.db.session import get_sessionmaker
+    from app.services.leases import run_recovery_cycle
+
+    interval = settings.SWEEP_INTERVAL_SECONDS
+    sm = get_sessionmaker()
+    while True:
+        try:
+            async with sm() as db:
+                await run_recovery_cycle(db)
+                await db.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - defensive; never kill the loop
+            logger.exception("recovery sweep failed")
+        await asyncio.sleep(interval)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    task: asyncio.Task | None = None
+    # Never run the sweeper under the test harness (shared in-memory DB).
+    if not settings.is_test and settings.SWEEP_INTERVAL_SECONDS > 0:
+        task = asyncio.create_task(_recovery_sweeper())
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 def create_app() -> FastAPI:
+    # Expose interactive API docs only in dev-like environments.
+    _is_dev = settings.ENVIRONMENT.lower() in {"development", "dev", "test", "testing", "local"}
+    _docs = {} if _is_dev else {"docs_url": None, "redoc_url": None, "openapi_url": None}
     application = FastAPI(
         title="ComputeCoin API",
         version=__version__,
-        description="ComputeCoin GPU compute marketplace API (through Phase 9).",
+        description="ComputeCoin GPU compute marketplace API (through Phase 10).",
+        lifespan=lifespan,
+        **_docs,
     )
 
     application.add_middleware(
@@ -46,6 +92,19 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @application.middleware("http")
+    async def _limit_request_body(request: Request, call_next):
+        """Reject over-large requests by declared Content-Length before the body
+        is buffered into memory (DoS guard)."""
+        cl = request.headers.get("content-length")
+        if cl is not None:
+            try:
+                if int(cl) > settings.MAX_REQUEST_BYTES:
+                    return JSONResponse({"detail": "request_too_large"}, status_code=413)
+            except ValueError:
+                return JSONResponse({"detail": "invalid_content_length"}, status_code=400)
+        return await call_next(request)
 
     application.include_router(health.router)
     application.include_router(auth.router)

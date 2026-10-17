@@ -115,4 +115,76 @@ contract ComputeSettlementTest {
         settlement.refundJob(jobId, "");
         require(token.balanceOf(address(this)) == balBefore + maxCost, "Refund amount mismatch");
     }
+
+    // --- settleJob coverage (audit #1): guards, signature rejection, pause ---
+
+    function _lock(bytes32 jobId, uint256 maxCost, uint256 deadline) internal {
+        token.approve(address(settlement), maxCost);
+        settlement.lockBudget(jobId, provider, maxCost, deadline);
+    }
+
+    function test_settle_reverts_cost_exceeds_budget() public {
+        bytes32 jobId = keccak256(abi.encodePacked("job-settle-1"));
+        _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
+        bool failed = false;
+        try settlement.settleJob(jobId, 60 * 10 ** 18, 1, "0x") {
+            failed = false;
+        } catch {
+            failed = true;
+        }
+        require(failed, "settle must revert when finalCost exceeds locked budget");
+    }
+
+    function test_settle_reverts_fee_exceeds_cost() public {
+        bytes32 jobId = keccak256(abi.encodePacked("job-settle-2"));
+        _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
+        bool failed = false;
+        try settlement.settleJob(jobId, 40 * 10 ** 18, 50 * 10 ** 18, "0x") {
+            failed = false;
+        } catch {
+            failed = true;
+        }
+        require(failed, "settle must revert when fee exceeds final cost");
+    }
+
+    function test_settle_reverts_on_invalid_signature() public {
+        bytes32 jobId = keccak256(abi.encodePacked("job-settle-3"));
+        _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
+        // Valid amounts but a bogus 65-byte signature -> ECDSA recover != signer.
+        bytes memory badSig = new bytes(65);
+        bool failed = false;
+        try settlement.settleJob(jobId, 40 * 10 ** 18, 4 * 10 ** 18, badSig) {
+            failed = false;
+        } catch {
+            failed = true;
+        }
+        require(failed, "settle must revert on an invalid voucher signature");
+    }
+
+    function test_settle_reverts_when_paused() public {
+        bytes32 jobId = keccak256(abi.encodePacked("job-settle-4"));
+        _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
+        settlement.pause();
+        bool failed = false;
+        try settlement.settleJob(jobId, 40 * 10 ** 18, 4 * 10 ** 18, "0x") {
+            failed = false;
+        } catch {
+            failed = true;
+        }
+        require(failed, "settle must revert while paused");
+    }
+
+    // Audit fix #2: a pause must NOT freeze the customer's post-deadline refund.
+    function test_refund_works_while_paused() public {
+        bytes32 jobId = keccak256(abi.encodePacked("job-settle-5"));
+        uint256 maxCost = 50 * 10 ** 18;
+        _lock(jobId, maxCost, block.timestamp); // deadline = now
+        settlement.pause();
+        uint256 balBefore = token.balanceOf(address(this));
+        settlement.refundJob(jobId, ""); // owner/customer self-refund after deadline
+        require(
+            token.balanceOf(address(this)) == balBefore + maxCost,
+            "refund must succeed even while paused"
+        );
+    }
 }

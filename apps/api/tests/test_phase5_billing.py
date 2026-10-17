@@ -349,6 +349,48 @@ async def test_refund_reverses_charge(client):
 
 
 # ===========================================================================
+# 7b. refunds are capped CUMULATIVELY against the captured amount (C2) —
+#     repeated refunds cannot exceed what was charged (no money minting).
+# ===========================================================================
+async def test_refund_cumulative_cap(client):
+    await seed_echo_model()
+    m = await create_listable_machine(client, "p-rfcap@x.com", hostname="rfcap")
+    cust = await _customer(client, "c-rfcap@x.com")
+    job_id = await _run_job_to_completion(client, cust, m)  # captured total 1.65
+    admin = await _admin(client, "admin-rfcap@x.com")
+
+    # First refund of 1.00 succeeds.
+    r1 = await client.post(
+        "/v1/admin/refunds",
+        json={"job_id": job_id, "amount": "1.00", "reason": "partial"},
+        headers=auth_headers(admin),
+    )
+    assert r1.status_code == 201, r1.text
+
+    # Second refund of 1.00 would make cumulative 2.00 > 1.65 captured -> rejected.
+    r2 = await client.post(
+        "/v1/admin/refunds",
+        json={"job_id": job_id, "amount": "1.00", "reason": "double"},
+        headers=auth_headers(admin),
+    )
+    assert r2.status_code == 409, r2.text
+    assert r2.json()["detail"] == "invalid_refund_amount"
+
+    # A further refund up to the remaining 0.65 is allowed.
+    r3 = await client.post(
+        "/v1/admin/refunds",
+        json={"job_id": job_id, "amount": "0.65", "reason": "remainder"},
+        headers=auth_headers(admin),
+    )
+    assert r3.status_code == 201, r3.text
+
+    # Ledger remains balanced after the capped refunds.
+    recon = (await client.get("/v1/admin/reconciliation", headers=auth_headers(admin))).json()
+    assert recon["balanced"] is True
+    assert recon["imbalance"] == "0.00"
+
+
+# ===========================================================================
 # 8. provider payout: within ok, beyond 409, admin authorize settles
 # ===========================================================================
 async def test_provider_payout_flow(client):

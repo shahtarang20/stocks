@@ -128,6 +128,21 @@ class TestChatCompletions:
     """POST /v1/chat/completions"""
 
     @pytest.mark.asyncio
+    async def test_oversized_prompt_rejected(
+        self, client: AsyncClient, authed_user: dict, setup_model_and_machine
+    ):
+        """An over-long message content is rejected at validation (DoS guard, M2)."""
+        headers = auth_headers(authed_user["access_token"])
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "echo-sim-v1",
+                "messages": [{"role": "user", "content": "x" * 200_000}],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 422
+
     async def test_basic_chat_completion(
         self, client: AsyncClient, authed_user: dict, setup_model_and_machine
     ):

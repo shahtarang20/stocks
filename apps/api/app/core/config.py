@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Insecure defaults that are acceptable for local/dev/test but MUST be overridden
+# in any non-dev deployment. The validator below refuses to boot otherwise.
+_DEV_AUTH_SECRET = "dev-auth-secret-change-me"
+_DEV_SESSION_SECRET = "dev-session-secret-change-me"
+_DEV_SIGNER_KEY = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
+_DEV_ENVS = {"development", "dev", "test", "testing", "local"}
 
 
 class Settings(BaseSettings):
@@ -18,9 +26,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./computecoin.db"
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # Secrets (overridden in prod via env)
-    AUTH_SECRET: str = "dev-auth-secret-change-me"
-    SESSION_SECRET: str = "dev-session-secret-change-me"
+    # Secrets (overridden in prod via env; a non-dev ENVIRONMENT with these
+    # defaults is rejected at startup — see the validator below).
+    AUTH_SECRET: str = _DEV_AUTH_SECRET
+    SESSION_SECRET: str = _DEV_SESSION_SECRET
 
     # Token lifetimes
     ACCESS_TOKEN_TTL_SECONDS: int = 900  # 15 minutes
@@ -64,6 +73,8 @@ class Settings(BaseSettings):
 
     # Phase 4 — job execution / FSM / scheduling / artifacts
     LEASE_TTL_SECONDS: int = 60
+    # Background recovery sweeper interval (seconds); 0 disables the sweeper.
+    SWEEP_INTERVAL_SECONDS: int = 30
     JOB_MAX_RUNTIME_DEFAULT: int = 300
     JOB_POLL_INTERVAL_SECONDS: int = 5
     JOB_RESERVATION_TTL_SECONDS: int = 3600  # how long a job reservation holds capacity
@@ -73,6 +84,9 @@ class Settings(BaseSettings):
     SCHEDULER_WEIGHT_AVAILABILITY: float = 0.2
     # Artifact storage limits + object store configuration.
     ARTIFACT_MAX_BYTES: int = 25 * 1024 * 1024  # 25 MiB
+    # Global request-body cap (must exceed ARTIFACT_MAX_BYTES). Requests whose
+    # declared Content-Length exceeds this are rejected before buffering.
+    MAX_REQUEST_BYTES: int = 32 * 1024 * 1024  # 32 MiB
     ARTIFACT_CONTENT_TYPES: str = "application/json,text/plain,application/octet-stream"
     ARTIFACT_GRANT_TTL_SECONDS: int = 900
     OBJECT_STORAGE_LOCAL_DIR: str = "./.artifact_store"
@@ -109,11 +123,34 @@ class Settings(BaseSettings):
     SETTLEMENT_CHAIN_ID: int = 31337
     SETTLEMENT_CONTRACT_ADDRESS: str = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
     COMPUTE_TOKEN_ADDRESS: str = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
-    # Dev/test platform signer private key (matches account #3 on standard dev nodes)
-    PLATFORM_SIGNER_PRIVATE_KEY: str = (
-        "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
-    )
+    # Dev/test platform signer private key (matches account #3 on standard dev nodes).
+    # In a non-dev ENVIRONMENT this default is rejected at startup when settlement
+    # is enabled (the private half is public).
+    PLATFORM_SIGNER_PRIVATE_KEY: str = _DEV_SIGNER_KEY
     PLATFORM_TREASURY_ADDRESS: str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+
+    @model_validator(mode="after")
+    def _reject_insecure_defaults_in_prod(self) -> "Settings":
+        """Refuse to boot a non-dev deployment that still uses shipped dev secrets.
+
+        A publicly-known AUTH_SECRET lets anyone forge admin JWTs and artifact
+        grants; the dev signer key lets anyone forge settlement vouchers."""
+        if self.ENVIRONMENT.lower() in _DEV_ENVS:
+            return self
+        insecure = []
+        if self.AUTH_SECRET == _DEV_AUTH_SECRET:
+            insecure.append("AUTH_SECRET")
+        if self.SESSION_SECRET == _DEV_SESSION_SECRET:
+            insecure.append("SESSION_SECRET")
+        if self.SETTLEMENT_ENABLED and self.PLATFORM_SIGNER_PRIVATE_KEY == _DEV_SIGNER_KEY:
+            insecure.append("PLATFORM_SIGNER_PRIVATE_KEY")
+        if insecure:
+            raise ValueError(
+                f"Refusing to start in ENVIRONMENT={self.ENVIRONMENT!r} with insecure "
+                f"default value(s) for: {', '.join(insecure)}. "
+                "Set strong values via environment variables."
+            )
+        return self
 
     @property
     def artifact_content_types(self) -> set[str]:

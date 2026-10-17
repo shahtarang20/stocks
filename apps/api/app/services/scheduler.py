@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -32,7 +33,9 @@ from app.models.marketplace import CURRENCY, Quote
 from app.models.model_registry import ModelVersion
 from app.models.provider import ProviderMachine
 from app.services import job_fsm as fsm
-from app.services.billing import reserve_for_job
+from app.services.billing import release_hold, reserve_for_job
+
+logger = logging.getLogger(__name__)
 from app.services.ledger import InsufficientFunds
 from app.services.marketplace import active_reservation_slots, reserve_capacity
 from app.services.pricing import compute_breakdown, get_active_fee_rate
@@ -185,18 +188,18 @@ async def _eligible_machines(
     candidates: list[_Candidate] = []
     for m in result.scalars().all():
         if m.status == "deregistered" or m.asking_price_per_hour is None:
-            print(f"DEBUG SKIP 1: m={m.hostname}")
+            logger.debug("scheduler skip (deregistered/unpriced): machine=%s", m.id)
             continue
         if m.availability != "online" or derive_status(m, now) != "online":
-            print(f"DEBUG SKIP 2: m={m.hostname}, avail={m.availability}, derived={derive_status(m, now)}")
+            logger.debug("scheduler skip (offline): machine=%s avail=%s", m.id, m.availability)
             continue
         workloads = m.capability.supported_workloads if m.capability else []
         if job.workload_type not in (workloads or []):
-            print(f"DEBUG SKIP 3: m={m.hostname}, workloads={workloads}")
+            logger.debug("scheduler skip (workload): machine=%s", m.id)
             continue
         machine_gpus = m.hardware.gpu_count if m.hardware else 0
         if machine_gpus < job.gpu_count:
-            print(f"DEBUG SKIP 4: m={m.hostname}, gpus={machine_gpus}")
+            logger.debug("scheduler skip (gpus): machine=%s gpus=%s", m.id, machine_gpus)
             continue
         # Phase 8: Isolation tier matching (ADR-0003: No silent downgrade)
         req_tier = (getattr(job, "isolation_tier", None) or "container").lower()
@@ -384,5 +387,8 @@ async def run_scheduler(
         await fsm.transition(db, job, fsm.FAILED, reason="no_provider", actor="scheduler")
         job.error_code = "no_provider"
         job.error_message = "no eligible provider available"
+        # Release any outstanding hold so a permanently-unschedulable job never
+        # leaks reserved customer credits (concurrency F4).
+        await release_hold(db, job)
     await db.flush()
     return False

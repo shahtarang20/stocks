@@ -44,7 +44,10 @@ from app.models.billing import (
 )
 
 # Accounts that may NEVER go negative (INVARIANT 3).
-_NON_NEGATIVE_TYPES = frozenset({"customer_credits", "holding"})
+# Accounts that must never go negative. provider_earnings is floored so a payout
+# or refund cannot overdraw a provider (platform_revenue is intentionally NOT
+# listed: the platform may absorb a refund beyond its collected fee).
+_NON_NEGATIVE_TYPES = frozenset({"customer_credits", "holding", "provider_earnings"})
 # DEBIT-normal accounts (balance = debits - credits). Everything else is
 # CREDIT-normal (balance = credits - debits).
 _DEBIT_NORMAL_TYPES = frozenset({"external"})

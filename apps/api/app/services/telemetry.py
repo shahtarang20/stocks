@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.base import ensure_aware, utcnow
+from app.models.jobs import Job
 from app.models.telemetry import JobTelemetry, MachineTelemetry, TelemetryAlert
+
+# Hard cap on rows materialized by a single telemetry query (DoS guard).
+_MAX_QUERY_ROWS = 50_000
 from app.schemas.telemetry import (
     JobMetricBucketPoint,
     JobTelemetryItem,
@@ -116,11 +120,32 @@ async def record_job_telemetry(
     machine_id: uuid.UUID | None,
     points: list[JobTelemetryItem],
 ) -> int:
-    """Ingest a batch of execution telemetry points for jobs."""
+    """Ingest a batch of execution telemetry points for jobs.
+
+    Telemetry is only accepted for jobs currently assigned to the authenticated
+    machine; points referencing another machine's (or an unknown) job are dropped
+    so a machine cannot inject telemetry into jobs it does not run.
+    """
     now = utcnow()
     telemetry_objects: list[JobTelemetry] = []
 
+    owned_job_ids: set[uuid.UUID] = set()
+    if machine_id is not None:
+        requested = {pt.job_id for pt in points if pt.job_id is not None}
+        if requested:
+            owned_job_ids = set(
+                (
+                    await db.execute(
+                        select(Job.id).where(
+                            Job.id.in_(requested), Job.machine_id == machine_id
+                        )
+                    )
+                ).scalars().all()
+            )
+
     for pt in points:
+        if pt.job_id not in owned_job_ids:
+            continue  # cross-tenant / unknown job -> drop
         ts = ensure_aware(pt.timestamp) or now
         telemetry_objects.append(
             JobTelemetry(
@@ -165,6 +190,7 @@ async def query_machine_telemetry(
             MachineTelemetry.timestamp <= end_utc,
         )
         .order_by(MachineTelemetry.timestamp.asc())
+        .limit(_MAX_QUERY_ROWS)
     )
     rows = result.scalars().all()
 
@@ -234,7 +260,7 @@ async def query_job_telemetry(
         query = query.where(JobTelemetry.timestamp >= ensure_aware(start_time))
     if end_time is not None:
         query = query.where(JobTelemetry.timestamp <= ensure_aware(end_time))
-    query = query.order_by(JobTelemetry.timestamp.asc())
+    query = query.order_by(JobTelemetry.timestamp.asc()).limit(_MAX_QUERY_ROWS)
 
     result = await db.execute(query)
     rows = result.scalars().all()

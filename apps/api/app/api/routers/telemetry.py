@@ -50,10 +50,10 @@ async def ingest_machine_telemetry(
     try:
         data = json.loads(raw_body.decode("utf-8"))
         batch = MachineTelemetryBatchRequest.model_validate(data)
-    except Exception as exc:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid telemetry payload: {exc}",
+            detail="invalid_telemetry_payload",
         )
 
     accepted, alerts = await telemetry_service.record_machine_telemetry(
@@ -73,10 +73,10 @@ async def ingest_job_telemetry(
     try:
         data = json.loads(raw_body.decode("utf-8"))
         batch = JobTelemetryBatchRequest.model_validate(data)
-    except Exception as exc:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid telemetry payload: {exc}",
+            detail="invalid_telemetry_payload",
         )
 
     accepted = await telemetry_service.record_job_telemetry(

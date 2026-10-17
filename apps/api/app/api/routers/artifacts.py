@@ -120,5 +120,10 @@ async def download_artifact(
     return Response(
         content=data,
         media_type=artifact.content_type,
-        headers={"X-Artifact-SHA256": artifact.sha256},
+        headers={
+            "X-Artifact-SHA256": artifact.sha256,
+            # Prevent content sniffing / inline rendering of stored bytes (stored-XSS guard).
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'attachment; filename="{artifact_id}"',
+        },
     )

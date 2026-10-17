@@ -82,6 +82,15 @@ async def create_escrow_lock(
             detail=f"Job {request.job_id} not found",
         )
 
+    # 1a. Only the job's owning customer (or an administrator) may lock an escrow
+    # for it — prevents a third party from squatting/creating escrows on jobs they
+    # do not own.
+    if "administrator" not in current_user.roles and job.customer_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to create an escrow for this job",
+        )
+
     # 2. Verify provider exists
     provider = await db.get(User, request.provider_id)
     if not provider:
@@ -163,6 +172,14 @@ async def issue_settlement_voucher(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Active locked escrow for job {request.job_id} not found",
+        )
+
+    # Refuse to mint a second (differently-valued) voucher for the same escrow —
+    # one escrow must have at most one valid payout authorization (money F6).
+    if escrow.voucher_signature:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A settlement voucher has already been issued for this escrow",
         )
 
     final_cost_int = int(request.final_cost_units)
@@ -288,6 +305,14 @@ async def confirm_refund_tx(
 
     if escrow.status == EscrowStatus.REFUNDED.value:
         return escrow
+
+    # A SETTLED escrow has already paid the provider — it must never also be
+    # refunded to the customer (escrow double-spend, H3).
+    if escrow.status == EscrowStatus.SETTLED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot refund an already-settled escrow",
+        )
 
     escrow.status = EscrowStatus.REFUNDED.value
     escrow.refund_tx_hash = request.refund_tx_hash

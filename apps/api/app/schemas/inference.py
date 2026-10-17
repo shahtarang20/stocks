@@ -14,16 +14,21 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Per-string length bound for embedding inputs (DoS guard). The batch item-count
+# cap is enforced in the inference service.
+_EMBED_MAX_CHARS = 131_072
 
 
 # ---------------------------------------------------------------------------
 # Chat completions — request
 # ---------------------------------------------------------------------------
 class ChatMessage(BaseModel):
-    role: str = Field(..., description="Role: system | user | assistant")
-    content: str = Field(..., description="Message content")
-    name: Optional[str] = None
+    role: str = Field(..., max_length=32, description="Role: system | user | assistant")
+    # Bounded to prevent multi-GB prompt bodies exhausting worker memory/CPU.
+    content: str = Field(..., max_length=131_072, description="Message content")
+    name: Optional[str] = Field(default=None, max_length=128)
 
 
 class ChatCompletionRequest(BaseModel):
@@ -32,7 +37,7 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     model: str = Field(..., min_length=1, max_length=128)
-    messages: list[ChatMessage] = Field(..., min_length=1)
+    messages: list[ChatMessage] = Field(..., min_length=1, max_length=512)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     n: int = Field(default=1, ge=1, le=8)
@@ -94,6 +99,20 @@ class EmbeddingRequest(BaseModel):
 
     model: str = Field(..., min_length=1, max_length=128)
     input: str | list[str] = Field(...)
+
+    @field_validator("input")
+    @classmethod
+    def _bound_input(cls, v: "str | list[str]") -> "str | list[str]":
+        # Bound each input string's length so a single request cannot exhaust
+        # memory/CPU. (The 100-item batch cap is enforced in the service layer,
+        # which returns the documented 400 ``batch_size_exceeded``.)
+        items = v if isinstance(v, list) else [v]
+        for s in items:
+            if not isinstance(s, str):
+                raise ValueError("input must be a string or list of strings")
+            if len(s) > _EMBED_MAX_CHARS:
+                raise ValueError(f"each input string must be <= {_EMBED_MAX_CHARS} chars")
+        return v
     encoding_format: str = Field(default="float")
     user: Optional[str] = None
 

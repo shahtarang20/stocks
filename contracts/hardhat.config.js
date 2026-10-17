@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 /** @type import('hardhat/config').HardhatUserConfig */
 export default {
   solidity: {
@@ -10,6 +12,31 @@ export default {
       },
     },
   },
+  networks: {
+    sepolia: {
+      type: "http",
+      url: process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      chainId: 11155111,
+    },
+    "base-sepolia": {
+      type: "http",
+      url: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      chainId: 84532,
+    },
+    "bsc-testnet": {
+      type: "http",
+      url: process.env.BSC_TESTNET_RPC_URL || "https://data-seed-prebsc-1-s1.binance.org:8545",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      chainId: 97,
+    },
+    localhost: {
+      type: "http",
+      url: "http://127.0.0.1:8545",
+      chainId: 31337,
+    },
+  },
   paths: {
     sources: "./src",
     tests: "./test",
@@ -17,3 +44,4 @@ export default {
     artifacts: "./artifacts",
   },
 };
+

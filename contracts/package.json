@@ -4,7 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "hardhat test",
+    "build": "hardhat compile",
+    "compile": "hardhat compile",
+    "deploy:token": "hardhat run scripts/deploy-token.js",
+    "create:pool": "hardhat run scripts/create-liquidity-pool.js"
   },
   "keywords": [],
   "type": "module",
@@ -14,6 +18,7 @@
     "hardhat": "^3.20.0"
   },
   "dependencies": {
+    "dotenv": "^18.0.8",
     "ethers": "^6.17.0"
   }
 }

@@ -1,0 +1,20 @@
+{
+  "name": "@computecoin/sdk",
+  "version": "0.1.0",
+  "description": "Thin typed TypeScript client for the ComputeCoin API (fetch-based).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "22.9.0",
+    "typescript": "5.6.3",
+    "vitest": "2.1.4"
+  }
+}

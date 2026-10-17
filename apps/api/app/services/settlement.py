@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.base import utcnow
+from app.models.billing import LedgerTransaction
 from app.models.jobs import Job
 from app.models.settlement import (
     EscrowStatus,
@@ -123,6 +124,8 @@ async def create_escrow_lock(
         contract_address=settings.SETTLEMENT_CONTRACT_ADDRESS,
         token_address=settings.COMPUTE_TOKEN_ADDRESS,
         job_bytes32=job_b32,
+        customer_address=request.customer_address,
+        provider_address=request.provider_address,
         locked_amount_units=request.locked_amount_units,
         deadline=deadline_dt,
         status=EscrowStatus.LOCKED.value,
@@ -198,13 +201,15 @@ async def issue_settlement_voucher(
             detail=f"Platform fee {request.platform_fee_units} exceeds final cost {request.final_cost_units}",
         )
 
-    # Create EVM-compatible packed hash
+    # Create EVM-compatible packed hash keyed by (customer, jobId) matching ComputeSettlement.sol
+    customer_addr = to_checksum_address(escrow.customer_address or "0x0000000000000000000000000000000000000000")
     job_bytes = bytes.fromhex(escrow.job_bytes32[2:])
     contract_addr = to_checksum_address(escrow.contract_address)
 
     packed_data = encode_packed(
-        ["bytes32", "uint256", "uint256", "uint256", "address"],
+        ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
         [
+            customer_addr,
             job_bytes,
             final_cost_int,
             platform_fee_int,
@@ -230,6 +235,7 @@ async def issue_settlement_voucher(
     return SettlementVoucherResponse(
         job_id=escrow.job_id,
         job_bytes32=escrow.job_bytes32,
+        customer_address=customer_addr,
         final_cost_units=request.final_cost_units,
         platform_fee_units=request.platform_fee_units,
         chain_id=escrow.chain_id,
@@ -254,6 +260,14 @@ async def confirm_settlement_tx(
             detail=f"Escrow for job {request.job_id} not found",
         )
 
+    # Verify claimed amount against escrow record if supplied
+    if request.claimed_amount_units is not None:
+        if str(request.claimed_amount_units) != str(escrow.final_cost_units):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Claimed settlement amount {request.claimed_amount_units} does not match escrow final cost {escrow.final_cost_units}",
+            )
+
     if escrow.status == EscrowStatus.SETTLED.value:
         return escrow
 
@@ -261,6 +275,15 @@ async def confirm_settlement_tx(
     escrow.settle_tx_hash = request.settle_tx_hash
     escrow.settled_at = utcnow()
     escrow.reconciled = True
+
+    # Link off-chain double-entry ledger capture transaction if present
+    ledger_tx = await db.scalar(
+        select(LedgerTransaction).where(
+            LedgerTransaction.reference_type == "job",
+            LedgerTransaction.reference_id == str(escrow.job_id),
+            LedgerTransaction.kind == "capture",
+        )
+    )
 
     # Record OnChainTransaction
     tx = OnChainTransaction(
@@ -274,6 +297,7 @@ async def confirm_settlement_tx(
         block_number=request.block_number,
         status=OnChainTxStatus.RECONCILED.value,
         reconciled_with_ledger=True,
+        ledger_txn_id=ledger_tx.id if ledger_tx else None,
         job_id=escrow.job_id,
         metadata_json={
             "final_cost_units": escrow.final_cost_units,
@@ -282,6 +306,17 @@ async def confirm_settlement_tx(
         },
     )
     db.add(tx)
+
+    # Mark lock transaction for this job as reconciled with ledger as well
+    lock_tx = await db.scalar(
+        select(OnChainTransaction).where(
+            OnChainTransaction.job_id == escrow.job_id,
+            OnChainTransaction.tx_type == OnChainTxType.LOCK.value,
+        )
+    )
+    if lock_tx:
+        lock_tx.reconciled_with_ledger = True
+        lock_tx.status = OnChainTxStatus.RECONCILED.value
 
     await db.commit()
     await db.refresh(escrow)
@@ -303,6 +338,14 @@ async def confirm_refund_tx(
             detail=f"Escrow for job {request.job_id} not found",
         )
 
+    # Verify claimed amount against escrow record if supplied
+    if request.claimed_amount_units is not None:
+        if str(request.claimed_amount_units) != str(escrow.locked_amount_units):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Claimed refund amount {request.claimed_amount_units} does not match escrow locked budget {escrow.locked_amount_units}",
+            )
+
     if escrow.status == EscrowStatus.REFUNDED.value:
         return escrow
 
@@ -318,6 +361,15 @@ async def confirm_refund_tx(
     escrow.refund_tx_hash = request.refund_tx_hash
     escrow.reconciled = True
 
+    # Link off-chain ledger release/refund transaction if present
+    ledger_tx = await db.scalar(
+        select(LedgerTransaction).where(
+            LedgerTransaction.reference_type == "job",
+            LedgerTransaction.reference_id == str(escrow.job_id),
+            LedgerTransaction.kind.in_(["release", "refund"]),
+        )
+    )
+
     tx = OnChainTransaction(
         chain_id=escrow.chain_id,
         tx_hash=request.refund_tx_hash,
@@ -329,6 +381,7 @@ async def confirm_refund_tx(
         block_number=request.block_number,
         status=OnChainTxStatus.RECONCILED.value,
         reconciled_with_ledger=True,
+        ledger_txn_id=ledger_tx.id if ledger_tx else None,
         job_id=escrow.job_id,
         metadata_json={
             "locked_amount_units": escrow.locked_amount_units,
@@ -336,6 +389,17 @@ async def confirm_refund_tx(
         },
     )
     db.add(tx)
+
+    # Mark lock transaction as reconciled
+    lock_tx = await db.scalar(
+        select(OnChainTransaction).where(
+            OnChainTransaction.job_id == escrow.job_id,
+            OnChainTransaction.tx_type == OnChainTxType.LOCK.value,
+        )
+    )
+    if lock_tx:
+        lock_tx.reconciled_with_ledger = True
+        lock_tx.status = OnChainTxStatus.RECONCILED.value
 
     await db.commit()
     await db.refresh(escrow)
@@ -376,6 +440,7 @@ async def record_on_chain_tx(
 async def get_reconciliation_summary(db: AsyncSession) -> OnChainReconciliationSummary:
     """Compute aggregate state across escrows, transactions and ledger integrity."""
     escrows = (await db.scalars(select(OnChainEscrow))).all()
+    txs = (await db.scalars(select(OnChainTransaction))).all()
 
     total_escrows = len(escrows)
     active_locked = sum(
@@ -395,18 +460,58 @@ async def get_reconciliation_summary(db: AsyncSession) -> OnChainReconciliationS
         int(e.locked_amount_units) for e in escrows if e.status == EscrowStatus.REFUNDED.value
     )
 
-    unreconciled_txs = await db.scalar(
-        select(func.count(OnChainTransaction.id)).where(
-            OnChainTransaction.reconciled_with_ledger.is_(False)
-        )
-    ) or 0
+    unreconciled_txs = sum(1 for t in txs if not t.reconciled_with_ledger)
 
     # Invariant: all escrows in settled or refunded state should have reconciled=True
     unreconciled_escrows = sum(
         1 for e in escrows if e.status in (EscrowStatus.SETTLED.value, EscrowStatus.REFUNDED.value) and not e.reconciled
     )
 
-    ledger_parity = (unreconciled_escrows == 0)
+    imbalance = 0
+
+    # Index transactions by job_id and tx_type
+    settle_tx_by_job: dict[uuid.UUID, OnChainTransaction] = {}
+    refund_tx_by_job: dict[uuid.UUID, OnChainTransaction] = {}
+    lock_tx_by_job: dict[uuid.UUID, OnChainTransaction] = {}
+
+    for t in txs:
+        if t.job_id:
+            if t.tx_type == OnChainTxType.SETTLE.value:
+                settle_tx_by_job[t.job_id] = t
+            elif t.tx_type == OnChainTxType.REFUND.value:
+                refund_tx_by_job[t.job_id] = t
+            elif t.tx_type == OnChainTxType.LOCK.value:
+                lock_tx_by_job[t.job_id] = t
+
+    for e in escrows:
+        if e.status == EscrowStatus.SETTLED.value:
+            final_cost = int(e.final_cost_units or 0)
+            tx = settle_tx_by_job.get(e.job_id)
+            if not tx or not tx.amount_units:
+                imbalance += (final_cost if final_cost > 0 else 1)
+            else:
+                diff = abs(final_cost - int(tx.amount_units))
+                imbalance += diff
+                if tx.ledger_txn_id:
+                    ledger_tx = await db.get(LedgerTransaction, tx.ledger_txn_id)
+                    if not ledger_tx or ledger_tx.status != "posted":
+                        imbalance += 1
+        elif e.status == EscrowStatus.REFUNDED.value:
+            locked_amt = int(e.locked_amount_units)
+            tx = refund_tx_by_job.get(e.job_id)
+            if not tx or not tx.amount_units:
+                imbalance += (locked_amt if locked_amt > 0 else 1)
+            else:
+                diff = abs(locked_amt - int(tx.amount_units))
+                imbalance += diff
+        elif e.status == EscrowStatus.LOCKED.value:
+            locked_amt = int(e.locked_amount_units)
+            tx = lock_tx_by_job.get(e.job_id)
+            if tx and tx.amount_units:
+                diff = abs(locked_amt - int(tx.amount_units))
+                imbalance += diff
+
+    ledger_parity = (unreconciled_escrows == 0 and imbalance == 0)
 
     return OnChainReconciliationSummary(
         total_escrows=total_escrows,
@@ -416,4 +521,5 @@ async def get_reconciliation_summary(db: AsyncSession) -> OnChainReconciliationS
         total_refunded_amount_units=str(total_refunded),
         unreconciled_transactions_count=unreconciled_txs,
         ledger_parity_verified=ledger_parity,
+        imbalance=imbalance,
     )

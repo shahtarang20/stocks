@@ -5,6 +5,19 @@ import {ComputeCoinToken} from "../src/ComputeCoinToken.sol";
 import {ComputeSettlement} from "../src/ComputeSettlement.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
+contract EscrowSquatterHelper {
+    function squat(
+        ComputeSettlement settlement,
+        ComputeCoinToken token,
+        bytes32 jobId,
+        address provider,
+        uint256 cost
+    ) external {
+        token.approve(address(settlement), cost);
+        settlement.lockBudget(jobId, provider, cost, block.timestamp + 3600);
+    }
+}
+
 contract ComputeSettlementTest {
     ComputeCoinToken public token;
     ComputeSettlement public settlement;
@@ -21,8 +34,6 @@ contract ComputeSettlementTest {
     function setUp() public {
         owner = address(this);
         platformSignerPrivateKey = 0xA11CE;
-        // Public address for private key 0xA11CE
-        // Derived or use an address and mock
         platformSigner = 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7;
         feeTreasury = address(0x2222);
         customer = address(0x3333);
@@ -76,7 +87,7 @@ contract ComputeSettlementTest {
         token.approve(address(settlement), maxCost);
         settlement.lockBudget(jobId, provider, maxCost, deadline);
 
-        (address c, address p, uint256 amt, uint256 dl, bool settled) = settlement.escrows(jobId);
+        (address c, address p, uint256 amt, uint256 dl, bool settled) = settlement.getEscrow(address(this), jobId);
         require(c == address(this), "Customer mismatch");
         require(p == provider, "Provider mismatch");
         require(amt == maxCost, "Amount mismatch");
@@ -112,7 +123,7 @@ contract ComputeSettlementTest {
 
         uint256 balBefore = token.balanceOf(address(this));
         // Owner refund after deadline
-        settlement.refundJob(jobId, "");
+        settlement.refundJob(address(this), jobId, "");
         require(token.balanceOf(address(this)) == balBefore + maxCost, "Refund amount mismatch");
     }
 
@@ -127,7 +138,7 @@ contract ComputeSettlementTest {
         bytes32 jobId = keccak256(abi.encodePacked("job-settle-1"));
         _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
         bool failed = false;
-        try settlement.settleJob(jobId, 60 * 10 ** 18, 1, "0x") {
+        try settlement.settleJob(address(this), jobId, 60 * 10 ** 18, 1, "0x") {
             failed = false;
         } catch {
             failed = true;
@@ -139,7 +150,7 @@ contract ComputeSettlementTest {
         bytes32 jobId = keccak256(abi.encodePacked("job-settle-2"));
         _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
         bool failed = false;
-        try settlement.settleJob(jobId, 40 * 10 ** 18, 50 * 10 ** 18, "0x") {
+        try settlement.settleJob(address(this), jobId, 40 * 10 ** 18, 50 * 10 ** 18, "0x") {
             failed = false;
         } catch {
             failed = true;
@@ -150,10 +161,9 @@ contract ComputeSettlementTest {
     function test_settle_reverts_on_invalid_signature() public {
         bytes32 jobId = keccak256(abi.encodePacked("job-settle-3"));
         _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
-        // Valid amounts but a bogus 65-byte signature -> ECDSA recover != signer.
         bytes memory badSig = new bytes(65);
         bool failed = false;
-        try settlement.settleJob(jobId, 40 * 10 ** 18, 4 * 10 ** 18, badSig) {
+        try settlement.settleJob(address(this), jobId, 40 * 10 ** 18, 4 * 10 ** 18, badSig) {
             failed = false;
         } catch {
             failed = true;
@@ -166,7 +176,7 @@ contract ComputeSettlementTest {
         _lock(jobId, 50 * 10 ** 18, block.timestamp + ONE_HOUR);
         settlement.pause();
         bool failed = false;
-        try settlement.settleJob(jobId, 40 * 10 ** 18, 4 * 10 ** 18, "0x") {
+        try settlement.settleJob(address(this), jobId, 40 * 10 ** 18, 4 * 10 ** 18, "0x") {
             failed = false;
         } catch {
             failed = true;
@@ -174,17 +184,51 @@ contract ComputeSettlementTest {
         require(failed, "settle must revert while paused");
     }
 
-    // Audit fix #2: a pause must NOT freeze the customer's post-deadline refund.
     function test_refund_works_while_paused() public {
         bytes32 jobId = keccak256(abi.encodePacked("job-settle-5"));
         uint256 maxCost = 50 * 10 ** 18;
-        _lock(jobId, maxCost, block.timestamp); // deadline = now
+        _lock(jobId, maxCost, block.timestamp);
         settlement.pause();
         uint256 balBefore = token.balanceOf(address(this));
-        settlement.refundJob(jobId, ""); // owner/customer self-refund after deadline
+        settlement.refundJob(address(this), jobId, "");
         require(
             token.balanceOf(address(this)) == balBefore + maxCost,
             "refund must succeed even while paused"
         );
+    }
+
+    // --- A3: On-chain jobId squatting protection test ---
+    function test_non_owner_cannot_block_job_escrow() public {
+        bytes32 jobId = keccak256(abi.encodePacked("job-squat-target-123"));
+        uint256 maxCost = 25 * 10 ** 18;
+        EscrowSquatterHelper squatter = new EscrowSquatterHelper();
+        token.transfer(address(squatter), maxCost);
+
+        // 1. Attacker attempts to front-run/squat the same jobId first
+        squatter.squat(settlement, token, jobId, provider, maxCost);
+
+        // 2. Legitimate customer locks the same jobId -> SUCCEEDS because escrows are keyed by (customer, jobId)!
+        token.approve(address(settlement), maxCost);
+        settlement.lockBudget(jobId, provider, maxCost, block.timestamp + ONE_HOUR);
+
+        // Verify legitimate customer's escrow is registered
+        (address c, , uint256 amt, , bool settled) = settlement.getEscrow(address(this), jobId);
+        require(c == address(this), "Customer mismatch");
+        require(amt == maxCost, "Amount mismatch");
+        require(!settled, "Should not be settled");
+
+        // Verify squatter's escrow is also distinct and tracked separately
+        (address sc, , uint256 samt, , ) = settlement.getEscrow(address(squatter), jobId);
+        require(sc == address(squatter), "Squatter customer mismatch");
+        require(samt == maxCost, "Squatter amount mismatch");
+
+        // 3. Customer trying to double-lock their own escrow STILL reverts
+        bool failed = false;
+        try settlement.lockBudget(jobId, provider, maxCost, block.timestamp + ONE_HOUR) {
+            failed = false;
+        } catch {
+            failed = true;
+        }
+        require(failed, "Double locking same job id by same customer must revert");
     }
 }

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Auth cookies & CSRF
+    COOKIE_SECURE: bool | None = None
+    COOKIE_SAMESITE: str = "lax"
+
     # JWT
     JWT_ALGORITHM: str = "HS256"
     JWT_ISSUER: str = "computecoin"
@@ -164,6 +168,12 @@ class Settings(BaseSettings):
     def expose_dev_tokens(self) -> bool:
         """Whether email/reset tokens are returned in API responses (dev/test only)."""
         return self.ENVIRONMENT.lower() in {"development", "dev", "test", "testing", "local"}
+
+    @property
+    def cookie_secure(self) -> bool:
+        if self.COOKIE_SECURE is not None:
+            return self.COOKIE_SECURE
+        return self.ENVIRONMENT.lower() in {"production", "prod"}
 
 
 @lru_cache

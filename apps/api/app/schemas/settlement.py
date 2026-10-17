@@ -43,6 +43,8 @@ class EscrowResponse(BaseModel):
     contract_address: str
     token_address: str
     job_bytes32: str
+    customer_address: str | None = None
+    provider_address: str | None = None
     locked_amount_units: str
     deadline: dt.datetime
     status: str
@@ -66,6 +68,7 @@ class IssueSettlementVoucherRequest(BaseModel):
 class SettlementVoucherResponse(BaseModel):
     job_id: uuid.UUID
     job_bytes32: str
+    customer_address: str
     final_cost_units: str
     platform_fee_units: str
     chain_id: int
@@ -78,12 +81,14 @@ class ConfirmSettlementTxRequest(BaseModel):
     job_id: uuid.UUID
     settle_tx_hash: str = Field(min_length=64, max_length=66)
     block_number: int | None = None
+    claimed_amount_units: str | None = None
 
 
 class ConfirmRefundTxRequest(BaseModel):
     job_id: uuid.UUID
     refund_tx_hash: str = Field(min_length=64, max_length=66)
     block_number: int | None = None
+    claimed_amount_units: str | None = None
 
 
 class RecordOnChainTxRequest(BaseModel):
@@ -126,3 +131,4 @@ class OnChainReconciliationSummary(BaseModel):
     total_refunded_amount_units: str
     unreconciled_transactions_count: int
     ledger_parity_verified: bool
+    imbalance: int = 0

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +19,7 @@ from app.core.security import (
 )
 from app.db.base import ensure_aware, utcnow
 from app.db.session import get_db
-from app.deps import client_ip
+from app.deps import client_ip, get_current_user
 from app.models.enums import Role
 from app.models.user import (
     EmailVerificationToken,
@@ -27,6 +28,7 @@ from app.models.user import (
     UserRole,
 )
 from app.schemas.auth import (
+    CurrentUser,
     LoginRequest,
     LogoutRequest,
     MessageResponse,
@@ -55,6 +57,50 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _GENERIC_LOGIN_ERROR = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
 )
+
+
+def set_auth_cookies(
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+    csrf_token: str,
+    expires_in: int,
+) -> None:
+    """Set hardened httpOnly authentication cookies and double-submit CSRF cookie."""
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=expires_in,
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.REFRESH_TOKEN_TTL_SECONDS,
+        path="/",
+    )
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,  # Readable by client JS to double-submit in X-CSRF-Token header
+        secure=settings.cookie_secure,
+        samesite=settings.COOKIE_SAMESITE,
+        max_age=settings.REFRESH_TOKEN_TTL_SECONDS,
+        path="/",
+    )
+
+
+def clear_auth_cookies(response: Response) -> None:
+    """Clear all authentication and CSRF cookies on logout."""
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
+    response.delete_cookie("csrf_token", path="/")
 
 
 def _enforce_rate_limit(key: str, limit: int, window: int) -> None:
@@ -141,6 +187,7 @@ async def verify_email(
 async def login(
     body: LoginRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     ip = client_ip(request)
@@ -179,18 +226,50 @@ async def login(
     await record_audit(
         db, action="auth.login", outcome="success", actor_user_id=user.id, ip=ip
     )
+
+    csrf_token = secrets.token_hex(32)
+    set_auth_cookies(
+        response=response,
+        access_token=access,
+        refresh_token=refresh,
+        csrf_token=csrf_token,
+        expires_in=expires_in,
+    )
+
     await db.flush()
-    return TokenResponse(access_token=access, refresh_token=refresh, expires_in=expires_in)
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh,
+        expires_in=expires_in,
+        csrf_token=csrf_token,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
-    body: RefreshRequest,
     request: Request,
+    response: Response,
+    body: RefreshRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
     ip = client_ip(request)
-    session = await find_session_by_refresh(db, body.refresh_token)
+    raw_refresh = body.refresh_token if (body and body.refresh_token) else request.cookies.get("refresh_token")
+    if not raw_refresh:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
+        )
+
+    # If using ambient cookie refresh, enforce double-submit CSRF protection
+    if not (body and body.refresh_token) and "refresh_token" in request.cookies:
+        csrf_cookie = request.cookies.get("csrf_token")
+        csrf_header = request.headers.get("x-csrf-token")
+        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF validation failed: missing or invalid X-CSRF-Token header",
+            )
+
+    session = await find_session_by_refresh(db, raw_refresh)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
@@ -239,21 +318,57 @@ async def refresh(
     await record_audit(
         db, action="auth.refresh", outcome="success", actor_user_id=user.id, ip=ip
     )
+
+    new_csrf_token = secrets.token_hex(32)
+    set_auth_cookies(
+        response=response,
+        access_token=access,
+        refresh_token=new_refresh,
+        csrf_token=new_csrf_token,
+        expires_in=expires_in,
+    )
+
     await db.flush()
-    return TokenResponse(access_token=access, refresh_token=new_refresh, expires_in=expires_in)
+    return TokenResponse(
+        access_token=access,
+        refresh_token=new_refresh,
+        expires_in=expires_in,
+        csrf_token=new_csrf_token,
+    )
 
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
-    body: LogoutRequest,
+    request: Request,
+    response: Response,
+    body: LogoutRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    session = await find_session_by_refresh(db, body.refresh_token)
-    if session is not None:
-        await revoke_session(db, session)
+    raw_refresh = body.refresh_token if (body and body.refresh_token) else request.cookies.get("refresh_token")
+    if not (body and body.refresh_token) and "refresh_token" in request.cookies:
+        csrf_cookie = request.cookies.get("csrf_token")
+        csrf_header = request.headers.get("x-csrf-token")
+        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF validation failed: missing or invalid X-CSRF-Token header",
+            )
+
+    if raw_refresh:
+        session = await find_session_by_refresh(db, raw_refresh)
+        if session is not None:
+            await revoke_session(db, session)
+
+    clear_auth_cookies(response)
     await db.flush()
     # Always generic so logout doesn't leak token validity.
     return MessageResponse(message="Logged out")
+
+
+@router.get("/me", response_model=CurrentUser)
+async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Return authenticated user profile for web and API clients."""
+    return current_user
 
 
 @router.post("/password-reset/request", response_model=PasswordResetRequestResponse)

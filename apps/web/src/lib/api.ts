@@ -830,27 +830,53 @@ export class ApiError extends Error {
   }
 }
 
+export interface CurrentUser {
+  id: string;
+  email: string;
+  email_verified: boolean;
+  status: string;
+  roles: string[];
+}
+
+function getCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   token?: string | null;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { body, token, headers, ...rest } = options;
+  const { body, token, headers, method = "GET", ...rest } = options;
 
   const finalHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     ...(headers as Record<string, string> | undefined),
   };
 
-  if (token) {
+  // Only pass Bearer header if a real token is provided (not our cookie-session sentinel)
+  if (token && token !== "cookie-session") {
     finalHeaders.Authorization = `Bearer ${token}`;
+  }
+
+  // Double-submit CSRF protection on mutating requests
+  const upperMethod = method.toUpperCase();
+  if (upperMethod !== "GET" && upperMethod !== "HEAD" && !finalHeaders["X-CSRF-Token"]) {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      finalHeaders["X-CSRF-Token"] = csrf;
+    }
   }
 
   let res: Response;
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
       ...rest,
+      method,
+      credentials: "include", // Send and store httpOnly cookies across requests
       headers: finalHeaders,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -899,10 +925,22 @@ export const api = {
     });
   },
 
-  refresh(refreshToken: string): Promise<TokenPair> {
+  refresh(refreshToken?: string): Promise<TokenPair> {
     return request<TokenPair>("/auth/refresh", {
       method: "POST",
-      body: { refresh_token: refreshToken },
+      body: refreshToken ? { refresh_token: refreshToken } : undefined,
+    });
+  },
+
+  getMe(): Promise<CurrentUser> {
+    return request<CurrentUser>("/auth/me", {
+      method: "GET",
+    });
+  },
+
+  logout(): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/logout", {
+      method: "POST",
     });
   },
 

@@ -184,12 +184,13 @@ async def test_issue_settlement_voucher_cryptographic_verification(client: Async
     voucher = res_voucher.json()
     assert voucher["signature"].startswith("0x")
 
-    # 4. Cryptographic signature verification (matches OpenZeppelin ECDSA.recover)
+    # 4. Cryptographic signature verification (matches OpenZeppelin ECDSA.recover & ComputeSettlement.sol)
     job_bytes = bytes.fromhex(voucher["job_bytes32"][2:])
     contract_addr = to_checksum_address(voucher["contract_address"])
+    customer_addr = to_checksum_address(voucher["customer_address"])
     packed = encode_packed(
-        ["bytes32", "uint256", "uint256", "uint256", "address"],
-        [job_bytes, final_cost, fee, voucher["chain_id"], contract_addr],
+        ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
+        [customer_addr, job_bytes, final_cost, fee, voucher["chain_id"], contract_addr],
     )
     msg_hash = keccak(packed)
     signable = encode_defunct(primitive=msg_hash)
@@ -244,6 +245,7 @@ async def test_confirm_settlement_and_reconciliation(client: AsyncClient, db_eng
     recon = res_recon.json()
     assert recon["total_escrows"] >= 1
     assert recon["ledger_parity_verified"] is True
+    assert recon["imbalance"] == 0
 
     # Check transactions list
     res_txs = await client.get("/v1/settlement/transactions", headers=admin_headers)
@@ -360,3 +362,87 @@ async def test_voucher_cannot_be_reissued(client: AsyncClient, db_engine):
     v2 = await client.post("/v1/settlement/vouchers", json={
         "job_id": str(job.id), "final_cost_units": str(30 * 10**18), "platform_fee_units": str(3 * 10**18)}, headers=ah)
     assert v2.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_confirm_verifies_claimed_amount_against_escrow(client: AsyncClient, db_engine):
+    """confirm_settlement and confirm_refund must verify claimed amounts against escrow records."""
+    customer, c_token = await _create_test_user(db_engine, "cust_claim@test.com", Role.customer)
+    provider, _ = await _create_test_user(db_engine, "prov_claim@test.com", Role.provider)
+    _admin, a_token = await _create_test_user(db_engine, "admin_claim@test.com", Role.administrator)
+    job = await _create_job_setup(db_engine, customer, provider)
+    ch = {"Authorization": f"Bearer {c_token}"}
+    ah = {"Authorization": f"Bearer {a_token}"}
+
+    locked_amt = 50 * 10**18
+    actual_cost = 40 * 10**18
+    fee = 4 * 10**18
+
+    await client.post("/v1/settlement/escrows", json=_lock_payload(job, provider, "0x" + "7" * 64, locked_amt), headers=ch)
+    await client.post("/v1/settlement/vouchers", json={
+        "job_id": str(job.id), "final_cost_units": str(actual_cost), "platform_fee_units": str(fee)}, headers=ah)
+
+    # Confirm settlement with mismatched claimed amount must fail with 400
+    mismatched_res = await client.post("/v1/settlement/confirm", json={
+        "job_id": str(job.id),
+        "settle_tx_hash": "0x" + "8" * 64,
+        "claimed_amount_units": str(30 * 10**18),  # does not match actual_cost (40 * 10^18)
+    }, headers=ah)
+    assert mismatched_res.status_code == 400
+    assert "does not match escrow final cost" in mismatched_res.text
+
+    # Confirm with matching claimed amount succeeds
+    valid_res = await client.post("/v1/settlement/confirm", json={
+        "job_id": str(job.id),
+        "settle_tx_hash": "0x" + "8" * 64,
+        "claimed_amount_units": str(actual_cost),
+    }, headers=ah)
+    assert valid_res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_detects_injected_mismatch(client: AsyncClient, db_engine):
+    """Real on-chain <-> ledger parity detects injected amount mismatches."""
+    customer, c_token = await _create_test_user(db_engine, "cust_recon@test.com", Role.customer)
+    provider, _ = await _create_test_user(db_engine, "prov_recon@test.com", Role.provider)
+    _admin, a_token = await _create_test_user(db_engine, "admin_recon@test.com", Role.administrator)
+    job = await _create_job_setup(db_engine, customer, provider)
+    ch = {"Authorization": f"Bearer {c_token}"}
+    ah = {"Authorization": f"Bearer {a_token}"}
+
+    locked_amt = 100 * 10**18
+    final_cost = 80 * 10**18
+    fee = 8 * 10**18
+
+    # 1. Lock and settle legitimately
+    await client.post("/v1/settlement/escrows", json=_lock_payload(job, provider, "0x" + "e1" * 32, locked_amt), headers=ch)
+    await client.post("/v1/settlement/vouchers", json={
+        "job_id": str(job.id), "final_cost_units": str(final_cost), "platform_fee_units": str(fee)}, headers=ah)
+    await client.post("/v1/settlement/confirm", json={
+        "job_id": str(job.id), "settle_tx_hash": "0x" + "e2" * 32}, headers=ah)
+
+    recon_pre = (await client.get("/v1/settlement/reconciliation", headers=ah)).json()
+    assert recon_pre["ledger_parity_verified"] is True
+    assert recon_pre["imbalance"] == 0
+
+    # 2. Inject an off-chain/on-chain mismatch directly into DB (simulate tampering / ledger drift)
+    from app.models.settlement import OnChainTransaction
+    from sqlalchemy import select
+    sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm() as db:
+        tx = await db.scalar(
+            select(OnChainTransaction).where(
+                OnChainTransaction.job_id == job.id,
+                OnChainTransaction.tx_type == "settle",
+            )
+        )
+        assert tx is not None
+        # Tamper with recorded on-chain transaction amount
+        tx.amount_units = str(final_cost - (10 * 10**18))
+        await db.commit()
+
+    # 3. Reconciliation summary must now detect the mismatch
+    recon_post = (await client.get("/v1/settlement/reconciliation", headers=ah)).json()
+    assert recon_post["imbalance"] == 10 * 10**18
+    assert recon_post["ledger_parity_verified"] is False
+

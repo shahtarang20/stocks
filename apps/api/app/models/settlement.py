@@ -68,6 +68,8 @@ class OnChainEscrow(Base, TimestampMixin):
     token_address: Mapped[str] = mapped_column(String(42), nullable=False)
     job_bytes32: Mapped[str] = mapped_column(String(66), nullable=False, index=True)
 
+    customer_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
+    provider_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
     locked_amount_units: Mapped[str] = mapped_column(String(78), nullable=False)
     deadline: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(

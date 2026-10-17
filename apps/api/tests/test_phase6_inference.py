@@ -276,6 +276,7 @@ class TestChatCompletions:
         self, client: AsyncClient, setup_model_and_machine
     ):
         """Unauthenticated requests are rejected."""
+        client.cookies.clear()
         resp = await client.post(
             "/v1/chat/completions",
             json={
@@ -469,6 +470,7 @@ class TestEmbeddings:
         self, client: AsyncClient, setup_model_and_machine
     ):
         """Unauthenticated embedding requests are rejected."""
+        client.cookies.clear()
         resp = await client.post(
             "/v1/embeddings",
             json={"model": "echo-sim-v1", "input": "hello"},

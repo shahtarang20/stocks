@@ -17,6 +17,10 @@ from app.models.user import User
 from app.schemas.auth import CurrentUser
 from app.services.auth import get_user_by_id, get_user_roles
 
+import secrets
+
+CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
 bearer_scheme = HTTPBearer(auto_error=False)
 
 _CREDENTIALS_ERROR = HTTPException(
@@ -33,13 +37,36 @@ def client_ip(request: Request) -> str:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> CurrentUser:
-    if credentials is None or not credentials.credentials:
+    token: str | None = None
+    is_cookie_auth = False
+
+    # 1. Explicit Bearer header takes precedence (SDKs, CLI, agent workers, integrations)
+    if credentials is not None and credentials.credentials:
+        token = credentials.credentials
+    # 2. httpOnly cookie auth for web browsers
+    elif "access_token" in request.cookies:
+        token = request.cookies.get("access_token")
+        is_cookie_auth = True
+
+    if not token:
         raise _CREDENTIALS_ERROR
+
+    # 3. Double-submit CSRF token validation on mutating methods when using cookie auth
+    if is_cookie_auth and request.method.upper() in CSRF_PROTECTED_METHODS:
+        csrf_cookie = request.cookies.get("csrf_token")
+        csrf_header = request.headers.get("x-csrf-token")
+        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF validation failed: missing or invalid X-CSRF-Token header",
+            )
+
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(token)
     except jwt.PyJWTError:
         raise _CREDENTIALS_ERROR
 

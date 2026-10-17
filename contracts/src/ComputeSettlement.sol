@@ -78,7 +78,34 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
     }
 
     /**
+     * @notice Computes deterministic escrow identifier binding customer to jobId,
+     * preventing any third party from front-running or squatting another customer's jobId.
+     */
+    function getEscrowId(address customer, bytes32 jobId) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(customer, jobId));
+    }
+
+    /**
+     * @notice Query escrow state by customer and jobId.
+     */
+    function getEscrow(address customer, bytes32 jobId)
+        external
+        view
+        returns (
+            address customerAddr,
+            address provider,
+            uint256 lockedAmount,
+            uint256 deadline,
+            bool settled
+        )
+    {
+        EscrowLock storage lock = escrows[getEscrowId(customer, jobId)];
+        return (lock.customer, lock.provider, lock.lockedAmount, lock.deadline, lock.settled);
+    }
+
+    /**
      * @notice Locks customer compute tokens into escrow for an approved job/reservation.
+     * Keyed by keccak256(msg.sender, jobId) so third parties cannot squat jobIds.
      * @param jobId Unique identifier of the compute job.
      * @param provider Address of the matched GPU provider machine owner.
      * @param maxCost Maximum budget ceiling authorized for the job.
@@ -94,9 +121,11 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
         require(provider != address(0), "Invalid provider");
         require(maxCost > 0, "Max cost must be > 0");
         require(deadline >= block.timestamp, "Deadline must be future or current");
-        require(escrows[jobId].customer == address(0), "Escrow already exists");
 
-        escrows[jobId] = EscrowLock({
+        bytes32 escrowId = getEscrowId(msg.sender, jobId);
+        require(escrows[escrowId].customer == address(0), "Escrow already exists");
+
+        escrows[escrowId] = EscrowLock({
             customer: msg.sender,
             provider: provider,
             lockedAmount: maxCost,
@@ -110,26 +139,29 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
 
     /**
      * @notice Settles a completed job with an authorized platform execution voucher.
+     * @param customer Address of the customer who locked the budget.
      * @param jobId Unique identifier of the compute job.
      * @param finalCost Actual billable cost based on audited runtime seconds.
      * @param platformFee Protocol fee portion of the final cost.
      * @param signature Cryptographic signature by platformSigner verifying execution receipt.
      */
     function settleJob(
+        address customer,
         bytes32 jobId,
         uint256 finalCost,
         uint256 platformFee,
         bytes memory signature
     ) external whenNotPaused nonReentrant {
-        EscrowLock storage escrow = escrows[jobId];
+        bytes32 escrowId = getEscrowId(customer, jobId);
+        EscrowLock storage escrow = escrows[escrowId];
         require(escrow.customer != address(0), "Escrow not found");
         require(!escrow.settled, "Escrow already settled");
         require(finalCost <= escrow.lockedAmount, "Cost exceeds locked budget");
         require(platformFee <= finalCost, "Fee exceeds final cost");
 
-        // Verify cryptographic voucher signature
+        // Verify cryptographic voucher signature bound to customer, jobId, finalCost, fee
         bytes32 messageHash = keccak256(
-            abi.encodePacked(jobId, finalCost, platformFee, block.chainid, address(this))
+            abi.encodePacked(customer, jobId, finalCost, platformFee, block.chainid, address(this))
         );
         bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         address recoveredSigner = ECDSA.recover(ethSignedMessageHash, signature);
@@ -155,17 +187,16 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
 
     /**
      * @notice Refunds locked tokens to customer if job was cancelled or expired.
+     * @param customer Address of the customer who locked the budget.
      * @param jobId Unique identifier of the compute job.
      * @param signature Optional signature from platformSigner, or empty if after deadline.
      */
-    // NOTE: intentionally NOT `whenNotPaused` — a customer must always be able to
-    // reclaim their escrow (especially the post-deadline self-refund), so an
-    // emergency pause cannot freeze user funds indefinitely.
-    function refundJob(bytes32 jobId, bytes memory signature)
+    function refundJob(address customer, bytes32 jobId, bytes memory signature)
         external
         nonReentrant
     {
-        EscrowLock storage escrow = escrows[jobId];
+        bytes32 escrowId = getEscrowId(customer, jobId);
+        EscrowLock storage escrow = escrows[escrowId];
         require(escrow.customer != address(0), "Escrow not found");
         require(!escrow.settled, "Escrow already settled");
 
@@ -178,7 +209,7 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
         } else {
             // Early refund requires platform cancellation voucher
             bytes32 messageHash = keccak256(
-                abi.encodePacked("REFUND", jobId, block.chainid, address(this))
+                abi.encodePacked("REFUND", customer, jobId, block.chainid, address(this))
             );
             bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
             address recoveredSigner = ECDSA.recover(ethSignedMessageHash, signature);

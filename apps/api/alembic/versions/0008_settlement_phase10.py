@@ -47,6 +47,8 @@ def upgrade() -> None:
         sa.Column("contract_address", sa.String(length=42), nullable=False),
         sa.Column("token_address", sa.String(length=42), nullable=False),
         sa.Column("job_bytes32", sa.String(length=66), nullable=False, index=True),
+        sa.Column("customer_address", sa.String(length=42), nullable=True),
+        sa.Column("provider_address", sa.String(length=42), nullable=True),
         sa.Column("locked_amount_units", sa.String(length=78), nullable=False),
         sa.Column("deadline", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="locked", index=True),

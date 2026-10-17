@@ -1,17 +1,13 @@
 "use client";
 
 /**
- * Phase-1 auth context.
+ * Production-hardened auth context.
  *
- * ⚠️ SECURITY — PHASE 1, DEV-ONLY (MUST CHANGE BEFORE PRODUCTION):
- * We keep the access token in memory (React state) and persist the refresh
- * token + access token in localStorage so a page reload keeps the session.
- * This is deliberately simple for Phase-1 development.
+ * Auth is backed entirely by secure, httpOnly, SameSite=Lax cookies managed by
+ * the backend API with double-submit CSRF protection on mutating methods.
  *
- * TODO(security): Tokens MUST move to secure, httpOnly, SameSite cookies set by
- * the backend. localStorage is readable by any JS on the page and is vulnerable
- * to XSS token theft. Real authorization is enforced server-side on the API;
- * the client guard here is a UX convenience only, NOT a security boundary.
+ * No access or refresh token is ever stored in JS-accessible storage (localStorage
+ * or sessionStorage), eliminating XSS token exfiltration risks (Workstream A1).
  */
 
 import {
@@ -23,186 +19,111 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, ApiError, type TokenPair } from "./api";
-
-const STORAGE_KEY = "computecoin.auth.v1"; // dev-only, see security note above.
-
-interface StoredAuth {
-  accessToken: string;
-  refreshToken: string;
-  email: string;
-}
+import { api, ApiError, type CurrentUser } from "./api";
 
 interface AuthContextValue {
+  user: CurrentUser | null;
   email: string | null;
+  /**
+   * Sentinel token for compatibility with components checking `enabled: Boolean(accessToken)`.
+   * Real auth is handled transparently by browser httpOnly cookies on every fetch call.
+   */
   accessToken: string | null;
   isAuthenticated: boolean;
   isReady: boolean;
-  /** Best-effort role from the JWT. UX only — real RBAC is server-side. */
+  /** Authoritative primary role from /auth/me */
   role: string | null;
-  /** Client-side admin hint (UX only). The API enforces RBAC on every call. */
+  /** Authoritative admin status from /auth/me */
   isAdmin: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }
 
-/**
- * Decode a JWT's claims WITHOUT verifying the signature. This is a UX-only hint
- * (e.g. to reveal an admin nav link) — the server verifies the token and
- * enforces authorization on every request. Never trust this for access control.
- */
-function decodeJwtClaims(token: string | null | undefined): Record<string, unknown> | null {
-  if (!token) return null;
-  const parts = token.split(".");
-  if (parts.length < 2) return null;
-  try {
-    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
-    const json =
-      typeof atob === "function"
-        ? atob(padded)
-        : Buffer.from(padded, "base64").toString("binary");
-    const decoded = decodeURIComponent(
-      Array.from(json)
-        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-        .join(""),
-    );
-    return JSON.parse(decoded) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-/** Pull a role string out of common JWT claim shapes (UX-only hint). */
-function roleFromClaims(claims: Record<string, unknown> | null): string | null {
-  if (!claims) return null;
-  const single = claims.role ?? claims.user_role;
-  if (typeof single === "string") return single;
-  const many = claims.roles ?? claims.scopes ?? claims.scope;
-  if (Array.isArray(many)) return many.map(String).join(" ");
-  if (typeof many === "string") return many;
-  return null;
-}
-
-/** Decide whether the decoded claims hint at admin/operator access (UX only). */
-function isAdminFromClaims(claims: Record<string, unknown> | null): boolean {
-  if (!claims) return false;
-  if (claims.is_admin === true || claims.is_staff === true) return true;
-  const role = roleFromClaims(claims)?.toLowerCase() ?? "";
-  return /\b(admin|administrator|operator|support|security|staff)\b/.test(role);
-}
-
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function readStored(): StoredAuth | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as StoredAuth) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(value: StoredAuth | null) {
-  if (typeof window === "undefined") return;
-  try {
-    if (value) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
-  } catch {
-    /* storage may be unavailable (private mode) — session stays in memory. */
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<StoredAuth | null>(null);
+  const [user, setUser] = useState<CurrentUser | null>(null);
   const [isReady, setIsReady] = useState(false);
 
-  // Rehydrate from localStorage on mount (dev-only persistence).
+  // Rehydrate session from httpOnly cookie on mount via GET /auth/me
   useEffect(() => {
-    setState(readStored());
-    setIsReady(true);
-  }, []);
-
-  const applyTokens = useCallback((tokens: TokenPair, email: string) => {
-    const next: StoredAuth = {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      email,
-    };
-    setState(next);
-    writeStored(next);
-  }, []);
-
-  const login = useCallback(
-    async (email: string, password: string) => {
-      const tokens = await api.login({ email, password });
-      applyTokens(tokens, email);
-    },
-    [applyTokens],
-  );
-
-  const register = useCallback(
-    async (email: string, password: string) => {
-      await api.register({ email, password });
-      // Convenience: log in immediately after a successful registration.
-      const tokens = await api.login({ email, password });
-      applyTokens(tokens, email);
-    },
-    [applyTokens],
-  );
-
-  const logout = useCallback(() => {
-    setState(null);
-    writeStored(null);
-  }, []);
-
-  // Attempt a one-shot refresh on mount if we have a refresh token.
-  useEffect(() => {
-    if (!isReady) return;
-    const stored = state;
-    if (!stored?.refreshToken) return;
     let cancelled = false;
-    (async () => {
+
+    async function initAuth() {
       try {
-        const tokens = await api.refresh(stored.refreshToken);
-        if (!cancelled) applyTokens(tokens, stored.email);
-      } catch (err) {
-        // If refresh is rejected (expired/invalid), drop the session silently.
-        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          if (!cancelled) {
-            setState(null);
-            writeStored(null);
-          }
+        const me = await api.getMe();
+        if (!cancelled) {
+          setUser(me);
+          setIsReady(true);
         }
-        // Network errors are ignored — keep the stored session optimistically.
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          // Attempt silent refresh via httpOnly refresh cookie
+          try {
+            await api.refresh();
+            const me = await api.getMe();
+            if (!cancelled) {
+              setUser(me);
+            }
+          } catch {
+            if (!cancelled) {
+              setUser(null);
+            }
+          }
+        } else if (!cancelled) {
+          setUser(null);
+        }
+        if (!cancelled) {
+          setIsReady(true);
+        }
       }
-    })();
+    }
+
+    initAuth();
+
     return () => {
       cancelled = true;
     };
-    // Run only once after rehydration.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReady]);
+  }, []);
+
+  const login = useCallback(async (email: string, password: string) => {
+    await api.login({ email, password });
+    const me = await api.getMe();
+    setUser(me);
+  }, []);
+
+  const register = useCallback(async (email: string, password: string) => {
+    await api.register({ email, password });
+    // Log in immediately after a successful registration
+    await api.login({ email, password });
+    const me = await api.getMe();
+    setUser(me);
+  }, []);
+
+  const logout = useCallback(() => {
+    api.logout().catch(() => {});
+    setUser(null);
+  }, []);
 
   const value = useMemo<AuthContextValue>(() => {
-    const claims = decodeJwtClaims(state?.accessToken);
+    const roles = user?.roles ?? [];
+    const primaryRole = roles[0] ?? null;
+    const admin = roles.includes("administrator") || roles.includes("admin");
+
     return {
-      email: state?.email ?? null,
-      accessToken: state?.accessToken ?? null,
-      isAuthenticated: Boolean(state?.accessToken),
+      user,
+      email: user?.email ?? null,
+      accessToken: user ? "cookie-session" : null,
+      isAuthenticated: Boolean(user),
       isReady,
-      role: roleFromClaims(claims),
-      isAdmin: isAdminFromClaims(claims),
+      role: primaryRole,
+      isAdmin: admin,
       login,
       register,
       logout,
     };
-  }, [state, isReady, login, register, logout]);
+  }, [user, isReady, login, register, logout]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

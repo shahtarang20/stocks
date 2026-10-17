@@ -1,7 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, FolderGit2, Plus, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, FolderGit2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import {
   Card,
@@ -9,6 +10,8 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -18,6 +21,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { api, ApiError, type Project } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -31,20 +42,54 @@ function statusVariant(status?: string) {
 
 export default function ProjectsPage() {
   const { accessToken } = useAuth();
+  const token = accessToken as string;
+  const queryClient = useQueryClient();
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [projectName, setProjectName] = useState("");
+  const [projectDescription, setProjectDescription] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<
     Project[]
   >({
     queryKey: ["projects"],
     enabled: Boolean(accessToken),
-    queryFn: () => api.getProjects(accessToken as string),
+    queryFn: () => api.getProjects(token),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: () => api.createProject(token, projectName.trim(), projectDescription.trim() || undefined),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setCreateOpen(false);
+      setProjectName("");
+      setProjectDescription("");
+      setErrorMessage(null);
+    },
+    onError: (err) => {
+      setErrorMessage(err instanceof ApiError ? err.message : "Failed to create project");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (projectId: string) => api.deleteProject(token, projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setDeleteTarget(null);
+      setErrorMessage(null);
+    },
+    onError: (err) => {
+      setErrorMessage(err instanceof ApiError ? err.message : "Failed to delete project");
+    },
   });
 
   return (
     <>
       <ConsolePageHeader
         title="Projects"
-        description="Projects are fetched live from GET /projects on the ComputeCoin API."
+        description="Organize API keys, budgets, and workloads into isolated projects."
         action={
           <div className="flex gap-2">
             <Button
@@ -55,7 +100,7 @@ export default function ProjectsPage() {
               <RefreshCw className={isFetching ? "animate-spin" : undefined} />
               Refresh
             </Button>
-            <Button disabled title="Project creation lands in a later phase">
+            <Button onClick={() => setCreateOpen(true)}>
               <Plus /> New project
             </Button>
           </div>
@@ -89,10 +134,6 @@ export default function ProjectsPage() {
                 ? error.message
                 : "An unexpected error occurred."}
             </p>
-            <p className="text-xs text-muted-foreground">
-              This usually means the ComputeCoin API is not reachable at the
-              configured base URL.
-            </p>
             <Button variant="outline" onClick={() => refetch()}>
               <RefreshCw /> Try again
             </Button>
@@ -106,10 +147,9 @@ export default function ProjectsPage() {
             </span>
             <h3 className="font-semibold">No projects yet</h3>
             <p className="max-w-md text-sm text-muted-foreground">
-              Your account has no projects. When the backend returns projects
-              from <code>GET /projects</code>, they will appear here.
+              Create your first project to organize your compute jobs, datasets, and API keys.
             </p>
-            <Button disabled>
+            <Button onClick={() => setCreateOpen(true)}>
               <Plus /> New project
             </Button>
           </CardContent>
@@ -123,6 +163,7 @@ export default function ProjectsPage() {
                 <TableHead>Status</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>ID</TableHead>
+                <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -138,7 +179,7 @@ export default function ProjectsPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(project.status)}>
-                      {project.status ?? "unknown"}
+                      {project.status ?? "active"}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -149,12 +190,100 @@ export default function ProjectsPage() {
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {project.id}
                   </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setDeleteTarget(project)}
+                      className="text-muted-foreground hover:text-danger"
+                      aria-label="Delete project"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </Card>
       )}
+
+      {/* Create Project Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create new project</DialogTitle>
+            <DialogDescription>
+              Projects group compute jobs, billing quotas, and API keys.
+            </DialogDescription>
+          </DialogHeader>
+
+          {errorMessage && (
+            <div className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+              {errorMessage}
+            </div>
+          )}
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="proj-name">Project name</Label>
+              <Input
+                id="proj-name"
+                placeholder="e.g. production-vllm"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="proj-desc">Description (optional)</Label>
+              <Input
+                id="proj-desc"
+                placeholder="e.g. LLM fine-tuning and inference pipelines"
+                value={projectDescription}
+                onChange={(e) => setProjectDescription(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createMutation.mutate()}
+              disabled={!projectName.trim() || createMutation.isPending}
+            >
+              {createMutation.isPending ? "Creating…" : "Create project"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Project Dialog */}
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete project</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete project &quot;{deleteTarget?.name}&quot;? All associated API keys will also be permanently revoked.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              className="bg-danger hover:bg-danger/90 text-white"
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Deleting…" : "Delete project"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

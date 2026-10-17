@@ -497,6 +497,7 @@ export interface Dispute {
   resolution?: string | null;
   refund_amount?: string | null;
   created_at: string;
+  resolved_at?: string | null;
   updated_at?: string | null;
   [key: string]: unknown;
 }
@@ -590,6 +591,72 @@ export interface ResolveDisputeInput {
   resolution: string;
   /** Optional decimal string. */
   refund_amount?: string;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ApiKeyCreated extends ApiKey {
+  api_key: string;
+}
+
+export interface AdminUser {
+  user_id: string;
+  email: string;
+  status: string;
+  roles: string[];
+  email_verified: boolean;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+export interface AdminUserAction {
+  user_id: string;
+  email: string;
+  status: string;
+  message: string;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actor_user_id?: string | null;
+  action: string;
+  resource_type?: string | null;
+  resource_id?: string | null;
+  ip?: string | null;
+  reason?: string | null;
+  outcome: string;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+export interface AdminJob {
+  job_id: string;
+  customer_id: string;
+  workload_type: string;
+  model: string;
+  status: JobStatus;
+  execution_mode: string;
+  created_at: string;
+  final_cost?: string | null;
+  error_code?: string | null;
+  [key: string]: unknown;
+}
+
+export interface AdminPlatformStats {
+  total_users: number;
+  active_providers: number;
+  total_jobs: number;
+  completed_jobs: number;
+  success_rate: number;
+  total_volume: string;
+  currency: string;
 }
 
 /** Normalized API error surfaced to the UI layer. */
@@ -1125,6 +1192,87 @@ export const api = {
       method: "POST",
       token: accessToken,
       body: input,
+    });
+  },
+
+  // --- Projects & API keys (Phase 7) ---
+  createProject(accessToken: string, name: string, description?: string): Promise<Project> {
+    return request<Project>("/v1/projects", {
+      method: "POST",
+      token: accessToken,
+      body: { name, description },
+    });
+  },
+
+  deleteProject(accessToken: string, projectId: string): Promise<void> {
+    return request<void>(`/v1/projects/${projectId}`, {
+      method: "DELETE",
+      token: accessToken,
+    });
+  },
+
+  listApiKeys(accessToken: string, projectId: string): Promise<ApiKey[]> {
+    return request<ApiKey[]>(`/v1/projects/${projectId}/api-keys`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  createApiKey(accessToken: string, projectId: string, name: string): Promise<ApiKeyCreated> {
+    return request<ApiKeyCreated>(`/v1/projects/${projectId}/api-keys`, {
+      method: "POST",
+      token: accessToken,
+      body: { name },
+    });
+  },
+
+  revokeApiKey(accessToken: string, projectId: string, keyId: string): Promise<void> {
+    return request<void>(`/v1/projects/${projectId}/api-keys/${keyId}`, {
+      method: "DELETE",
+      token: accessToken,
+    });
+  },
+
+  // --- Admin Operations (Phase 7) ---
+  listAdminUsers(accessToken: string): Promise<AdminUser[]> {
+    return request<AdminUser[]>("/v1/admin/users", {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  suspendUser(accessToken: string, userId: string): Promise<AdminUserAction> {
+    return request<AdminUserAction>(`/v1/admin/users/${userId}/suspend`, {
+      method: "POST",
+      token: accessToken,
+    });
+  },
+
+  reinstateUser(accessToken: string, userId: string): Promise<AdminUserAction> {
+    return request<AdminUserAction>(`/v1/admin/users/${userId}/reinstate`, {
+      method: "POST",
+      token: accessToken,
+    });
+  },
+
+  listAdminAuditLogs(accessToken: string, limit: number = 50, offset: number = 0): Promise<AdminAuditLog[]> {
+    return request<AdminAuditLog[]>(`/v1/admin/audit-logs?limit=${limit}&offset=${offset}`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  listAllAdminJobs(accessToken: string, limit: number = 50): Promise<AdminJob[]> {
+    return request<AdminJob[]>(`/v1/admin/jobs?limit=${limit}`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  getAdminPlatformStats(accessToken: string): Promise<AdminPlatformStats> {
+    return request<AdminPlatformStats>("/v1/admin/stats", {
+      method: "GET",
+      token: accessToken,
     });
   },
 };

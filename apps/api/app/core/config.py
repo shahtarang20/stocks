@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     BILLING_CURRENCY_EXPONENT: int = 2
     PAYMENT_PROVIDER_CONFIGURATION: str = "simulated"
 
+    # Phase 6 — inference endpoints
+    INFERENCE_RATE_LIMIT: int = 60
+    INFERENCE_RATE_WINDOW_SECONDS: int = 60
+    INFERENCE_MAX_TOKENS_DEFAULT: int = 4096
+    INFERENCE_EMBEDDING_DIM: int = 256
+    INFERENCE_MAX_INPUT_ITEMS: int = 100  # max batch items for embeddings
+
     @property
     def artifact_content_types(self) -> set[str]:
         return {c.strip() for c in self.ARTIFACT_CONTENT_TYPES.split(",") if c.strip()}

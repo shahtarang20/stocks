@@ -54,6 +54,7 @@ const BASE_SECTIONS: NavSection[] = [
 const ADMIN_SECTION: NavSection = {
   title: "Admin",
   items: [
+    { href: "/admin/overview", label: "Admin console", icon: Server },
     { href: "/admin/billing", label: "Billing & reconciliation", icon: Scale },
   ],
 };

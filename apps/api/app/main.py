@@ -16,6 +16,7 @@ from app.api.routers import (
     billing,
     disputes,
     health,
+    inference,
     invoices,
     jobs,
     marketplace,
@@ -33,7 +34,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="ComputeCoin API",
         version=__version__,
-        description="Phase 1 backend foundation for the ComputeCoin GPU compute marketplace.",
+        description="ComputeCoin GPU compute marketplace API (through Phase 6).",
     )
 
     application.add_middleware(
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     application.include_router(billing.router)
     application.include_router(invoices.router)
     application.include_router(disputes.router)
+    application.include_router(inference.router)
     application.include_router(providers.billing_router)
     application.include_router(admin.money_router)
 

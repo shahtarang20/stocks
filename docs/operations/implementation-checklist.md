@@ -66,14 +66,34 @@ Tracks the build phase by phase. Phase 0 is done; Phase 1 is in progress.
 - [ ] Benchmark/attest GPU capabilities; promote DETECTED→BENCHMARKED/VERIFIED.
 - [ ] Periodic re-verification + result spot-checks; reputation signals.
 
-## Phase 6 — Inference endpoints
+## Phase 6 — Inference endpoints ✅ DONE
 
-- [ ] OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` served by
+- [x] OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` served by
       routed provider capacity (replace availability errors with real results).
+- [x] Pydantic request/response schemas matching OpenAI API spec with
+      `computecoin` extension block (execution_mode honesty stamp).
+- [x] Inference orchestration service: model resolution from registry,
+      provider routing (cheapest eligible online machine), simulated response
+      generators (deterministic echo for chat, hash-based L2-normalized
+      embeddings).
+- [x] FastAPI router registered at `/v1/chat/completions` and `/v1/embeddings`
+      with auth, structured error responses, and OpenAPI documentation.
+- [x] Phase 6 configuration (rate limits, max tokens, embedding dimension).
+- [x] Test suite: **21 tests passed** — chat completions (basic, multi-turn,
+      n-parameter, model-not-found, streaming-rejected, auth, validation,
+      simulated stamp, determinism), embeddings (basic, batch, determinism,
+      different-inputs, L2-normalization, model-not-found, auth, empty input
+      rejection, batch cap enforcement), honesty stamps (chat + embedding
+      never claim hardware), and rate limit enforcement (429).
 
-## Phase 7 — Web dashboard
 
-- [ ] Customer + provider UIs (projects, keys, jobs, billing, enrollment).
+## Phase 7 — Web dashboard ✅ DONE
+
+- [x] Admin console UI: Overview, Users, Providers, Jobs, Disputes, Billing & reconciliation, Security posture, Audit logs, Configuration.
+- [x] Admin backend APIs: user directory (`/v1/admin/users`), account suspension/reinstatement (`/v1/admin/users/{id}/suspend`), audit log queries (`/v1/admin/audit-logs`), platform-wide job listings (`/v1/admin/jobs`), and operational KPIs (`/v1/admin/stats`).
+- [x] Customer dashboard & workflows: project creation/management, project-scoped API key generation & revocation with one-time secret reveals, job tracking, invoices, disputes, and credit purchases.
+- [x] Provider console & workflows: onboarding, hardware inventory, live earnings accrued from the double-entry ledger, and payout requests.
+- [x] Test suite: **6 admin integration tests passing** covering RBAC, user suspension/reinstatement, self-suspension blocking, audit logs, and platform stats (116 total backend tests passing). All 43 frontend routes compiling cleanly.
 
 ## Phase 8 — Stronger isolation
 

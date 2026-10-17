@@ -10,8 +10,9 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.base import utcnow
 from app.db.session import get_db
@@ -23,7 +24,18 @@ from app.models.billing import (
     ProviderPayout,
     Refund,
 )
+from app.models.enums import UserStatus
 from app.models.jobs import Job
+from app.models.provider import ProviderMachine
+from app.models.system import AuditLog
+from app.models.user import User
+from app.schemas.admin import (
+    AdminAuditLogOut,
+    AdminJobOut,
+    AdminPlatformStatsOut,
+    AdminUserActionResponse,
+    AdminUserOut,
+)
 from app.schemas.auth import CurrentUser
 from app.schemas.billing import (
     DisputeResolve,
@@ -263,3 +275,175 @@ async def reconciliation(
             for a in accounts
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — User management & suspension
+# ---------------------------------------------------------------------------
+@money_router.get("/users", response_model=list[AdminUserOut])
+async def list_users(
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> list[AdminUserOut]:
+    """List all platform users with role assignments and statuses."""
+    result = await db.execute(
+        select(User).options(selectinload(User.roles)).order_by(User.created_at.desc())
+    )
+    users = result.scalars().all()
+    return [
+        AdminUserOut(
+            user_id=u.id,
+            email=u.email,
+            status=u.status.value if hasattr(u.status, "value") else str(u.status),
+            roles=[r.role.value if hasattr(r.role, "value") else str(r.role) for r in u.roles],
+            email_verified=u.email_verified,
+            created_at=u.created_at,
+        )
+        for u in users
+    ]
+
+
+@money_router.post("/users/{user_id}/suspend", response_model=AdminUserActionResponse)
+async def suspend_user(
+    user_id: uuid.UUID,
+    request: Request,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AdminUserActionResponse:
+    """Suspend a user account and write an audited record."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
+    if user.id == current.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot_suspend_self")
+    user.status = UserStatus.suspended
+    await record_audit(
+        db, action="admin.user.suspend", outcome="success", actor_user_id=current.id,
+        ip=client_ip(request), resource_type="user", resource_id=str(user.id),
+    )
+    await db.commit()
+    return AdminUserActionResponse(
+        user_id=user.id,
+        email=user.email,
+        status="suspended",
+        message="User has been suspended successfully",
+    )
+
+
+@money_router.post("/users/{user_id}/reinstate", response_model=AdminUserActionResponse)
+async def reinstate_user(
+    user_id: uuid.UUID,
+    request: Request,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AdminUserActionResponse:
+    """Reinstate a suspended user account."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
+    user.status = UserStatus.active
+    await record_audit(
+        db, action="admin.user.reinstate", outcome="success", actor_user_id=current.id,
+        ip=client_ip(request), resource_type="user", resource_id=str(user.id),
+    )
+    await db.commit()
+    return AdminUserActionResponse(
+        user_id=user.id,
+        email=user.email,
+        status="active",
+        message="User has been reinstated successfully",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Audit logs
+# ---------------------------------------------------------------------------
+@money_router.get("/audit-logs", response_model=list[AdminAuditLogOut])
+async def list_audit_logs(
+    limit: int = 50,
+    offset: int = 0,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> list[AdminAuditLogOut]:
+    """Read immutable platform audit logs."""
+    result = await db.execute(
+        select(AuditLog).order_by(AuditLog.created_at.desc()).limit(min(limit, 100)).offset(offset)
+    )
+    entries = result.scalars().all()
+    return [
+        AdminAuditLogOut(
+            id=e.id,
+            actor_user_id=e.actor_user_id,
+            action=e.action,
+            resource_type=e.resource_type,
+            resource_id=e.resource_id,
+            ip=e.ip,
+            reason=e.reason,
+            outcome=e.outcome,
+            created_at=e.created_at,
+        )
+        for e in entries
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — All Platform Jobs
+# ---------------------------------------------------------------------------
+@money_router.get("/jobs", response_model=list[AdminJobOut])
+async def list_admin_jobs(
+    limit: int = 50,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> list[AdminJobOut]:
+    """List all jobs across all users in the network."""
+    result = await db.execute(
+        select(Job).order_by(Job.created_at.desc()).limit(min(limit, 100))
+    )
+    jobs = result.scalars().all()
+    return [
+        AdminJobOut(
+            job_id=j.id,
+            customer_id=j.customer_id,
+            workload_type=j.workload_type,
+            model=j.model,
+            status=j.status,
+            execution_mode=j.execution_mode,
+            created_at=j.created_at,
+            final_cost=ledger.minor_to_str(j.final_cost_minor) if j.final_cost_minor is not None else None,
+            error_code=j.error_code,
+        )
+        for j in jobs
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Platform Statistics
+# ---------------------------------------------------------------------------
+@money_router.get("/stats", response_model=AdminPlatformStatsOut)
+async def platform_stats(
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AdminPlatformStatsOut:
+    """Return live network KPIs."""
+    total_users = await db.scalar(select(func.count(User.id))) or 0
+    active_providers = await db.scalar(
+        select(func.count(ProviderMachine.id)).where(
+            ProviderMachine.status != "deregistered",
+            ProviderMachine.availability == "online",
+        )
+    ) or 0
+    total_jobs = await db.scalar(select(func.count(Job.id))) or 0
+    completed_jobs = await db.scalar(
+        select(func.count(Job.id)).where(Job.status == "completed")
+    ) or 0
+    success_rate = round((completed_jobs / total_jobs * 100.0), 1) if total_jobs > 0 else 100.0
+    total_debits, _ = await ledger.ledger_totals(db)
+    return AdminPlatformStatsOut(
+        total_users=total_users,
+        active_providers=active_providers,
+        total_jobs=total_jobs,
+        completed_jobs=completed_jobs,
+        success_rate=success_rate,
+        total_volume=ledger.minor_to_str(total_debits),
+    )
+

@@ -739,6 +739,84 @@ export interface TelemetryAlert {
   created_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 10 — On-chain settlement & smart contracts
+// ---------------------------------------------------------------------------
+
+export interface ContractDeploymentInfo {
+  chain_id: number;
+  network_name: string;
+  token_address: string;
+  token_symbol: string;
+  token_name: string;
+  token_total_supply: string;
+  settlement_contract_address: string;
+  platform_signer_address: string;
+  treasury_address: string;
+  is_paused: boolean;
+}
+
+export interface EscrowResponse {
+  id: string;
+  job_id: string;
+  customer_id: string;
+  provider_id: string;
+  chain_id: number;
+  contract_address: string;
+  token_address: string;
+  job_bytes32: string;
+  locked_amount_units: string;
+  deadline: string;
+  status: "locked" | "settled" | "refunded" | "expired" | string;
+  lock_tx_hash: string;
+  settle_tx_hash: string | null;
+  refund_tx_hash: string | null;
+  final_cost_units: string | null;
+  platform_fee_units: string | null;
+  voucher_signature: string | null;
+  reconciled: boolean;
+  settled_at: string | null;
+  created_at: string;
+}
+
+export interface SettlementVoucherResponse {
+  job_id: string;
+  job_bytes32: string;
+  final_cost_units: string;
+  platform_fee_units: string;
+  chain_id: number;
+  contract_address: string;
+  signer_address: string;
+  signature: string;
+}
+
+export interface OnChainTransactionResponse {
+  id: string;
+  chain_id: number;
+  tx_hash: string;
+  tx_type: string;
+  sender_address: string;
+  recipient_address: string | null;
+  amount_units: string | null;
+  token_symbol: string;
+  block_number: number | null;
+  status: string;
+  reconciled_with_ledger: boolean;
+  ledger_txn_id: string | null;
+  job_id: string | null;
+  created_at: string;
+}
+
+export interface OnChainReconciliationSummary {
+  total_escrows: number;
+  active_locked_amount_units: string;
+  total_settled_amount_units: string;
+  total_fees_collected_units: string;
+  total_refunded_amount_units: string;
+  unreconciled_transactions_count: number;
+  ledger_parity_verified: boolean;
+}
+
 /** Normalized API error surfaced to the UI layer. */
 export class ApiError extends Error {
   status: number;
@@ -1410,6 +1488,109 @@ export const api = {
       `/v1/telemetry/alerts/${alertId}/resolve`,
       { method: "POST", token: accessToken }
     );
+  },
+
+  // -------------------------------------------------------------------------
+  // Phase 10 — On-chain settlement & smart contracts
+  // -------------------------------------------------------------------------
+
+  getContractInfo(): Promise<ContractDeploymentInfo> {
+    return request<ContractDeploymentInfo>("/v1/settlement/contracts");
+  },
+
+  getSettlementEscrows(
+    accessToken: string,
+    params?: { job_id?: string; status?: string }
+  ): Promise<EscrowResponse[]> {
+    const q = new URLSearchParams();
+    if (params?.job_id) q.set("job_id", params.job_id);
+    if (params?.status) q.set("status", params.status);
+    const qs = q.toString() ? `?${q.toString()}` : "";
+    return request<EscrowResponse[]>(`/v1/settlement/escrows${qs}`, {
+      token: accessToken,
+    });
+  },
+
+  getSettlementEscrow(accessToken: string, jobId: string): Promise<EscrowResponse> {
+    return request<EscrowResponse>(`/v1/settlement/escrows/${jobId}`, {
+      token: accessToken,
+    });
+  },
+
+  createEscrowLock(
+    accessToken: string,
+    payload: {
+      job_id: string;
+      provider_id: string;
+      locked_amount_units: string;
+      deadline_seconds?: number;
+      lock_tx_hash: string;
+      customer_address: string;
+      provider_address: string;
+    }
+  ): Promise<EscrowResponse> {
+    return request<EscrowResponse>("/v1/settlement/escrows", {
+      method: "POST",
+      token: accessToken,
+      body: JSON.stringify(payload),
+    });
+  },
+
+  issueSettlementVoucher(
+    accessToken: string,
+    payload: {
+      job_id: string;
+      final_cost_units: string;
+      platform_fee_units: string;
+    }
+  ): Promise<SettlementVoucherResponse> {
+    return request<SettlementVoucherResponse>("/v1/settlement/vouchers", {
+      method: "POST",
+      token: accessToken,
+      body: JSON.stringify(payload),
+    });
+  },
+
+  confirmSettlement(
+    accessToken: string,
+    payload: {
+      job_id: string;
+      settle_tx_hash: string;
+      block_number?: number;
+    }
+  ): Promise<EscrowResponse> {
+    return request<EscrowResponse>("/v1/settlement/confirm", {
+      method: "POST",
+      token: accessToken,
+      body: JSON.stringify(payload),
+    });
+  },
+
+  confirmRefund(
+    accessToken: string,
+    payload: {
+      job_id: string;
+      refund_tx_hash: string;
+      block_number?: number;
+    }
+  ): Promise<EscrowResponse> {
+    return request<EscrowResponse>("/v1/settlement/refund", {
+      method: "POST",
+      token: accessToken,
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getSettlementReconciliation(accessToken: string): Promise<OnChainReconciliationSummary> {
+    return request<OnChainReconciliationSummary>("/v1/settlement/reconciliation", {
+      token: accessToken,
+    });
+  },
+
+  getSettlementTransactions(accessToken: string): Promise<OnChainTransactionResponse[]> {
+    return request<OnChainTransactionResponse[]>("/v1/settlement/transactions", {
+      token: accessToken,
+    });
   },
 };
 

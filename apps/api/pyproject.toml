@@ -21,6 +21,7 @@ dependencies = [
     "redis==5.2.1",
     "email-validator==2.2.0",
     "python-multipart==0.0.20",
+    "eth-account>=0.14.0",
 ]
 
 [project.optional-dependencies]

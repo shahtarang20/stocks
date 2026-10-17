@@ -19,6 +19,8 @@ dist/
 build/
 *.tsbuildinfo
 .turbo/
+contracts/artifacts/
+contracts/cache/
 
 # ---- Env / secrets (NEVER commit) ----
 .env

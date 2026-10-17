@@ -104,6 +104,17 @@ class Settings(BaseSettings):
     ALERT_TEMP_THRESHOLD_C: float = 85.0
     ALERT_MEM_UTIL_THRESHOLD_PCT: float = 95.0
 
+    # Phase 10 — On-chain settlement & smart contracts
+    SETTLEMENT_ENABLED: bool = True
+    SETTLEMENT_CHAIN_ID: int = 31337
+    SETTLEMENT_CONTRACT_ADDRESS: str = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+    COMPUTE_TOKEN_ADDRESS: str = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+    # Dev/test platform signer private key (matches account #3 on standard dev nodes)
+    PLATFORM_SIGNER_PRIVATE_KEY: str = (
+        "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
+    )
+    PLATFORM_TREASURY_ADDRESS: str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+
     @property
     def artifact_content_types(self) -> set[str]:
         return {c.strip() for c in self.ARTIFACT_CONTENT_TYPES.split(",") if c.strip()}

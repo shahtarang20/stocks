@@ -24,6 +24,7 @@ from app.api.routers import (
     providers,
     quotes,
     reservations,
+    settlement,
     telemetry,
 )
 from app.core.config import settings
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
     application.include_router(disputes.router)
     application.include_router(inference.router)
     application.include_router(telemetry.router)
+    application.include_router(settlement.router)
     application.include_router(providers.billing_router)
     application.include_router(admin.money_router)
 

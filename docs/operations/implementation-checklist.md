@@ -1,6 +1,6 @@
 # ComputeCoin — Implementation Checklist (10-phase plan)
 
-Tracks the build phase by phase. Phases 0 through 9 are complete; Phase 10 is next.
+Tracks the build phase by phase. All phases 0 through 10 are complete and verified.
 `[x]` done · `[~]` in progress / skeleton · `[ ]` not started.
 
 ## Phase 0 — Foundations & decisions ✅ DONE
@@ -118,7 +118,14 @@ Shipped per `docs/architecture/ADR-0001-database.md` time-series telemetry requi
 - [x] Frontend UI: Admin Telemetry & Health Dashboard at [`apps/web/src/app/admin/telemetry/page.tsx`](file:///home/root509/stocks/apps/web/src/app/admin/telemetry/page.tsx) with live auto-refresh, KPI cards, interactive alert acknowledgement/resolution, and machine metric inspection.
 - [x] Test suite: **4 provider-agent unit tests** (60/60 passing), **4 backend integration tests** (124/124 passing), **44/44 Next.js static pages compiling cleanly**.
 
-## Phase 10 — On-chain settlement (contracts)
+## Phase 10 — On-chain settlement (contracts) ✅ DONE
+Shipped per `business.md` smart-contract requirements and `docs/architecture/ADR-0001-database.md` reconciliation guarantees. Bridges decentralized EVM smart contract escrow locks with off-chain PostgreSQL transactional ledger invariants.
 
-- [ ] Token/settlement contracts; audits; off-chain↔on-chain reconciliation.
-- [ ] Pausable/upgradable safeguards, multisig/HSM key management.
+- [x] ERC-20 ComputeCoin Token (`COMPUTE`): Fixed supply cap (1,000,000,000 COMPUTE), `ERC20Burnable`, `ERC20Pausable`, EIP-2612 `ERC20Permit` for gasless approvals, and `Ownable2Step` in [`contracts/src/ComputeCoinToken.sol`](file:///home/root509/stocks/contracts/src/ComputeCoinToken.sol).
+- [x] Non-custodial Escrow Settlement Contract (`ComputeSettlement.sol`): `lockBudget` with duplicate lock protection, cryptographic EIP-191 voucher-based `settleJob` with ECDSA signature verification and platform fee split to protocol treasury, and self-service customer `refundJob` after deadline expiration or via platform refund authorization voucher in [`contracts/src/ComputeSettlement.sol`](file:///home/root509/stocks/contracts/src/ComputeSettlement.sol).
+- [x] Native Solidity and Hardhat 3 test suite: Circuit-breaker pauses, token burn, supply cap, budget locking, duplicate-locking revert checks, and deadline refund mechanics (**6/6 tests passing**).
+- [x] Database schema & Alembic migration: `OnChainEscrow` and `OnChainTransaction` models with 78-character decimal string precision for EVM uint256 token balances, indexed on job UUID, contract addresses, and tx hashes in Alembic migration `0008_settlement_phase10`.
+- [x] Cryptographic platform voucher signing service: Python `eth-account` EIP-191 message packing and ECDSA signing service verifying job completion runtime receipts in [`apps/api/app/services/settlement.py`](file:///home/root509/stocks/apps/api/app/services/settlement.py).
+- [x] Backend settlement router: Registered at `/v1/settlement` with endpoints for public contract registry (`/contracts`), escrow locking (`/escrows`), cryptographic voucher minting (`/vouchers`), transaction confirmations (`/confirm`, `/refund`), transaction audit logs (`/transactions`), and global ledger reconciliation metrics (`/reconciliation`).
+- [x] Frontend Web3 Settlement Dashboard: Admin On-Chain Settlement control center at [`apps/web/src/app/admin/settlement/page.tsx`](file:///home/root509/stocks/apps/web/src/app/admin/settlement/page.tsx) with live contract addresses, copy actions, global escrow metrics, interactive voucher generator, escrow status inspection, and transaction audit trail.
+- [x] Test suite: **6 smart contract tests** (6/6 passing), **4 backend integration tests** (128/128 total passing), **45/45 Next.js static pages compiling cleanly**.

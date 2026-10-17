@@ -53,6 +53,13 @@ from app.models.telemetry import (
     MachineTelemetry,
     TelemetryAlert,
 )
+from app.models.settlement import (
+    EscrowStatus,
+    OnChainEscrow,
+    OnChainTransaction,
+    OnChainTxStatus,
+    OnChainTxType,
+)
 
 __all__ = [
     "Role",
@@ -96,4 +103,9 @@ __all__ = [
     "MachineTelemetry",
     "JobTelemetry",
     "TelemetryAlert",
+    "EscrowStatus",
+    "OnChainEscrow",
+    "OnChainTransaction",
+    "OnChainTxStatus",
+    "OnChainTxType",
 ]

@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   BookOpen,
   Briefcase,
+  Coins,
   Cpu,
   Lock,
   MessageSquareWarning,
@@ -37,6 +38,7 @@ const SECTIONS: NavSection[] = [
     title: "Finance",
     items: [
       { href: "/admin/billing", label: "Billing & reconciliation", icon: Scale },
+      { href: "/admin/settlement", label: "On-chain settlement", icon: Coins },
     ],
   },
   {

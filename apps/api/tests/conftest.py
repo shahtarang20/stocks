@@ -12,6 +12,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("AUTH_SECRET", "test-auth-secret")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
+os.environ.setdefault("EMAIL_PROVIDER", "console")
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402

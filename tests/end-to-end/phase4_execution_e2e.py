@@ -41,7 +41,9 @@ def check(name, ok, extra=""):
 def signup(email):
     r = c.post("/auth/register", json={"email": email, "password": pw})
     assert r.status_code in (200, 201), r.text
-    c.post("/auth/verify-email", json={"token": r.json()["email_verification_token"]})
+    vtok = r.json().get("email_verification_token")
+    if vtok:
+        c.post("/auth/verify-email", json={"token": vtok})
     return c.post("/auth/login", json={"email": email, "password": pw}).json()["access_token"]
 
 

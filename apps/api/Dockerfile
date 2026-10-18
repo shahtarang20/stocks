@@ -23,8 +23,11 @@ RUN pip install --upgrade pip && pip install .
 # Drop build tooling to keep the image lean.
 RUN apt-get purge -y build-essential && apt-get autoremove -y
 
-# Non-root user.
-RUN useradd --create-home --uid 10001 appuser && chmod +x ./scripts/*.sh
+# Non-root user with directory permissions.
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/.artifact_store \
+    && chown -R appuser:appuser /app \
+    && chmod +x ./scripts/*.sh
 USER appuser
 
 EXPOSE 8000

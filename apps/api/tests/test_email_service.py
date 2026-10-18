@@ -16,19 +16,24 @@ from app.services.email import (
 @pytest.mark.asyncio
 async def test_email_console_dispatch():
     """Verify that console dispatch succeeds without errors."""
-    success = await send_verification_email(
-        to_email="testuser@example.com",
-        token="test-verification-token-12345",
-        user_name="Alice",
-    )
-    assert success is True
+    orig_provider = settings.EMAIL_PROVIDER
+    try:
+        settings.EMAIL_PROVIDER = "console"
+        success = await send_verification_email(
+            to_email="testuser@example.com",
+            token="test-verification-token-12345",
+            user_name="Alice",
+        )
+        assert success is True
 
-    reset_success = await send_password_reset_email(
-        to_email="testuser@example.com",
-        token="test-reset-token-67890",
-        user_name="Alice",
-    )
-    assert reset_success is True
+        reset_success = await send_password_reset_email(
+            to_email="testuser@example.com",
+            token="test-reset-token-67890",
+            user_name="Alice",
+        )
+        assert reset_success is True
+    finally:
+        settings.EMAIL_PROVIDER = orig_provider
 
 
 @pytest.mark.asyncio

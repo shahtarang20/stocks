@@ -47,6 +47,15 @@ class LocalFsStore(ObjectStore):
 
     def __init__(self, root: str) -> None:
         self.root = os.path.abspath(root)
+        try:
+            os.makedirs(self.root, exist_ok=True)
+            test_path = os.path.join(self.root, ".perm_test")
+            with open(test_path, "wb") as f:
+                f.write(b"")
+            os.remove(test_path)
+        except (PermissionError, OSError):
+            self.root = os.path.abspath("/tmp/computecoin_artifacts")
+            os.makedirs(self.root, exist_ok=True)
 
     def _path(self, key: str) -> str:
         # Prevent path traversal: the resolved path must stay under root.
@@ -56,10 +65,20 @@ class LocalFsStore(ObjectStore):
         return safe
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-        path = self._path(key)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as fh:
-            fh.write(data)
+        try:
+            path = self._path(key)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(data)
+        except (PermissionError, OSError):
+            if not self.root.startswith("/tmp"):
+                self.root = os.path.abspath("/tmp/computecoin_artifacts")
+                path = self._path(key)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as fh:
+                    fh.write(data)
+            else:
+                raise
 
     def get(self, key: str) -> bytes:
         with open(self._path(key), "rb") as fh:

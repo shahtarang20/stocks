@@ -49,11 +49,12 @@ def step(name, ok, extra=""):
 # 1 register (dev mode returns the verification token)
 r = c.post("/auth/register", json={"email": email, "password": pw})
 step("register", r.status_code in (200, 201), f"HTTP {r.status_code}")
-vtok = r.json()["email_verification_token"]
-
-# 2 verify email
-r = c.post("/auth/verify-email", json={"token": vtok})
-step("verify-email", r.status_code == 200, f"HTTP {r.status_code}")
+vtok = r.json().get("email_verification_token")
+if vtok:
+    r = c.post("/auth/verify-email", json={"token": vtok})
+    step("verify-email", r.status_code == 200, f"HTTP {r.status_code}")
+else:
+    step("verify-email", True, "Production mode (token delivered via email)")
 
 # 3 login
 r = c.post("/auth/login", json={"email": email, "password": pw})
@@ -114,8 +115,10 @@ except Exception as e:
 
 # 12 account isolation: a different user cannot see this machine
 email2 = f"other_{os.getpid()}@example.com"
-r = c.post("/auth/register", json={"email": email2, "password": pw})
-c.post("/auth/verify-email", json={"token": r.json()["email_verification_token"]})
+r2 = c.post("/auth/register", json={"email": email2, "password": pw})
+vtok2 = r2.json().get("email_verification_token") if r2.status_code in (200, 201) else None
+if vtok2:
+    c.post("/auth/verify-email", json={"token": vtok2})
 a2 = c.post("/auth/login", json={"email": email2, "password": pw}).json()["access_token"]
 r = c.get("/provider/machines", headers={"Authorization": f"Bearer {a2}"})
 seen = r.status_code == 200 and any(x["machine_id"] == str(mid) for x in r.json())

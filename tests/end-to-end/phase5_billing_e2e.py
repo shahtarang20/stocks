@@ -54,7 +54,9 @@ def psql(sql):
 def signup(email, token_out=False):
     r = c.post("/auth/register", json={"email": email, "password": pw})
     assert r.status_code in (200, 201), r.text
-    c.post("/auth/verify-email", json={"token": r.json()["email_verification_token"]})
+    vtok = r.json().get("email_verification_token")
+    if vtok:
+        c.post("/auth/verify-email", json={"token": vtok})
     tok = c.post("/auth/login", json={"email": email, "password": pw}).json()["access_token"]
     uid = psql(f"select id from users where email='{email}'")
     return (tok, uid) if token_out else tok

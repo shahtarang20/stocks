@@ -396,8 +396,8 @@ export default function ProviderOnboardingPage() {
               value={`computecoin-agent enroll --token ${activeTokenValue} --server ${API_BASE_URL}`}
             />
             <CopyField
-              label="2. Run the agent (keeps the machine online)"
-              value={`computecoin-agent run --server ${API_BASE_URL}`}
+              label="2. Start the node (keeps machine online and executes jobs)"
+              value={`computecoin-agent start --server ${API_BASE_URL}`}
             />
             <p className="text-xs text-muted-foreground">
               After enrollment, your machine appears under{" "}

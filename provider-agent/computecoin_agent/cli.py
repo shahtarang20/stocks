@@ -11,6 +11,7 @@ This skeleton does NOT execute customer jobs -- only detect / enroll / heartbeat
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import typer
@@ -177,6 +178,73 @@ def work(
         interval=interval,
         emit=_emit,
     )
+
+
+@app.command()
+def start(
+    server: Optional[str] = typer.Option(
+        None, "--server", help="Backend base URL (defaults to the stored api_url)."
+    ),
+    interval: Optional[float] = typer.Option(
+        None, "--interval", help="Seconds between heartbeats (defaults to heartbeat_interval_seconds)."
+    ),
+    poll_interval: float = typer.Option(
+        5.0, "--poll-interval", help="Seconds to wait between job claims when idle."
+    ),
+) -> None:
+    """Run BOTH the heartbeat presence daemon AND the job worker concurrently.
+
+    This is the all-in-one command for GPU hosts: it keeps the machine ONLINE
+    in the marketplace and automatically claims and executes jobs when scheduled.
+    """
+    config = AgentConfig.load()
+    if not config.has_machine_credential():
+        typer.echo(
+            "Machine has no backend credential. Run "
+            "`computecoin-agent enroll --token enr_... --server <url>` first."
+        )
+        raise typer.Exit(code=1)
+
+    base_url = server or config.api_url
+    period = interval if interval is not None else float(config.heartbeat_interval_seconds)
+    report = build_capability_report()
+
+    typer.echo(f"Starting ComputeCoin Provider Node [{config.machine_id}]")
+    typer.echo(f"Connecting to: {base_url}")
+    typer.echo(f"Heartbeat interval: {period}s | Job poll interval: {poll_interval}s")
+
+    hb_thread = threading.Thread(
+        target=heartbeat_loop,
+        args=(base_url, config.machine_id, config.machine_secret),
+        kwargs={
+            "report": report,
+            "iterations": 0,
+            "interval": period,
+            "emit": lambda i, res: typer.echo(f"[heartbeat] pulse {i + 1} -> HTTP 200")
+            if not isinstance(res, Exception)
+            else typer.echo(f"[heartbeat] pulse {i + 1} -> {res}"),
+        },
+        daemon=True,
+    )
+    hb_thread.start()
+
+    def _worker_emit(i: int, summary: dict) -> None:
+        if summary.get("claimed"):
+            typer.echo(f"[worker] claimed job {summary.get('job_id')} -> {summary.get('status')}")
+        elif summary.get("error"):
+            typer.echo(f"[worker] claim error: {summary.get('error')}")
+
+    try:
+        poll_loop(
+            base_url,
+            config.machine_id,
+            config.machine_secret,
+            iterations=0,
+            interval=poll_interval,
+            emit=_worker_emit,
+        )
+    except (KeyboardInterrupt, SystemExit):
+        typer.echo("\nStopping ComputeCoin agent gracefully...")
 
 
 @app.command()

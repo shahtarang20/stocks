@@ -31,7 +31,7 @@ import decimal
 import uuid
 from collections import defaultdict
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -287,6 +287,20 @@ async def _get_customer_account_row(
             )
         )
     ).scalar_one_or_none()
+
+
+async def lock_customer(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """Serialize a customer's money-moving requests for the rest of the transaction.
+
+    Taken FIRST in a request (before any machine/account row locks) so two concurrent
+    submits by the same customer cannot interleave account creation with the
+    scheduler's row locks and deadlock. Postgres only; no-op elsewhere (SQLite).
+    """
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"customer:{user_id}"},
+        )
 
 
 async def get_or_create_customer_account(

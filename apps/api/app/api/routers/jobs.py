@@ -33,7 +33,7 @@ from app.schemas.marketplace import money_str
 from app.services import billing
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
-from app.services.ledger import InsufficientFunds
+from app.services.ledger import InsufficientFunds, lock_customer
 from app.services.leases import recover_expired_leases, release_job_reservation
 from app.services.scheduler import JobValidationError, schedule_job, validate_job
 from app.services.storage import get_store, grant_expiry, make_download_grant
@@ -98,6 +98,8 @@ async def create_job(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JobOut:
+    await lock_customer(db, current.id)
+
     # Idempotency: same (customer, key) returns the SAME job (no duplicate).
     if idempotency_key:
         existing = await db.execute(

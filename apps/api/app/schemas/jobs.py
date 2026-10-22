@@ -29,9 +29,11 @@ class JobCreate(BaseModel):
     input: dict = Field(default_factory=dict)
     machine_id: uuid.UUID | None = None
     project_id: uuid.UUID | None = None
-    gpu_count: int = Field(default=1, ge=1)
+    gpu_count: int = Field(default=1, ge=1, le=64)
     estimated_minutes: int = Field(default=1, gt=0)
-    max_cost: decimal.Decimal | None = None
+    # A spending cap must be positive — a negative/zero budget is rejected at
+    # validation (defense-in-depth; the hold/budget math never sees a negative).
+    max_cost: decimal.Decimal | None = Field(default=None, gt=0)
     max_runtime_seconds: int | None = Field(default=None, gt=0)
     retry_policy: RetryPolicy | None = None
     priority: int = Field(default=0, ge=0)

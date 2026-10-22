@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.base import ensure_aware, utcnow
 from app.db.session import get_db
-from app.deps import client_ip, get_current_user
+from app.deps import client_ip, get_current_user, require_verified_user
 from app.models.jobs import Artifact, Job, JobEvent, JobLogMetadata
 from app.schemas.auth import CurrentUser
 from app.schemas.jobs import (
@@ -95,7 +95,7 @@ async def create_job(
     body: JobCreate,
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ) -> JobOut:
     await lock_customer(db, current.id)

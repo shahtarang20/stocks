@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.deps import client_ip, get_current_user
+from app.deps import client_ip, get_current_user, require_verified_user
 from app.models.billing import (
     BillingAccount,
     LedgerEntry,
@@ -92,7 +92,7 @@ async def get_account(
 async def purchase_credits(
     body: AmountIn,
     request: Request,
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ) -> AccountOut:
     account = await ledger.get_or_create_customer_account(db, current.id)

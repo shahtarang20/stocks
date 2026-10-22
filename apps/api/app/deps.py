@@ -92,6 +92,20 @@ async def get_current_user(
     )
 
 
+async def require_verified_user(
+    current: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Require the caller's email to be verified before sensitive actions
+    (spending credits, running compute). Blocks unverified/throwaway accounts
+    from abusing money/compute endpoints while still allowing read access."""
+    if not current.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="email_not_verified",
+        )
+    return current
+
+
 def require_roles(*required: str) -> Callable:
     """Return a dependency that enforces the caller has at least one role."""
     required_set = set(required)

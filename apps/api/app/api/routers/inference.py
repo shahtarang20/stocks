@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.rate_limit import rate_limiter
 from app.db.session import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_verified_user
 from app.schemas.auth import CurrentUser
 from app.schemas.inference import (
     ChatCompletionRequest,
@@ -76,7 +76,7 @@ def _enforce_inference_rate_limit(user_id: str) -> None:
 )
 async def create_chat_completion(
     request: ChatCompletionRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatCompletionResponse:
     _enforce_inference_rate_limit(str(current_user.id))
@@ -120,7 +120,7 @@ async def create_chat_completion(
 )
 async def create_embeddings(
     request: EmbeddingRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ) -> EmbeddingResponse:
     _enforce_inference_rate_limit(str(current_user.id))

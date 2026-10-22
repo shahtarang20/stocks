@@ -56,7 +56,7 @@ Debug `print()` → `logger.debug`; `/docs` disabled in prod; artifact downloads
 ---
 
 ## Remaining risks / needs a product decision
-1. **Web tokens in `localStorage`** (access+refresh). Mitigated by the new CSP, but full fix = httpOnly, Secure cookies set by the backend — an auth-flow change, deferred to avoid rushing it pre-launch.
+1. ~~**Web tokens in `localStorage`** (access+refresh).~~ **RESOLVED** — the backend now sets httpOnly/Secure/SameSite cookies with CSRF double-submit, and `apps/web/src/lib/api.ts` no longer writes any token to `localStorage` (in-memory only; CSRF read from its cookie). Verified: `grep` shows zero token localStorage I/O; web build green.
 2. **On-chain ↔ off-chain ledger parity** is reported from an internal flag, not a real chain comparison; treated as **parallel rails**. If they must be one balance, reconciliation needs to cross-check on-chain amounts.
 3. **On-chain jobId squatting** — anyone can `lockBudget` for a known jobId on-chain (griefing). The API path is now owner-gated; a full contract fix keys escrows by `(customer, jobId)` and needs a redeploy + backend change.
 4. **`settleJob` happy-path** (valid signed voucher → payout math) is covered on the signing side by the Python crypto test and on-chain by guard/pause tests; a full signed on-chain run needs an ethers/JS test (hardhat 3) — recommended follow-up.
@@ -68,4 +68,4 @@ Debug `print()` → `logger.debug`; `/docs` disabled in prod; artifact downloads
 - [ ] Run against **Postgres** (not SQLite) so row-locks are real; run the recovery sweeper (`SWEEP_INTERVAL_SECONDS`).
 - [ ] Put a body-size/‎rate limit at the proxy too; serve behind TLS (HSTS is set).
 - [ ] Do **not** run `scripts/seed_dev.py` against prod.
-- [ ] Move web auth to httpOnly cookies (risk #1) before exposing publicly.
+- [x] Move web auth to httpOnly cookies (risk #1) — **done**; no tokens in JS-accessible storage.

@@ -24,6 +24,7 @@ from app.api.routers import (
     invoices,
     jobs,
     marketplace,
+    metrics,
     projects,
     providers,
     quotes,
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     application.include_router(health.router)
+    application.include_router(metrics.router)
     application.include_router(auth.router)
     application.include_router(projects.router)
     application.include_router(providers.router)

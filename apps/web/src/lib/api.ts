@@ -862,31 +862,13 @@ export function setStoredTokens(
   refreshToken?: string | null,
   csrfToken?: string | null
 ) {
+  // SECURITY: tokens are kept ONLY in memory. The session is carried by the
+  // backend's httpOnly cookies (sent via `credentials: "include"`), so nothing
+  // sensitive is ever written to JS-accessible storage (localStorage) where an
+  // XSS could read it. The CSRF token is read from its (non-httpOnly) cookie.
   _memoryAccessToken = accessToken;
   if (refreshToken !== undefined) _memoryRefreshToken = refreshToken;
   if (csrfToken !== undefined) _memoryCsrfToken = csrfToken;
-
-  if (typeof window !== "undefined") {
-    try {
-      if (accessToken) {
-        localStorage.setItem("computecoin_access_token", accessToken);
-      } else {
-        localStorage.removeItem("computecoin_access_token");
-      }
-      if (refreshToken) {
-        localStorage.setItem("computecoin_refresh_token", refreshToken);
-      } else if (accessToken === null) {
-        localStorage.removeItem("computecoin_refresh_token");
-      }
-      if (csrfToken) {
-        localStorage.setItem("computecoin_csrf_token", csrfToken);
-      } else if (accessToken === null) {
-        localStorage.removeItem("computecoin_csrf_token");
-      }
-    } catch {
-      // Storage access may be blocked in strict private browsing modes
-    }
-  }
 }
 
 export function clearStoredTokens() {
@@ -894,39 +876,17 @@ export function clearStoredTokens() {
 }
 
 export function getStoredAccessToken(): string | null {
-  if (_memoryAccessToken) return _memoryAccessToken;
-  if (typeof window !== "undefined") {
-    try {
-      return localStorage.getItem("computecoin_access_token");
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  // In-memory only; the httpOnly cookie is the durable session across reloads.
+  return _memoryAccessToken;
 }
 
 export function getStoredRefreshToken(): string | null {
-  if (_memoryRefreshToken) return _memoryRefreshToken;
-  if (typeof window !== "undefined") {
-    try {
-      return localStorage.getItem("computecoin_refresh_token");
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  return _memoryRefreshToken;
 }
 
 export function getStoredCsrfToken(): string | null {
-  if (_memoryCsrfToken) return _memoryCsrfToken;
-  if (typeof window !== "undefined") {
-    try {
-      return localStorage.getItem("computecoin_csrf_token");
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  // Prefer the CSRF value from its cookie (survives reloads); fall back to memory.
+  return getCsrfToken() ?? _memoryCsrfToken;
 }
 
 function getCsrfToken(): string | null {

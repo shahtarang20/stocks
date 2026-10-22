@@ -28,8 +28,10 @@ metrics**.
 ## Repository layout
 
 ```
-apps/        web (Next.js), api (FastAPI), admin
-services/    scheduler, job-worker, billing, verification
+apps/        web (Next.js; the admin UI lives in web/src/app/admin), api (FastAPI)
+# NOTE: scheduler / job-worker / billing / verification are implemented as
+# modules inside apps/api/app/services (a modular monolith for the MVP), not as
+# separate top-level services.
 provider-agent/   installable GPU provider agent (computecoin_agent)
 sdk/         python, typescript client SDKs
 contracts/   Solidity (future token phase — testnet only, not yet)

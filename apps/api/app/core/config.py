@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # Environment / logging / monitoring
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
+    # Optional bearer token protecting GET /metrics. Unset = open (dev);
+    # set it in prod and scrape over a private network.
+    METRICS_TOKEN: str = ""
     STRUCTURED_LOGGING: bool | None = None
     FRONTEND_URL: str = "http://localhost:3000"
     SENTRY_DSN: str = ""

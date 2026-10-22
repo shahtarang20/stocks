@@ -7,6 +7,7 @@ the behaviour and the 429s are still exercised.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import defaultdict
@@ -68,6 +69,15 @@ class RateLimiter:
             self._redis = client
         except Exception:
             self._redis = None
+            # In a non-dev deployment, running without Redis means the per-process
+            # fallback multiplies the effective limit across workers — surface it
+            # loudly so operators provision Redis (required in production).
+            if settings.ENVIRONMENT.lower() not in {"development", "dev", "local"}:
+                logging.getLogger("computecoin.ratelimit").warning(
+                    "Redis unavailable at %s — rate limiting degraded to per-process "
+                    "fallback. Provision Redis for correct limits in production.",
+                    settings.REDIS_URL,
+                )
         return self._redis
 
     def allow(self, key: str, limit: int, window_seconds: int) -> bool:

@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -228,7 +228,45 @@ async def _eligible_machines(
     return candidates
 
 
-def _score_candidates(candidates: list[_Candidate]) -> list[tuple[_Candidate, float, dict]]:
+# Reliability history window and Bayesian prior. A brand-new machine with no
+# history scores PRIOR_SUCCESS/PRIOR_TOTAL = 0.5 (neutral); the score then moves
+# with real completed-vs-failed outcomes.
+_RELIABILITY_WINDOW_DAYS = 90
+_RELIABILITY_PRIOR_SUCCESS = 1.0
+_RELIABILITY_PRIOR_TOTAL = 2.0
+
+
+async def _reliability_by_machine(
+    db: AsyncSession, machine_ids: list[uuid.UUID], now: dt.datetime
+) -> dict[uuid.UUID, float]:
+    """Completion-rate reliability per machine from recent finished jobs."""
+    if not machine_ids:
+        return {}
+    window_start = now - dt.timedelta(days=_RELIABILITY_WINDOW_DAYS)
+    completed = func.sum(case((Job.status == fsm.COMPLETED, 1), else_=0))
+    failed = func.sum(case((Job.status.in_([fsm.FAILED, fsm.TIMED_OUT]), 1), else_=0))
+    rows = (
+        await db.execute(
+            select(Job.machine_id, completed, failed)
+            .where(Job.machine_id.in_(machine_ids), Job.finished_at.is_not(None),
+                   Job.finished_at >= window_start)
+            .group_by(Job.machine_id)
+        )
+    ).all()
+    out: dict[uuid.UUID, float] = {}
+    for mid, c_ok, c_bad in rows:
+        c_ok, c_bad = int(c_ok or 0), int(c_bad or 0)
+        out[mid] = (c_ok + _RELIABILITY_PRIOR_SUCCESS) / (
+            c_ok + c_bad + _RELIABILITY_PRIOR_TOTAL
+        )
+    return out
+
+
+def _score_candidates(
+    candidates: list[_Candidate],
+    reliability: dict[uuid.UUID, float] | None = None,
+) -> list[tuple[_Candidate, float, dict]]:
+    reliability = reliability or {}
     w_price = settings.SCHEDULER_WEIGHT_PRICE
     w_rel = settings.SCHEDULER_WEIGHT_RELIABILITY
     w_avail = settings.SCHEDULER_WEIGHT_AVAILABILITY
@@ -242,8 +280,8 @@ def _score_candidates(candidates: list[_Candidate]) -> list[tuple[_Candidate, fl
         price_f = float(c.price)
         # Lower price -> higher score (cheapest == 1.0).
         price_score = 1.0 if spread == 0 else (max_price - price_f) / spread
-        # No completed-job history yet -> neutral reliability (honest: 0.5).
-        reliability_score = 0.5
+        # Reliability from real completion history (0.5 prior for new machines).
+        reliability_score = reliability.get(c.machine.id, 0.5)
         availability_score = (
             c.free_slots / c.machine.max_concurrent_jobs
             if c.machine.max_concurrent_jobs
@@ -311,7 +349,8 @@ async def schedule_job(
     if not candidates:
         return False
 
-    scored = _score_candidates(candidates)
+    reliability = await _reliability_by_machine(db, [c.machine.id for c in candidates], now)
+    scored = _score_candidates(candidates, reliability)
     best, best_score, factors = scored[0]
 
     # Create the pricing snapshot, then HOLD the authorized amount BEFORE reserving

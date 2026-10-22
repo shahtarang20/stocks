@@ -102,3 +102,38 @@ jobs:
       - run: npm ci || npm install
       - run: npm test
 
+  security-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (apps/api)
+        working-directory: apps/api
+        run: |
+          python -m pip install -U pip pip-audit
+          pip install -e ".[dev]" || pip install -e .
+          pip-audit || true   # report advisories; non-blocking until triaged
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: npm audit (apps/web)
+        working-directory: apps/web
+        run: |
+          npm ci || npm install
+          npm audit --omit=dev --audit-level=critical || true
+
+  secret-scan:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

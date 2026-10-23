@@ -1,0 +1,14 @@
+{
+  "name": "computecoin-test-oidc-idp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real OpenID-certified IdP (panva/node-oidc-provider) used by the SSO integration tests.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "express": "4.21.2",
+    "oidc-provider": "9.13.0"
+  }
+}

@@ -145,6 +145,12 @@ class JsonRpcChainClient:
     #: Five parameters — jobId, provider, providerPayout, platformFee, customerRefund.
     SETTLED_TOPIC = _topic("JobSettled(bytes32,address,uint256,uint256,uint256)")
     REFUNDED_TOPIC = _topic("JobRefunded(bytes32,address,uint256)")
+    #: ``BudgetLocked(bytes32 indexed jobId, address indexed customer,
+    #: address indexed provider, uint256 amount, uint256 deadline)``.
+    #: Scanned by :meth:`list_escrow_job_ids` so that an escrow which is still
+    #: OPEN on-chain but was never recorded off-chain is reported. Verified
+    #: against a real deployment in tests/test_d2_chain_recon_live.py.
+    LOCKED_TOPIC = _topic("BudgetLocked(bytes32,address,address,uint256,uint256)")
 
     def __init__(
         self,
@@ -301,8 +307,17 @@ class JsonRpcChainClient:
         )
 
     async def list_escrow_job_ids(self, *, contract_address: str) -> list[str]:
+        """Every bytes32 job id the contract has emitted an escrow event for.
+
+        ``BudgetLocked`` is scanned as well as the two closure events. Scanning
+        only ``JobSettled``/``JobRefunded`` meant an escrow that was locked
+        on-chain but never written to ``on_chain_escrows`` stayed invisible to
+        the sweep — customer tokens genuinely held by the contract with no
+        off-chain record, reported as parity. That gap was found by pointing
+        this client at a real deployed contract (tests/test_d2_chain_recon_live.py).
+        """
         seen: list[str] = []
-        for topic in (self.SETTLED_TOPIC, self.REFUNDED_TOPIC):
+        for topic in (self.LOCKED_TOPIC, self.SETTLED_TOPIC, self.REFUNDED_TOPIC):
             for entry in await self._logs(contract_address, topic):
                 topics = (entry or {}).get("topics") or []
                 if len(topics) >= 2:

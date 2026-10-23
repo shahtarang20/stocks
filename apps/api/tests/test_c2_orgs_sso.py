@@ -3,8 +3,10 @@
 The SSO tests run entirely offline against a mock IdP injected through the
 ``get_oidc_client`` dependency. That proves *our* half of the OIDC
 authorization-code flow (state signature, nonce binding, issuer/audience and
-signature checks, JIT provisioning); interoperability with a real IdP still
-needs a staging tenant.
+signature checks, JIT provisioning). Interoperability with a real, certified
+IdP is covered separately by ``tests/test_c2_sso_oidc_integration.py`` (opt-in:
+``SSO_OIDC_INTEGRATION=1``), which drives this same code against a live
+node-oidc-provider instance.
 """
 
 from __future__ import annotations

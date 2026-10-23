@@ -18,6 +18,11 @@ dependencies = [
     "pydantic-settings==2.7.0",
     "argon2-cffi==23.1.0",
     "pyjwt==2.10.1",
+    # REQUIRED for RS*/ES* id_token verification (PyJWT delegates asymmetric
+    # crypto to it). Without it `_key_for` fails closed with
+    # `sso_id_token_key_unsupported`, which means SSO is simply broken against
+    # every real IdP: Okta, Entra ID, Google and Auth0 all sign RS256.
+    "cryptography>=43.0.0",
     "redis==5.2.1",
     "email-validator==2.2.0",
     "python-multipart==0.0.20",

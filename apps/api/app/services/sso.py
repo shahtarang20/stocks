@@ -25,10 +25,22 @@ FastAPI dependency, so the whole flow runs offline against a mock IdP. The
 fixture-free HTTP implementation is SSRF-guarded: IdP endpoints are
 administrator-supplied URLs, i.e. user input.
 
-Honest limitation: a mocked IdP proves our side of the protocol (state/nonce/
-issuer/audience/signature checks, JIT provisioning). It does not prove
-interoperability with a specific real IdP (Okta, Entra ID, Google) — that needs
-a staging IdP and is explicitly out of scope of the automated suite.
+A mocked IdP proves our side of the protocol (state/nonce/issuer/audience/
+signature checks, JIT provisioning) but not interoperability. That gap is now
+closed by ``tests/test_c2_sso_oidc_integration.py``, which runs this module
+against a REAL OpenID-certified provider (panva/node-oidc-provider, served from
+``tests/oidc_idp``): real discovery, real /authorize, a real authorization
+code, a real /token exchange through :class:`HttpxOidcClient`, a real RS256
+id_token and a real JWKS. Those tests are opt-in (``SSO_OIDC_INTEGRATION=1``)
+because they need that runtime; see the module docstring for the command.
+
+Still unproven: a specific commercial tenant (Okta, Entra ID, Google) and its
+vendor-specific quirks, and SAML — neither is covered here.
+
+Note on client authentication: :class:`HttpxOidcClient` sends the client
+credentials in the token request body (``client_secret_post``). An IdP
+registered for ``client_secret_basic`` — the OAuth 2.0 default — will reject
+us; the connection must be registered for ``client_secret_post``.
 """
 
 from __future__ import annotations

@@ -508,6 +508,61 @@ export type DisputeStatus =
   | string;
 
 /** A dispute opened on a settled job. */
+export interface VendorCard {
+  id: string;
+  key: string;
+  name: string;
+  category: string;
+  purpose: string;
+  dashboard_url: string | null;
+  plan_name: string | null;
+  quota_limit: string | null;
+  quota_unit: string | null;
+  quota_period: string;
+  current_usage: string | null;
+  /** "measured" | "vendor_api" | "manual" | "unavailable" — always displayed,
+   *  so an estimate we counted is never read as the vendor's invoice. */
+  usage_source: string;
+  usage_updated_at: string | null;
+  cost_amount: string | null;
+  cost_currency: string;
+  billing_cycle: string;
+  renewal_date: string | null;
+  reminder_days_before: number;
+  usage_pct: number | null;
+  status: string;
+  detail: string;
+  days_until_renewal: number | null;
+  renewal_due: boolean;
+  measurable: boolean;
+  notes: string | null;
+  active: boolean;
+}
+
+export interface VendorSummary {
+  total: number;
+  critical: number;
+  warning: number;
+  unknown: number;
+  renewals_due: number;
+  unacknowledged_alerts: number;
+  known_monthly_cost: string;
+  cost_currency: string;
+  services_without_cost: number;
+}
+
+export interface VendorAlert {
+  id: string;
+  vendor_id: string;
+  vendor_name: string | null;
+  alert_type: string;
+  threshold_pct: number | null;
+  period_key: string;
+  message: string;
+  acknowledged: boolean;
+  created_at: string;
+}
+
 export interface Dispute {
   dispute_id: string;
   job_id: string;
@@ -1707,6 +1762,64 @@ export const api = {
     return request<OnChainTransactionResponse[]>("/v1/settlement/transactions", {
       token: accessToken,
     });
+  },
+
+  async listVendors(accessToken: string): Promise<VendorCard[]> {
+    const data = await request<VendorCard[]>("/v1/admin/vendors", {
+      method: "GET",
+      token: accessToken,
+    });
+    return Array.isArray(data) ? data : [];
+  },
+
+  async vendorSummary(accessToken: string): Promise<VendorSummary> {
+    return request<VendorSummary>("/v1/admin/vendors/summary", {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  async listVendorAlerts(
+    accessToken: string,
+    unacknowledgedOnly = false,
+  ): Promise<VendorAlert[]> {
+    const qs = unacknowledgedOnly ? "?unacknowledged_only=true" : "";
+    const data = await request<VendorAlert[]>(`/v1/admin/vendors/alerts${qs}`, {
+      method: "GET",
+      token: accessToken,
+    });
+    return Array.isArray(data) ? data : [];
+  },
+
+  async updateVendor(
+    accessToken: string,
+    vendorId: string,
+    body: Record<string, unknown>,
+  ): Promise<VendorCard> {
+    return request<VendorCard>(`/v1/admin/vendors/${vendorId}`, {
+      method: "PATCH",
+      token: accessToken,
+      body,
+    });
+  },
+
+  async evaluateVendors(accessToken: string): Promise<VendorAlert[]> {
+    const data = await request<VendorAlert[]>("/v1/admin/vendors/evaluate", {
+      method: "POST",
+      token: accessToken,
+      body: {},
+    });
+    return Array.isArray(data) ? data : [];
+  },
+
+  async acknowledgeVendorAlert(
+    accessToken: string,
+    alertId: string,
+  ): Promise<VendorAlert> {
+    return request<VendorAlert>(
+      `/v1/admin/vendors/alerts/${alertId}/acknowledge`,
+      { method: "POST", token: accessToken, body: {} },
+    );
   },
 };
 

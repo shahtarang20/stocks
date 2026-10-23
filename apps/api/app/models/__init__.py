@@ -85,6 +85,7 @@ from app.models.enterprise import (
 from app.models.workloads import Batch, Dataset, TrainingCheckpoint
 
 # Phase D — on-chain reconciliation audit trail.
+from app.models.vendors import VendorAlert, VendorService  # noqa: F401
 from app.models.reconciliation import ChainReconciliationRun
 
 __all__ = [
@@ -155,4 +156,7 @@ __all__ = [
     "TrainingCheckpoint",
     # Phase D
     "ChainReconciliationRun",
+    # Platform operations
+    "VendorService",
+    "VendorAlert",
 ]

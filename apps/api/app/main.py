@@ -41,6 +41,7 @@ from app.api.routers import (
     spend_limits,
     sso,
     telemetry,
+    vendors,
     verification,
     webhooks,
     ws,
@@ -187,6 +188,7 @@ def create_app() -> FastAPI:
     application.include_router(provider_pricing.router)
     application.include_router(connect.router)
     application.include_router(chain_recon.router)
+    application.include_router(vendors.router)
 
     @application.get("/")
     async def root() -> dict:

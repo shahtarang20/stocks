@@ -12,6 +12,7 @@ import {
   Scale,
   Server,
   Settings,
+  Wallet,
   Users,
 } from "lucide-react";
 import { AuthGuard } from "@/components/console/auth-guard";
@@ -47,6 +48,7 @@ const SECTIONS: NavSection[] = [
       { href: "/admin/security", label: "Security posture", icon: Lock },
       { href: "/admin/audit-logs", label: "Audit logs", icon: BookOpen },
       { href: "/admin/configuration", label: "Configuration", icon: Settings },
+      { href: "/admin/vendors", label: "Third-party services", icon: Wallet },
     ],
   },
   {

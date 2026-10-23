@@ -112,6 +112,41 @@ async def test_admin_audit_logs(client: AsyncClient, admin_client: dict, custome
 
 
 @pytest.mark.asyncio
+async def test_admin_audit_logs_serialize_a_real_entry(
+    client: AsyncClient, admin_client: dict
+):
+    """The listing must survive a NON-EMPTY audit table.
+
+    Asserting only 200-and-a-list never runs the per-row serializer, which is
+    precisely how the /v1/admin/jobs AttributeError survived a passing test.
+    So: cause a real audited action first, then read it back and check fields.
+    """
+    admin_headers = auth_headers(admin_client["access_token"])
+    target = await register_verify_login(client, "audited-target@example.com")
+    assert target is not None
+
+    users = (await client.get("/v1/admin/users", headers=admin_headers)).json()
+    target_id = next(
+        u["user_id"] for u in users if u["email"] == "audited-target@example.com"
+    )
+    assert (
+        await client.post(f"/v1/admin/users/{target_id}/suspend", headers=admin_headers)
+    ).status_code == 200
+
+    resp = await client.get("/v1/admin/audit-logs", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    logs = resp.json()
+    assert len(logs) >= 1, "the suspend should have written an audit entry"
+
+    entry = logs[0]
+    for field in ("id", "action", "outcome", "created_at"):
+        assert field in entry, f"audit entry is missing {field}: {entry}"
+    assert any("suspend" in (log.get("action") or "") for log in logs), (
+        f"no suspend action in the audit log: {[l.get('action') for l in logs][:5]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_admin_all_jobs(client: AsyncClient, admin_client: dict):
     admin_headers = auth_headers(admin_client["access_token"])
     resp = await client.get("/v1/admin/jobs", headers=admin_headers)

@@ -356,8 +356,18 @@ async def test_tampered_signature_is_rejected(client, real_idp):
     _state, code = await _start(client, conn_id)
     id_token = await _exchange_directly(code)
     head, payload, sig = id_token.split(".")
-    flipped = "B" if sig[-1] != "B" else "C"
-    tampered = f"{head}.{payload}.{sig[:-1]}{flipped}"
+    # Flip a byte in the MIDDLE of the decoded signature, not a base64url
+    # character at the end. The final character of an unpadded group encodes
+    # only the leftover bits, so several distinct characters decode to the SAME
+    # bytes -- an end-character flip therefore produced a byte-identical
+    # signature whenever the real one ended in such a character, the token
+    # verified, and this test failed intermittently.
+    raw = base64.urlsafe_b64decode(sig + "=" * (-len(sig) % 4))
+    mid = len(raw) // 2
+    mutated = raw[:mid] + bytes([raw[mid] ^ 0xFF]) + raw[mid + 1 :]
+    assert mutated != raw, "mutation did not change the signature bytes"
+    tampered_sig = base64.urlsafe_b64encode(mutated).rstrip(b"=").decode()
+    tampered = f"{head}.{payload}.{tampered_sig}"
 
     jwks = await _real_jwks()
     with pytest.raises(SsoError) as exc:

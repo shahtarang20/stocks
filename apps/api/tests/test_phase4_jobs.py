@@ -691,3 +691,34 @@ async def test_hardware_job_lifecycle_pinned_digest_and_metered_billing(client):
     assert got["metrics"]["gpu_util_pct"] == 82.0
     assert got["final_cost"] is not None
 
+
+
+async def test_job_events_serialize_a_real_history(client):
+    """GET /v1/jobs/{id}/events must survive a NON-EMPTY event list.
+
+    Every job that actually runs accumulates events, so this serializer runs
+    constantly in production -- but the suite only ever asserted the EMPTY case
+    (an invalid transition appends nothing). An empty list never executes the
+    per-row body, which is exactly how a wrong attribute name in the admin jobs
+    serializer shipped as a permanent 500. This exercises the rows.
+    """
+    await seed_echo_model()
+    await create_listable_machine(client, "p-ev@x.com", hostname="ev")
+    cust = await _customer(client, "c-ev@x.com")
+    job_id = (await submit_job(client, cust)).json()["job_id"]
+
+    resp = await client.get(f"/v1/jobs/{job_id}/events", headers=auth_headers(cust))
+    assert resp.status_code == 200, resp.text
+    events = resp.json()
+    assert len(events) >= 1, "a submitted job should already have a state history"
+
+    for e in events:
+        for field in ("seq", "to_state", "actor", "created_at"):
+            assert field in e, f"event is missing {field}: {e}"
+
+    # seq is a monotonic ordering, and the walk starts from no prior state.
+    seqs = [e["seq"] for e in events]
+    assert seqs == sorted(seqs), f"events are not ordered by seq: {seqs}"
+    assert events[0]["from_state"] in (None, "created"), events[0]
+    # The job really did progress past creation.
+    assert any(e["to_state"] for e in events)

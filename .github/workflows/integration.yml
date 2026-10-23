@@ -1,0 +1,126 @@
+name: Integration (real runtimes)
+
+# The default `pytest -q` suite deliberately runs with NO external runtime, so
+# the chain, OIDC and concurrency tests SKIP there. Without this workflow that
+# coverage rots silently: nobody notices a suite that never runs.
+#
+# Every job here sets its opt-in variable, which flips those suites from "skip"
+# to "fail if the runtime is unreachable" — so a broken runtime fails the build
+# instead of quietly testing nothing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg-concurrency:
+    name: Concurrency (real PostgreSQL)
+    runs-on: ubuntu-latest
+    # These two fixes CANNOT be proven on SQLite: the dialect silently drops
+    # FOR UPDATE, so the tests would pass with or without the lock.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ccdev
+          POSTGRES_PASSWORD: ccdev
+          POSTGRES_DB: computecoin
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+      - name: Race tests against real PostgreSQL
+        env:
+          RUN_PG_INTEGRATION: "1"
+          PG_INTEGRATION_DSN: postgresql+asyncpg://ccdev:ccdev@localhost:5432/computecoin
+        run: pytest -q tests/test_pg_concurrency_live.py
+
+  chain:
+    name: Chain reconciliation (real EVM node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install contracts toolchain
+        working-directory: contracts
+        run: npm ci
+      - name: Compile contracts
+        working-directory: contracts
+        run: npx hardhat compile
+      - name: Install API
+        working-directory: apps/api
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+      - name: Reconcile against a real deployed contract
+        working-directory: apps/api
+        # The fixture starts and tears down its own hardhat node, deploys
+        # ComputeSettlement, and drives real lock/settle/refund transactions.
+        env:
+          RUN_CHAIN_INTEGRATION: "1"
+        run: pytest -q tests/test_d2_chain_recon_live.py
+
+  oidc:
+    name: SSO (real certified IdP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the test IdP
+        working-directory: apps/api/tests/oidc_idp
+        run: npm ci
+      - name: Install API
+        working-directory: apps/api
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+      - name: Start node-oidc-provider
+        working-directory: apps/api/tests/oidc_idp
+        run: |
+          node server.mjs > /tmp/idp.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9443/.well-known/openid-configuration >/dev/null; then
+              echo "IdP up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "IdP failed to start:"; cat /tmp/idp.log; exit 1
+      - name: Real authorization-code round trip
+        working-directory: apps/api
+        env:
+          SSO_OIDC_INTEGRATION: "1"
+        run: pytest -q tests/test_c2_sso_oidc_integration.py
+      - name: IdP log on failure
+        if: failure()
+        run: cat /tmp/idp.log || true

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
@@ -36,6 +36,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -44,13 +45,29 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
 
   const isLogin = mode === "login";
 
+  // Rehydrate values if query parameters exist (e.g. from a prior native reload)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const emailParam = params.get("email");
+      const passwordParam = params.get("password");
+      if (emailParam) {
+        setValue("email", emailParam, { shouldValidate: true });
+      }
+      if (passwordParam) {
+        setValue("password", passwordParam, { shouldValidate: true });
+      }
+    }
+  }, [setValue]);
+
   async function onSubmit(values: FormValues) {
     setServerError(null);
     try {
+      const email = values.email.trim();
       if (isLogin) {
-        await login(values.email, values.password);
+        await login(email, values.password);
       } else {
-        await registerUser(values.email, values.password);
+        await registerUser(email, values.password);
       }
       router.push("/dashboard");
     } catch (err) {
@@ -74,7 +91,15 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             : "Start exploring the developer console. No payment required for the preview."}
         </CardDescription>
       </CardHeader>
-      <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      <form
+        method="POST"
+        action="#"
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleSubmit(onSubmit)(e);
+        }}
+        noValidate
+      >
         <CardContent className="space-y-4">
           {serverError ? (
             <div

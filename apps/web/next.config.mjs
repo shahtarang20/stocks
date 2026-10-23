@@ -3,6 +3,11 @@
 // Security headers applied to every response. The CSP is intentionally strict;
 // 'unsafe-inline' for styles is kept because Tailwind/Next inject inline styles,
 // and connect-src allows the API origin.
+const isDev = process.env.NODE_ENV !== "production";
+const scriptSrc = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -20,8 +25,8 @@ const securityHeaders = [
       "object-src 'none'",
       "img-src 'self' data: blob:",
       "style-src 'self' 'unsafe-inline'",
-      "script-src 'self' 'unsafe-inline'",
-      "connect-src 'self' " + (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"),
+      scriptSrc,
+      "connect-src 'self' " + (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000") + " http://localhost:8000 ws://localhost:3000 ws://localhost:8000",
       "font-src 'self' data:",
     ].join("; "),
   },

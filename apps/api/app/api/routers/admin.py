@@ -40,6 +40,7 @@ from app.schemas.admin import (
     AdminUserOut,
 )
 from app.schemas.auth import CurrentUser
+from app.schemas.marketplace import money_str
 from app.schemas.billing import (
     DisputeResolve,
     PayoutOut,
@@ -453,7 +454,11 @@ async def list_admin_jobs(
             status=j.status,
             execution_mode=j.execution_mode,
             created_at=j.created_at,
-            final_cost=ledger.minor_to_str(j.final_cost_minor) if j.final_cost_minor is not None else None,
+            # Job.final_cost is a Numeric(14,2) Decimal, NOT minor units, so it
+            # is formatted the same way /v1/jobs serializes it. Reading a
+            # non-existent `final_cost_minor` here made this endpoint a hard 500
+            # for any non-empty job list.
+            final_cost=money_str(j.final_cost),
             error_code=j.error_code,
         )
         for j in jobs

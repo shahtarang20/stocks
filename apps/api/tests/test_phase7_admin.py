@@ -120,6 +120,65 @@ async def test_admin_all_jobs(client: AsyncClient, admin_client: dict):
 
 
 @pytest.mark.asyncio
+async def test_admin_all_jobs_serializes_a_real_job(
+    client: AsyncClient, admin_client: dict, customer_client: dict
+):
+    """The listing must survive a NON-EMPTY job table.
+
+    Asserting only 200-and-a-list passes against a broken endpoint, because an
+    empty result never runs the per-row serialization. This endpoint really did
+    raise AttributeError on every row until the field name was corrected, and an
+    empty-list test could not see it.
+    """
+    import decimal
+    import uuid as _uuid
+
+    from app.db.session import get_sessionmaker
+    from app.models.jobs import Job
+    from app.models.user import User
+    from sqlalchemy import select
+
+    sm = get_sessionmaker()
+    async with sm() as db:
+        customer = await db.scalar(
+            select(User).where(User.email == "customer-phase7@example.com")
+        )
+        assert customer is not None
+        db.add(
+            Job(
+                id=_uuid.uuid4(),
+                customer_id=customer.id,
+                workload_type="text-generation",
+                model="echo-sim-v1",
+                input={"prompt": "hi"},
+                status="completed",
+                execution_mode="simulated",
+                gpu_count=1,
+                estimated_minutes=1,
+                max_runtime_seconds=600,
+                retry_policy={},
+                attempts_made=1,
+                priority=0,
+                final_cost=decimal.Decimal("1.23"),
+            )
+        )
+        await db.commit()
+
+    resp = await client.get("/v1/admin/jobs", headers=admin_headers_of(admin_client))
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len(rows) >= 1
+    row = next(r for r in rows if r["model"] == "echo-sim-v1")
+    # Money is a 2dp string, never a float.
+    assert row["final_cost"] == "1.23"
+    assert row["execution_mode"] == "simulated"
+
+
+def admin_headers_of(admin_client: dict) -> dict:
+    return auth_headers(admin_client["access_token"])
+
+
+@pytest.mark.asyncio
 async def test_admin_platform_stats(client: AsyncClient, admin_client: dict):
     admin_headers = auth_headers(admin_client["access_token"])
     resp = await client.get("/v1/admin/stats", headers=admin_headers)

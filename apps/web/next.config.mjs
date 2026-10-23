@@ -8,6 +8,18 @@ const scriptSrc = isDev
   ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
   : "script-src 'self' 'unsafe-inline'";
 
+// The dev server talks to a local API over http and uses a websocket for hot
+// reload. Those origins belong in the CSP ONLY in development — shipping them
+// in a production build would let the deployed app open connections to
+// whatever happens to be listening on the visitor's own machine.
+const connectSrc = [
+  "connect-src 'self'",
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000",
+  ...(isDev
+    ? ["http://localhost:8000", "ws://localhost:3000", "ws://localhost:8000"]
+    : []),
+].join(" ");
+
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -26,7 +38,7 @@ const securityHeaders = [
       "img-src 'self' data: blob:",
       "style-src 'self' 'unsafe-inline'",
       scriptSrc,
-      "connect-src 'self' " + (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000") + " http://localhost:8000 ws://localhost:3000 ws://localhost:8000",
+      connectSrc,
       "font-src 'self' data:",
     ].join("; "),
   },

@@ -45,18 +45,23 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
 
   const isLogin = mode === "login";
 
-  // Rehydrate values if query parameters exist (e.g. from a prior native reload)
+  // Prefill the email from ?email= (e.g. an invitation or verification link).
+  //
+  // The password is deliberately NOT read from the query string, and if one is
+  // present it is stripped from the URL rather than used. A password in a URL
+  // leaks into browser history, server and proxy access logs, and the Referer
+  // header sent to any third-party resource the page loads — so accepting one
+  // here would turn a stray link into a durable credential disclosure.
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const emailParam = params.get("email");
-      const passwordParam = params.get("password");
-      if (emailParam) {
-        setValue("email", emailParam, { shouldValidate: true });
-      }
-      if (passwordParam) {
-        setValue("password", passwordParam, { shouldValidate: true });
-      }
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const emailParam = url.searchParams.get("email");
+    if (emailParam) {
+      setValue("email", emailParam, { shouldValidate: true });
+    }
+    if (url.searchParams.has("password")) {
+      url.searchParams.delete("password");
+      window.history.replaceState(null, "", url.toString());
     }
   }, [setValue]);
 

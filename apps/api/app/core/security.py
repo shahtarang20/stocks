@@ -60,15 +60,20 @@ def constant_time_compare(a: str, b: str) -> bool:
 # ---------------------------------------------------------------------------
 # API keys
 # ---------------------------------------------------------------------------
+#: Marks a bearer credential as a project API key rather than a JWT. The auth
+#: dependency branches on this, so it must stay in sync with generate_api_key.
+API_KEY_PREFIX = "cc_live_"
+
+
 def generate_api_key() -> tuple[str, str, str]:
     """Return (full_key, prefix, key_hash).
 
     full_key looks like ``cc_live_<random>``. Only prefix + hash are stored.
     """
     random_part = secrets.token_urlsafe(32)
-    full_key = f"cc_live_{random_part}"
+    full_key = f"{API_KEY_PREFIX}{random_part}"
     # prefix shown to user: scheme + first chars of the random body
-    prefix = f"cc_live_{random_part[:8]}"
+    prefix = f"{API_KEY_PREFIX}{random_part[:8]}"
     key_hash = hash_token(full_key)
     return full_key, prefix, key_hash
 

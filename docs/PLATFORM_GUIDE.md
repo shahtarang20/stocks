@@ -127,9 +127,35 @@ stored, so nobody — including the platform — can recover it afterwards. Copy
 immediately into your secret manager. If you lose it, revoke it and create
 another.
 
-**How to participate.** Use the key as a bearer token against the API, or point
-an OpenAI-compatible client at the inference endpoint. Scope keys per project so
-revoking one does not break everything.
+**How to use it.** Send the key as a bearer token:
+
+```bash
+curl https://<your-api>/v1/jobs \
+  -H "Authorization: Bearer cc_live_..."
+```
+
+Two endpoints are OpenAI-compatible, so an existing OpenAI client works by
+changing the base URL and key:
+
+| Endpoint | Equivalent to |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI chat completions |
+| `POST /v1/embeddings` | OpenAI embeddings |
+
+Responses from these are currently stamped `[ComputeCoin Simulated]` in the
+output text itself — they are deterministic simulations, not real inference, and
+say so rather than pretending otherwise.
+
+**What a key can and cannot do.** A key acts as its project's **owner** and
+nothing more. It is not an elevated credential: an admin-only endpoint still
+returns 403, and the email-verification gate still applies, so a key cannot be
+used to sidestep it. Revoking a key stops it immediately, and **suspending the
+owning account kills every key it issued** — a banned account is left with no
+live credential.
+
+Scope keys per project so revoking one does not break everything. The key list
+shows **last used**, which is how you spot a key that is unused (revoke it) or
+being used when it shouldn't be (rotate it).
 
 ---
 

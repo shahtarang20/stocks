@@ -201,6 +201,15 @@ class Settings(BaseSettings):
     CHAIN_RPC_URL: str = ""
     CHAIN_RECONCILE_ENABLED: bool = False
     CHAIN_RECONCILE_INTERVAL_SECONDS: int = 900
+    #: Max block span per ``eth_getLogs`` call. Hosted RPC providers cap this
+    #: (commonly 10k, some 2k) and a request over the cap is either rejected or,
+    #: worse, silently truncated — which would read as "no escrows, all clear".
+    #: The scan is chunked to this width so the full range is always covered.
+    CHAIN_LOG_CHUNK_BLOCKS: int = 10_000
+    #: First block to scan for settlement events. Leave at 0 for a local chain;
+    #: set to the contract's deployment block in production so the scan does not
+    #: walk the entire history of the chain on every sweep.
+    CHAIN_LOG_FROM_BLOCK: int = 0
 
     @model_validator(mode="after")
     def _reject_insecure_defaults_in_prod(self) -> "Settings":

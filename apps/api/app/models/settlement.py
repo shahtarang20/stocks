@@ -83,6 +83,11 @@ class OnChainEscrow(Base, TimestampMixin):
     final_cost_units: Mapped[str | None] = mapped_column(String(78), nullable=True)
     platform_fee_units: Mapped[str | None] = mapped_column(String(78), nullable=True)
     voucher_signature: Mapped[str | None] = mapped_column(String(132), nullable=True)
+    #: The escrow nonce ``voucher_signature`` was minted at. ComputeSettlement
+    #: accepts a voucher only at the escrow's CURRENT nonce, so re-issuing after
+    #: ``invalidateVouchers`` (which bumps it) requires signing at the new value;
+    #: this records which one the stored signature is bound to.
+    voucher_nonce: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
     reconciled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     settled_at: Mapped[dt.datetime | None] = mapped_column(

@@ -131,6 +131,7 @@ async def create_connection(
         "jwks_uri": body.jwks_uri,
         "redirect_uri": body.redirect_uri,
         "scopes": body.scopes,
+        "token_endpoint_auth_method": body.token_endpoint_auth_method,
     }
     # Fingerprint the secret now (if present) so a later out-of-band rotation is
     # detected at login time instead of failing opaquely at the IdP.
@@ -209,6 +210,7 @@ async def update_connection(
         "jwks_uri",
         "redirect_uri",
         "scopes",
+        "token_endpoint_auth_method",
     ):
         value = getattr(body, field)
         if value is not None:
@@ -319,15 +321,33 @@ async def oidc_callback(
     if not token_endpoint:
         raise SsoError("sso_connection_incomplete", status.HTTP_503_SERVICE_UNAVAILABLE)
 
+    # client_secret_basic is the OAuth 2.0 DEFAULT and some IdPs accept nothing
+    # else; client_secret_post is what this code originally assumed. The method
+    # comes from the connection so an administrator can match their IdP.
+    auth_method = str(
+        config.get("token_endpoint_auth_method") or "client_secret_post"
+    ).strip().lower()
+    if auth_method not in ("client_secret_post", "client_secret_basic"):
+        raise SsoError("sso_unsupported_token_auth_method")
+
+    token_request = {
+        "grant_type": "authorization_code",
+        "code": body.code,
+        "redirect_uri": str(config.get("redirect_uri") or ""),
+        "client_id": connection.client_id,
+    }
+    basic_auth: tuple[str, str] | None = None
+    if auth_method == "client_secret_basic":
+        # RFC 6749 2.3.1: with Basic, the secret goes in the header and MUST
+        # NOT be duplicated in the body.
+        basic_auth = (connection.client_id, client_secret)
+    else:
+        token_request["client_secret"] = client_secret
+
     token_response = await client.exchange_code(
         token_endpoint,
-        {
-            "grant_type": "authorization_code",
-            "code": body.code,
-            "redirect_uri": str(config.get("redirect_uri") or ""),
-            "client_id": connection.client_id,
-            "client_secret": client_secret,
-        },
+        token_request,
+        basic_auth=basic_auth,
     )
     id_token = token_response.get("id_token")
     if not id_token:

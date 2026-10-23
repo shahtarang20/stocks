@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from typing import Any
 
@@ -162,13 +163,49 @@ async def create_escrow_lock(
     return escrow
 
 
-# ComputeSettlement.sol binds every voucher to the escrow's current nonce so a signed voucher
-# is single-use. A fresh escrow starts at nonce 0 and the value only advances when a voucher is
-# consumed on-chain or when governance calls invalidateVouchers(). Since this service refuses to
-# mint a second voucher for an escrow (see below), the nonce of every voucher it signs is 0.
-# NOTE: re-issuing after a governance invalidation would require persisting the nonce; that is a
-# deliberate follow-up, not something this function silently guesses at.
+logger = logging.getLogger("computecoin.settlement")
+
+
+# ComputeSettlement.sol binds every voucher to the escrow's current nonce so a signed voucher is
+# single-use. A fresh escrow starts here; the value advances when a voucher is consumed on-chain
+# or when governance calls invalidateVouchers().
 SETTLEMENT_VOUCHER_NONCE = 0
+
+
+async def resolve_voucher_nonce(escrow: OnChainEscrow) -> tuple[int, str]:
+    """Return ``(nonce, source)`` to sign this escrow's voucher at.
+
+    Prefers the CONTRACT's own ``escrowNonce`` — it is the only authority, and
+    anything else produces a voucher that reverts with "Stale voucher nonce".
+    Falls back to the nonce we last recorded when no RPC endpoint is configured
+    or the read fails.
+
+    The fallback is safe rather than merely convenient: if it is wrong, the
+    contract rejects the voucher and no money moves. It is never treated as
+    confirmation that the value is current, and ``source`` says which it was so
+    callers can report honestly.
+    """
+    if not (settings.CHAIN_RPC_URL or "").strip():
+        return int(escrow.voucher_nonce or 0), "stored_no_rpc_configured"
+    try:
+        from app.services.chain_reconciler import JsonRpcChainClient
+
+        client = JsonRpcChainClient()
+        nonce = await client.fetch_escrow_nonce(
+            contract_address=escrow.contract_address,
+            job_bytes32=escrow.job_bytes32,
+            customer_address=escrow.customer_address or "",
+        )
+        return int(nonce), "chain"
+    except Exception as exc:  # noqa: BLE001 - unreadable chain must not be fatal
+        logger.warning(
+            "could not read escrowNonce for escrow %s (%s); falling back to the "
+            "stored nonce. If the chain has advanced, the voucher will be "
+            "rejected on-chain rather than mis-settle.",
+            escrow.id,
+            exc,
+        )
+        return int(escrow.voucher_nonce or 0), "stored_chain_unreadable"
 
 
 async def issue_settlement_voucher(
@@ -200,12 +237,25 @@ async def issue_settlement_voucher(
             detail=f"Active locked escrow for job {request.job_id} not found",
         )
 
-    # Refuse to mint a second (differently-valued) voucher for the same escrow —
-    # one escrow must have at most one valid payout authorization (money F6).
-    if escrow.voucher_signature:
+    # At most one LIVE payout authorization per escrow (money F6). A stored
+    # signature only still counts as live while the chain is still at the nonce
+    # it was minted at: once governance calls invalidateVouchers() the nonce
+    # advances, the old signature is permanently dead on-chain, and refusing to
+    # re-issue here would strand the escrow with no way to ever settle it.
+    resolved_nonce, nonce_source = await resolve_voucher_nonce(escrow)
+    if escrow.voucher_signature and resolved_nonce == int(escrow.voucher_nonce or 0):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A settlement voucher has already been issued for this escrow",
+        )
+    if escrow.voucher_signature:
+        logger.info(
+            "re-issuing settlement voucher for escrow %s: nonce advanced %s -> %s "
+            "(source=%s), so the previous signature is no longer valid on-chain",
+            escrow.id,
+            escrow.voucher_nonce,
+            resolved_nonce,
+            nonce_source,
         )
 
     final_cost_int = int(request.final_cost_units)
@@ -231,7 +281,7 @@ async def issue_settlement_voucher(
 
     deadline_aware = ensure_aware(escrow.deadline)
     voucher_expiry = int(deadline_aware.timestamp())
-    voucher_nonce = SETTLEMENT_VOUCHER_NONCE
+    voucher_nonce = resolved_nonce
 
     packed_data = encode_packed(
         ["address", "bytes32", "uint256", "uint256", "uint256", "uint256", "uint256", "address"],
@@ -257,6 +307,7 @@ async def issue_settlement_voucher(
     escrow.final_cost_units = request.final_cost_units
     escrow.platform_fee_units = request.platform_fee_units
     escrow.voucher_signature = signature_hex
+    escrow.voucher_nonce = voucher_nonce
 
     await db.commit()
     await db.refresh(escrow)
@@ -306,7 +357,12 @@ async def issue_refund_voucher(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Active locked escrow for job {request.job_id} not found",
         )
-    if escrow.voucher_signature:
+    # Only an outstanding payout voucher that is STILL LIVE on-chain conflicts.
+    # Once governance has invalidated it the nonce has moved on, that signature
+    # can never be used, and a refund must remain possible — otherwise the lock
+    # is stranded until the deadline.
+    refund_nonce, refund_nonce_source = await resolve_voucher_nonce(escrow)
+    if escrow.voucher_signature and refund_nonce == int(escrow.voucher_nonce or 0):
         # A payout voucher is already outstanding for this escrow. Signing a
         # refund voucher as well would put two conflicting authorizations in the
         # wild for one lock; governance must invalidate the first on-chain.
@@ -321,7 +377,7 @@ async def issue_refund_voucher(
     job_bytes = bytes.fromhex(escrow.job_bytes32[2:])
     contract_addr = to_checksum_address(escrow.contract_address)
     voucher_expiry = int(ensure_aware(escrow.deadline).timestamp())
-    voucher_nonce = SETTLEMENT_VOUCHER_NONCE
+    voucher_nonce = refund_nonce
 
     packed_data = encode_packed(
         ["string", "address", "bytes32", "uint256", "uint256", "uint256", "address"],

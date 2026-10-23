@@ -34,6 +34,8 @@ const ISSUER = process.env.ISSUER || `http://${HOST}:${PORT}`;
 export const CLIENT_ID = process.env.IDP_CLIENT_ID || 'cc-enterprise-client';
 export const CLIENT_SECRET =
   process.env.IDP_CLIENT_SECRET || 'integration-client-secret-value-0123456789';
+export const CLIENT_ID_BASIC =
+  process.env.IDP_CLIENT_ID_BASIC || 'cc-enterprise-client-basic';
 const REDIRECT_URI = `${ISSUER}/cb`;
 const KID = 'integration-rsa-1';
 
@@ -57,6 +59,18 @@ const configuration = {
       // the token request body. That is RFC 6749 client_secret_post, which Okta,
       // Entra ID, Google and Auth0 all accept.
       token_endpoint_auth_method: 'client_secret_post',
+    },
+    {
+      // A SECOND client registered for client_secret_basic -- the OAuth 2.0
+      // DEFAULT, and the only method some IdPs will accept. The provider
+      // enforces this per client, so a Basic exchange against the
+      // client_secret_post client above would be rejected and vice versa.
+      client_id: CLIENT_ID_BASIC,
+      client_secret: CLIENT_SECRET,
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+      redirect_uris: [REDIRECT_URI],
+      token_endpoint_auth_method: 'client_secret_basic',
     },
   ],
   jwks: { keys: [privateJwk] },

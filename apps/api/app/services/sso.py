@@ -45,6 +45,7 @@ us; the connection must be registered for ``client_secret_post``.
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import hashlib
 import ipaddress
@@ -53,7 +54,7 @@ import secrets
 import socket
 import uuid
 from typing import Any, Protocol
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 import jwt
@@ -188,7 +189,11 @@ def assert_public_http_url(url: str) -> None:
 # ---------------------------------------------------------------------------
 class OidcClient(Protocol):
     async def exchange_code(
-        self, token_endpoint: str, data: dict[str, str]
+        self,
+        token_endpoint: str,
+        data: dict[str, str],
+        *,
+        basic_auth: tuple[str, str] | None = None,
     ) -> dict[str, Any]:  # pragma: no cover - protocol
         ...
 
@@ -205,10 +210,29 @@ class HttpxOidcClient:
     def __init__(self, timeout: float | None = None) -> None:
         self._timeout = timeout if timeout is not None else settings.WEBHOOK_TIMEOUT_SECONDS
 
-    async def exchange_code(self, token_endpoint: str, data: dict[str, str]) -> dict[str, Any]:
+    async def exchange_code(
+        self,
+        token_endpoint: str,
+        data: dict[str, str],
+        *,
+        basic_auth: tuple[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Redeem the authorization code.
+
+        ``basic_auth`` selects ``client_secret_basic`` — the OAuth 2.0 DEFAULT
+        client authentication method, which many IdPs register by default and
+        some accept exclusively. RFC 6749 section 2.3.1 requires the id and
+        secret to be form-urlencoded BEFORE base64, which is not what a plain
+        Basic header does, so the header is built explicitly.
+        """
         assert_public_http_url(token_endpoint)
+        headers: dict[str, str] = {}
+        if basic_auth is not None:
+            cid, csec = basic_auth
+            raw = f"{quote(cid, safe='')}:{quote(csec, safe='')}".encode("utf-8")
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(token_endpoint, data=data)
+            resp = await client.post(token_endpoint, data=data, headers=headers)
         if resp.status_code != 200:
             raise SsoError("sso_token_exchange_failed")
         return resp.json()

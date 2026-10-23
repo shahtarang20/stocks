@@ -579,3 +579,80 @@ async def test_unreachable_rpc_is_an_error_not_a_silent_pass(db_engine, chain_se
     classifications = {f["classification"] for f in _findings(run)}
     assert FINDING_ERROR in classifications
     assert FINDING_OK not in classifications, "an unreadable chain must never read as ok"
+
+
+# ---------------------------------------------------------------------------
+# Voucher nonce — the signer must mint at the CONTRACT's current value
+# ---------------------------------------------------------------------------
+def _scenario(live_chain, key: str) -> dict:
+    sc = live_chain["scenarios"].get(key)
+    if sc is None:
+        pytest.fail(f"scenario {key!r} missing from local-chain-scenario.mjs output")
+    return sc
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+def test_escrow_nonce_is_read_from_the_contract(chain_settings):
+    """The client reads escrowNonce() rather than assuming a value.
+
+    A fresh escrow sits at 0, which is exactly why a hardcoded 0 looked correct
+    in every test that never invalidated anything.
+    """
+    sc = _scenario(chain_settings, "locked_match")
+    client = _client(chain_settings)
+    import asyncio
+
+    nonce = asyncio.get_event_loop().run_until_complete(
+        client.fetch_escrow_nonce(
+            contract_address=chain_settings["settlement_address"],
+            job_bytes32=sc["job_bytes32"],
+            customer_address=sc["customer_address"],
+        )
+    )
+    assert nonce == 0, f"a freshly locked escrow should be at nonce 0, got {nonce}"
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+def test_invalidate_vouchers_advances_the_nonce_the_signer_must_use(chain_settings):
+    """invalidateVouchers() bumps the nonce, and we must follow it.
+
+    This is the failure the hardcoded nonce caused: governance invalidates a
+    bad voucher, the chain moves to 1, and a signer stuck at 0 mints vouchers
+    that revert with "Stale voucher nonce" forever. The escrow could then never
+    be settled -- the emergency lever was a one-way trap.
+    """
+    import asyncio
+
+    sc = _scenario(chain_settings, "orphan_locked")
+    client = _client(chain_settings)
+    addr = chain_settings["settlement_address"]
+
+    def nonce_now() -> int:
+        return asyncio.get_event_loop().run_until_complete(
+            client.fetch_escrow_nonce(
+                contract_address=addr,
+                job_bytes32=sc["job_bytes32"],
+                customer_address=sc["customer_address"],
+            )
+        )
+
+    before = nonce_now()
+
+    # Owner (hardhat account #0 deployed the contract) invalidates the voucher.
+    owner = _rpc(chain_settings, "eth_accounts", [])[0]
+    selector = "0x" + keccak(text="invalidateVouchers(address,bytes32)")[:4].hex()
+    cust = sc["customer_address"].lower().removeprefix("0x").rjust(64, "0")
+    job = sc["job_bytes32"].lower().removeprefix("0x").rjust(64, "0")
+    tx = _rpc(
+        chain_settings,
+        "eth_sendTransaction",
+        [{"from": owner, "to": addr, "data": selector + cust + job}],
+    )
+    receipt = _rpc(chain_settings, "eth_getTransactionReceipt", [tx])
+    assert receipt and receipt.get("status") == "0x1", f"invalidateVouchers reverted: {receipt}"
+
+    after = nonce_now()
+    assert after == before + 1, (
+        f"the contract advanced its nonce {before} -> {after}; a signer pinned "
+        "to a constant would now mint vouchers that revert on-chain"
+    )

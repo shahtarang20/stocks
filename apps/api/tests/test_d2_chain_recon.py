@@ -688,6 +688,9 @@ async def test_jsonrpc_client_reads_settled_amount_from_event_log():
     async def fake_rpc(method, params):
         if method == "eth_call":
             return _escrow_getter_return(locked=1000, settled=True)
+        if method == "eth_blockNumber":
+            # The log scan is chunked, so it asks for the chain head first.
+            return "0x1"
         topic = params[0]["topics"][0]
         if topic == JsonRpcChainClient.SETTLED_TOPIC:
             return [_settled_log(JOB_B32, 400, 100, 500)]
@@ -784,3 +787,59 @@ async def test_sweep_passes_customer_address_to_the_chain_client(db_engine):
     )
     await _run_reconciler(db_engine, client)
     assert client.fetch_customer_addresses == [escrow.customer_address]
+
+
+@pytest.mark.asyncio
+async def test_log_scan_is_chunked_and_covers_the_whole_range():
+    """A wide range is split into provider-sized chunks with NO gaps.
+
+    Hosted RPC providers cap the eth_getLogs span and either reject or silently
+    truncate anything wider. A truncated response looks exactly like "no
+    events", which in this module means reporting parity for escrows that were
+    never actually examined -- so the range must be walked explicitly.
+    """
+    from app.services.chain_reconciler import JsonRpcChainClient
+
+    client = JsonRpcChainClient("http://127.0.0.1:8545", from_block=0, chunk_blocks=1000)
+    seen: list[tuple[int, int]] = []
+
+    async def fake_rpc(method, params):
+        if method == "eth_blockNumber":
+            return hex(2500)
+        if method == "eth_getLogs":
+            seen.append((int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)))
+            return []
+        raise AssertionError(f"unexpected rpc {method}")
+
+    client._rpc = fake_rpc  # type: ignore[assignment]
+    await client._logs(CONTRACT, JsonRpcChainClient.SETTLED_TOPIC)
+
+    assert seen == [(0, 999), (1000, 1999), (2000, 2500)]
+    # Contiguous, inclusive, and ending exactly at the head: no gap can hide an
+    # escrow, and nothing is scanned twice.
+    assert seen[0][0] == 0
+    assert seen[-1][1] == 2500
+    for (_, prev_end), (next_start, _) in zip(seen, seen[1:]):
+        assert next_start == prev_end + 1
+
+
+@pytest.mark.asyncio
+async def test_log_scan_respects_a_configured_start_block():
+    """Production sets the contract's deploy block so the sweep need not walk
+    the entire chain history on every run."""
+    from app.services.chain_reconciler import JsonRpcChainClient
+
+    client = JsonRpcChainClient("http://127.0.0.1:8545", from_block=5000, chunk_blocks=1000)
+    seen: list[tuple[int, int]] = []
+
+    async def fake_rpc(method, params):
+        if method == "eth_blockNumber":
+            return hex(5500)
+        if method == "eth_getLogs":
+            seen.append((int(params[0]["fromBlock"], 16), int(params[0]["toBlock"], 16)))
+            return []
+        raise AssertionError(f"unexpected rpc {method}")
+
+    client._rpc = fake_rpc  # type: ignore[assignment]
+    await client._logs(CONTRACT, JsonRpcChainClient.SETTLED_TOPIC)
+    assert seen == [(5000, 5500)]

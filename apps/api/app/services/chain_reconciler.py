@@ -142,6 +142,9 @@ class JsonRpcChainClient:
     #: ``(address customer, address provider, uint256 lockedAmount,
     #:   uint256 deadline, uint256 nonce, bool settled)``.
     ESCROW_SELECTOR = _selector("escrows(bytes32)")
+    #: ``escrowNonce(address customer, bytes32 jobId) -> uint256`` — the value a
+    #: voucher MUST be signed at (ComputeSettlement.sol).
+    ESCROW_NONCE_SELECTOR = _selector("escrowNonce(address,bytes32)")
     #: Five parameters — jobId, provider, providerPayout, platformFee, customerRefund.
     SETTLED_TOPIC = _topic("JobSettled(bytes32,address,uint256,uint256,uint256)")
     REFUNDED_TOPIC = _topic("JobRefunded(bytes32,address,uint256)")
@@ -157,7 +160,8 @@ class JsonRpcChainClient:
         rpc_url: str | None = None,
         *,
         timeout_seconds: float = 10.0,
-        from_block: str = "0x0",
+        from_block: str | int | None = None,
+        chunk_blocks: int | None = None,
     ) -> None:
         url = (rpc_url if rpc_url is not None else settings.CHAIN_RPC_URL or "").strip()
         if not url:
@@ -166,7 +170,16 @@ class JsonRpcChainClient:
             raise ChainClientError("chain_rpc_url_scheme_not_allowed")
         self._url = url
         self._timeout = timeout_seconds
-        self._from_block = from_block
+        if from_block is None:
+            from_block = settings.CHAIN_LOG_FROM_BLOCK
+        self._from_block_int = (
+            int(from_block, 16) if isinstance(from_block, str) else int(from_block)
+        )
+        self._chunk_blocks = (
+            int(chunk_blocks)
+            if chunk_blocks is not None
+            else int(settings.CHAIN_LOG_CHUNK_BLOCKS)
+        )
         self._rpc_id = 0
         self._closure_cache: dict[str, dict[str, dict[str, Any]]] = {}
 
@@ -249,21 +262,45 @@ class JsonRpcChainClient:
         self._closure_cache[contract_address] = out
         return out
 
+    async def _latest_block(self) -> int:
+        result = await self._rpc("eth_blockNumber", [])
+        try:
+            return int(result, 16) if isinstance(result, str) else int(result)
+        except (TypeError, ValueError) as exc:
+            raise ChainClientError("blocknumber_malformed_response") from exc
+
     async def _logs(self, contract_address: str, topic: str) -> list[dict[str, Any]]:
-        logs = await self._rpc(
-            "eth_getLogs",
-            [
-                {
-                    "address": contract_address,
-                    "fromBlock": self._from_block,
-                    "toBlock": "latest",
-                    "topics": [topic],
-                }
-            ],
-        )
-        if not isinstance(logs, list):
-            raise ChainClientError("getlogs_malformed_response")
-        return logs
+        """Scan the full block range for ``topic``, in provider-safe chunks.
+
+        ``fromBlock: 0x0`` with ``toBlock: latest`` works on a short local chain
+        and is the one call hosted providers refuse or silently truncate. A
+        truncated response is indistinguishable from "no events", which here
+        would mean reporting parity for escrows nobody actually looked at — so
+        the range is walked explicitly and every chunk must succeed.
+        """
+        latest = await self._latest_block()
+        start = self._from_block_int
+        chunk = max(1, int(self._chunk_blocks))
+
+        out: list[dict[str, Any]] = []
+        while start <= latest:
+            end = min(start + chunk - 1, latest)
+            logs = await self._rpc(
+                "eth_getLogs",
+                [
+                    {
+                        "address": contract_address,
+                        "fromBlock": hex(start),
+                        "toBlock": hex(end),
+                        "topics": [topic],
+                    }
+                ],
+            )
+            if not isinstance(logs, list):
+                raise ChainClientError("getlogs_malformed_response")
+            out.extend(logs)
+            start = end + 1
+        return out
 
     async def fetch_escrow(
         self, *, contract_address: str, job_bytes32: str, customer_address: str | None = None
@@ -305,6 +342,31 @@ class JsonRpcChainClient:
             settled_amount_units=settled_units,
             refunded_amount_units=refunded_units,
         )
+
+    async def fetch_escrow_nonce(
+        self, *, contract_address: str, job_bytes32: str, customer_address: str
+    ) -> int:
+        """Current voucher nonce for an escrow, straight from the contract.
+
+        ``ComputeSettlement.settleJob`` accepts a voucher ONLY at this value, so
+        the signer must mint at whatever the chain currently says — not at a
+        value we assumed. Raises :class:`ChainClientError` rather than returning
+        a default, because guessing here produces a voucher that reverts.
+        """
+        addr = (customer_address or "").strip().lower()
+        if addr.startswith("0x"):
+            addr = addr[2:]
+        if len(addr) != 40:
+            raise ChainClientError("escrow_nonce_customer_address_invalid")
+        job_hex = _norm_b32(job_bytes32)[2:].rjust(64, "0")
+        data = self.ESCROW_NONCE_SELECTOR + addr.rjust(64, "0") + job_hex
+        result = await self._rpc(
+            "eth_call", [{"to": contract_address, "data": data}, "latest"]
+        )
+        words = self._words(result)
+        if not words:
+            raise ChainClientError("escrow_nonce_decode_failed")
+        return words[0]
 
     async def list_escrow_job_ids(self, *, contract_address: str) -> list[str]:
         """Every bytes32 job id the contract has emitted an escrow event for.

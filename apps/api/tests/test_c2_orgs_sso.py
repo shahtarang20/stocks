@@ -376,7 +376,13 @@ class FakeIdp:
         )
 
     # --- OidcClient protocol ------------------------------------------------
-    async def exchange_code(self, token_endpoint: str, data: dict[str, str]) -> dict[str, Any]:
+    async def exchange_code(
+        self,
+        token_endpoint: str,
+        data: dict[str, str],
+        *,
+        basic_auth: tuple[str, str] | None = None,
+    ) -> dict[str, Any]:
         self.exchange_calls.append(dict(data))
         assert data["grant_type"] == "authorization_code"
         assert data["client_secret"] == IDP_SECRET, "resolver must supply the live secret"
@@ -807,3 +813,97 @@ async def test_oidc_refuses_to_federate_a_platform_administrator(client, sso_env
     cb = await _complete_callback(client, conn_id, idp)
     assert cb.status_code == 403, cb.text
     assert cb.json()["detail"] == "sso_privileged_account_refused"
+
+
+# ---------------------------------------------------------------------------
+# client_secret_basic — RFC 6749 §2.3.1 wire format
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_client_secret_basic_sends_an_rfc_encoded_authorization_header(monkeypatch):
+    """Basic auth must put the credentials in the header, correctly encoded.
+
+    RFC 6749 2.3.1 requires the client id and secret to be form-urlencoded
+    BEFORE base64 -- which is NOT what a naive base64("id:secret") produces for
+    any secret containing reserved characters -- and forbids also sending the
+    secret in the body.
+
+    This is asserted at the wire level on purpose: the certified IdP used by the
+    integration suite happily accepts a body-posted secret from a
+    client_secret_basic client, so a round trip against it would pass even with
+    this feature reverted.
+    """
+    import base64 as _b64
+    from urllib.parse import quote as _quote
+
+    import httpx as _httpx
+
+    from app.services.sso import HttpxOidcClient, assert_public_http_url
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"id_token": "stub"}
+
+    async def fake_post(self, url, data=None, headers=None, **kw):
+        captured["url"] = url
+        captured["data"] = data or {}
+        captured["headers"] = headers or {}
+        return _Resp()
+
+    monkeypatch.setattr(_httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr("app.services.sso.assert_public_http_url", lambda url: None)
+
+    client_id = "cc client/id"          # characters that MUST be percent-encoded
+    client_secret = "p@ss:word with spaces"
+    await HttpxOidcClient().exchange_code(
+        "https://idp.example.com/token",
+        {"grant_type": "authorization_code", "code": "abc", "client_id": client_id},
+        basic_auth=(client_id, client_secret),
+    )
+
+    expected = _b64.b64encode(
+        f"{_quote(client_id, safe='')}:{_quote(client_secret, safe='')}".encode()
+    ).decode()
+    assert captured["headers"].get("Authorization") == f"Basic {expected}"
+    # A naive encoding would differ, so this really pins the RFC behaviour.
+    assert captured["headers"]["Authorization"] != "Basic " + _b64.b64encode(
+        f"{client_id}:{client_secret}".encode()
+    ).decode()
+    # And the secret must NOT be duplicated in the body.
+    assert "client_secret" not in captured["data"]
+
+
+@pytest.mark.asyncio
+async def test_client_secret_post_keeps_the_secret_in_the_body(monkeypatch):
+    """The original behaviour still works and sends no Authorization header."""
+    import httpx as _httpx
+
+    from app.services.sso import HttpxOidcClient
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"id_token": "stub"}
+
+    async def fake_post(self, url, data=None, headers=None, **kw):
+        captured["data"] = data or {}
+        captured["headers"] = headers or {}
+        return _Resp()
+
+    monkeypatch.setattr(_httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr("app.services.sso.assert_public_http_url", lambda url: None)
+
+    await HttpxOidcClient().exchange_code(
+        "https://idp.example.com/token",
+        {"grant_type": "authorization_code", "client_secret": "s3cret"},
+    )
+    assert "Authorization" not in captured["headers"]
+    assert captured["data"]["client_secret"] == "s3cret"

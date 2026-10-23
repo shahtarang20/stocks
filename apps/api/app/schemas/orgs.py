@@ -93,6 +93,13 @@ class SsoConnectionCreate(BaseModel):
     jwks_uri: str = Field(min_length=1, max_length=1024)
     redirect_uri: str = Field(min_length=1, max_length=1024)
     scopes: list[str] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    #: How the client authenticates at the token endpoint. ``client_secret_basic``
+    #: is the OAuth 2.0 default and the only method some IdPs accept; the original
+    #: implementation could only do ``client_secret_post``.
+    token_endpoint_auth_method: str = Field(
+        default="client_secret_post",
+        pattern="^(client_secret_post|client_secret_basic)$",
+    )
 
 
 class SsoConnectionUpdate(BaseModel):
@@ -103,6 +110,9 @@ class SsoConnectionUpdate(BaseModel):
     jwks_uri: str | None = Field(default=None, max_length=1024)
     redirect_uri: str | None = Field(default=None, max_length=1024)
     scopes: list[str] | None = None
+    token_endpoint_auth_method: str | None = Field(
+        default=None, pattern="^(client_secret_post|client_secret_basic)$"
+    )
     active: bool | None = None
 
 

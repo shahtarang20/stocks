@@ -41,6 +41,7 @@ from app.schemas.admin import (
 )
 from app.schemas.auth import CurrentUser
 from app.schemas.marketplace import money_str
+from app.schemas.provider import MachineOut
 from app.schemas.billing import (
     DisputeResolve,
     PayoutOut,
@@ -52,6 +53,7 @@ from app.schemas.billing import (
 from app.services import billing as billing_svc
 from app.services import ledger
 from app.services import reputation as reputation_svc
+from app.services.provider import _machine_query, shape_machine
 from app.services.audit import record_audit
 from app.services.hooks import safe_hook
 
@@ -463,6 +465,27 @@ async def list_admin_jobs(
         )
         for j in jobs
     ]
+
+
+@money_router.get("/machines", response_model=list[MachineOut])
+async def list_admin_machines(
+    limit: int = 200,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> list[MachineOut]:
+    """List every provider machine on the network (the telemetry console's picker).
+
+    /provider/machines is scoped to the caller's own provider profile, so an
+    administrator who is not also a provider got a 403 there and could never
+    select a machine to inspect.
+    """
+    result = await db.execute(
+        _machine_query()
+        .where(ProviderMachine.status != "deregistered")
+        .order_by(ProviderMachine.created_at.desc())
+        .limit(min(limit, 500))
+    )
+    return [shape_machine(m) for m in result.scalars().all()]
 
 
 # ---------------------------------------------------------------------------

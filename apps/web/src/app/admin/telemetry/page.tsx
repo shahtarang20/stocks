@@ -69,7 +69,7 @@ export default function AdminTelemetryPage() {
   const machinesQuery = useQuery({
     queryKey: ["admin", "machines-list"],
     enabled: Boolean(accessToken),
-    queryFn: () => api.listMachines(token),
+    queryFn: () => api.listAdminMachines(token),
     refetchInterval: 30000,
   });
 

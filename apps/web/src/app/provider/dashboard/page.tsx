@@ -160,13 +160,13 @@ export default function ProviderDashboardPage() {
               <CardContent className="flex items-start justify-between p-5">
                 <div>
                   <p className="text-sm text-muted-foreground">Available for payout</p>
-                  <p className="mt-1 font-mono text-2xl font-bold">
+                  <div className="mt-1 font-mono text-2xl font-bold">
                     {earningsQuery.isLoading ? (
                       <Skeleton className="h-8 w-24" />
                     ) : (
                       `${earnings?.available ?? "0.00"} ${earnings?.currency ?? "USDC_CREDITS"}`
                     )}
-                  </p>
+                  </div>
                   <Badge variant="success" className="mt-2 text-xs">
                     settled
                   </Badge>
@@ -181,13 +181,13 @@ export default function ProviderDashboardPage() {
               <CardContent className="flex items-start justify-between p-5">
                 <div>
                   <p className="text-sm text-muted-foreground">Lifetime earned</p>
-                  <p className="mt-1 font-mono text-2xl font-bold">
+                  <div className="mt-1 font-mono text-2xl font-bold">
                     {earningsQuery.isLoading ? (
                       <Skeleton className="h-8 w-24" />
                     ) : (
                       `${earnings?.lifetime ?? "0.00"} ${earnings?.currency ?? "USDC_CREDITS"}`
                     )}
-                  </p>
+                  </div>
                   <Badge variant="neutral" className="mt-2 text-xs">
                     all-time
                   </Badge>

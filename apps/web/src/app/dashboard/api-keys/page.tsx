@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -208,7 +209,12 @@ export default function ApiKeysPage() {
               <TableBody>
                 {keys.map((key) => (
                   <TableRow key={key.id}>
-                    <TableCell className="font-medium">{key.name}</TableCell>
+                    <TableCell className="font-medium">
+                      {key.name}
+                      {key.revoked_at ? (
+                        <Badge variant="outline" className="ml-2">Revoked</Badge>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="font-mono text-xs">
                       {key.prefix}••••••••
                     </TableCell>
@@ -219,14 +225,16 @@ export default function ApiKeysPage() {
                       {key.last_used_at ? formatRelativeTime(key.last_used_at) : "Never"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setRevokeTarget(key)}
-                        className="text-muted-foreground hover:text-danger"
-                      >
-                        <Trash2 className="h-4 w-4 mr-1" /> Revoke
-                      </Button>
+                      {key.revoked_at ? null : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setRevokeTarget(key)}
+                          className="text-muted-foreground hover:text-danger"
+                        >
+                          <Trash2 className="h-4 w-4 mr-1" /> Revoke
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

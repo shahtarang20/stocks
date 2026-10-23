@@ -262,3 +262,87 @@ async def test_concurrent_first_recompute_does_not_poison_the_transaction(pg_ses
             .where(ProviderReputation.provider_id == provider_id)
         )
     assert count == 1, f"expected exactly one reputation row, found {count}"
+
+
+# ---------------------------------------------------------------------------
+# ledger.get_or_create_customer_account — a new user's first page load
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+@pytest.mark.asyncio
+async def test_concurrent_first_billing_calls_create_one_account(pg_sessions):
+    """The billing page fires balance and ledger requests together. For a user
+    with no account yet each saw "none", each INSERTed, and the loser tripped
+    uq_billing_accounts_owner_type -> HTTP 500 on the very first visit."""
+    from sqlalchemy import func, select
+
+    from app.models.billing import BillingAccount
+    from app.services import ledger
+
+    sm = pg_sessions
+    user_id = await _mk_user(sm, f"first-{uuid.uuid4().hex[:8]}@pg.test")
+
+    gate = asyncio.Event()
+
+    async def first_call():
+        async with sm() as db:
+            await gate.wait()
+            account = await ledger.get_or_create_customer_account(db, user_id)
+            await asyncio.sleep(0.2)  # hold the txn open so the callers overlap
+            await db.commit()
+            return account.id
+
+    tasks = [asyncio.create_task(first_call()) for _ in range(6)]
+    await asyncio.sleep(0.2)
+    gate.set()
+    ids = await asyncio.gather(*tasks)  # an IntegrityError here is the bug
+
+    assert len(set(ids)) == 1, f"callers saw different accounts: {set(ids)}"
+    async with sm() as db:
+        n = await db.scalar(
+            select(func.count())
+            .select_from(BillingAccount)
+            .where(
+                BillingAccount.owner_type == "customer",
+                BillingAccount.owner_id == user_id,
+            )
+        )
+    assert n == 1, f"{n} customer accounts created for one user"
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+@pytest.mark.asyncio
+async def test_concurrent_first_provider_earnings_calls_create_one_account(pg_sessions):
+    """Same first-touch race on the provider side (earnings + payouts pages)."""
+    from sqlalchemy import func, select
+
+    from app.models.billing import BillingAccount
+    from app.services import ledger
+
+    sm = pg_sessions
+    provider_id = uuid.uuid4()
+    gate = asyncio.Event()
+
+    async def first_call():
+        async with sm() as db:
+            await gate.wait()
+            account = await ledger.get_provider_account(db, provider_id)
+            await asyncio.sleep(0.2)
+            await db.commit()
+            return account.id
+
+    tasks = [asyncio.create_task(first_call()) for _ in range(6)]
+    await asyncio.sleep(0.2)
+    gate.set()
+    ids = await asyncio.gather(*tasks)
+
+    assert len(set(ids)) == 1
+    async with sm() as db:
+        n = await db.scalar(
+            select(func.count())
+            .select_from(BillingAccount)
+            .where(
+                BillingAccount.owner_type == "provider",
+                BillingAccount.owner_id == provider_id,
+            )
+        )
+    assert n == 1

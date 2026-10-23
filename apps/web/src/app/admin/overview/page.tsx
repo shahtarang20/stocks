@@ -93,9 +93,9 @@ export default function AdminOverviewPage() {
               <CardContent className="flex items-start justify-between p-5">
                 <div>
                   <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  <p className="mt-1 text-2xl font-bold tracking-tight">
+                  <div className="mt-1 text-2xl font-bold tracking-tight">
                     {statsQuery.isLoading ? <Skeleton className="h-8 w-16" /> : stat.value}
-                  </p>
+                  </div>
                   <Badge variant="success" className="mt-2 text-xs">{stat.note}</Badge>
                 </div>
                 <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">

@@ -673,6 +673,7 @@ export interface ApiKey {
   prefix: string;
   created_at: string;
   last_used_at?: string | null;
+  revoked_at?: string | null;
   [key: string]: unknown;
 }
 
@@ -1124,6 +1125,14 @@ export const api = {
     });
   },
 
+  /** GET /v1/admin/machines — every machine on the network (administrator only). */
+  listAdminMachines(accessToken: string): Promise<Machine[]> {
+    return request<Machine[]>("/v1/admin/machines", {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
   /** GET /provider/machines/{id} — single owned machine (+ last_health). */
   getMachine(accessToken: string, id: string): Promise<Machine> {
     return request<Machine>(`/provider/machines/${id}`, {
@@ -1526,7 +1535,7 @@ export const api = {
 
   // --- Projects & API keys (Phase 7) ---
   createProject(accessToken: string, name: string, description?: string): Promise<Project> {
-    return request<Project>("/v1/projects", {
+    return request<Project>("/projects", {
       method: "POST",
       token: accessToken,
       body: { name, description },
@@ -1534,21 +1543,21 @@ export const api = {
   },
 
   deleteProject(accessToken: string, projectId: string): Promise<void> {
-    return request<void>(`/v1/projects/${projectId}`, {
+    return request<void>(`/projects/${projectId}`, {
       method: "DELETE",
       token: accessToken,
     });
   },
 
   listApiKeys(accessToken: string, projectId: string): Promise<ApiKey[]> {
-    return request<ApiKey[]>(`/v1/projects/${projectId}/api-keys`, {
+    return request<ApiKey[]>(`/projects/${projectId}/api-keys`, {
       method: "GET",
       token: accessToken,
     });
   },
 
   createApiKey(accessToken: string, projectId: string, name: string): Promise<ApiKeyCreated> {
-    return request<ApiKeyCreated>(`/v1/projects/${projectId}/api-keys`, {
+    return request<ApiKeyCreated>(`/projects/${projectId}/api-keys`, {
       method: "POST",
       token: accessToken,
       body: { name },
@@ -1556,7 +1565,7 @@ export const api = {
   },
 
   revokeApiKey(accessToken: string, projectId: string, keyId: string): Promise<void> {
-    return request<void>(`/v1/projects/${projectId}/api-keys/${keyId}`, {
+    return request<void>(`/projects/${projectId}/api-keys/${keyId}`, {
       method: "DELETE",
       token: accessToken,
     });

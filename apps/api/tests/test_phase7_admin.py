@@ -225,3 +225,29 @@ async def test_admin_platform_stats(client: AsyncClient, admin_client: dict):
     assert "total_jobs" in stats
     assert "success_rate" in stats
     assert "total_volume" in stats
+
+
+@pytest.mark.asyncio
+async def test_admin_lists_all_machines_without_being_a_provider(
+    client: AsyncClient, admin_client: dict, customer_client: dict
+):
+    """/provider/machines is scoped to the caller's own provider profile, so the
+    admin telemetry picker 403'd for every administrator who is not a provider.
+    /v1/admin/machines is the network-wide list and is administrator-only."""
+    from tests.test_provider_phase2 import become_provider, enroll_machine, mint_token
+
+    prov = await become_provider(client, "machine-owner-phase7@example.com")
+    token = await mint_token(client, prov)
+    enrolled = await enroll_machine(client, token["enrollment_token"], hostname="admin-view-1")
+
+    admin_headers = auth_headers(admin_client["access_token"])
+    assert (await client.get("/provider/machines", headers=admin_headers)).status_code == 403
+
+    resp = await client.get("/v1/admin/machines", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    assert enrolled["machine_id"] in [m["machine_id"] for m in resp.json()]
+
+    denied = await client.get(
+        "/v1/admin/machines", headers=auth_headers(customer_client["access_token"])
+    )
+    assert denied.status_code == 403

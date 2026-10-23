@@ -264,6 +264,20 @@ async def get_provider_account(db: AsyncSession, provider_id: uuid.UUID) -> Bill
         )
     ).scalar_one_or_none()
     if account is None:
+        # Same first-touch race as get_or_create_customer_account: a new
+        # provider's earnings and payouts pages load together, both saw "none"
+        # and both INSERTed. Serialize, then look again.
+        await _advisory_xact_lock(db, f"provider_account:{provider_id}")
+        account = (
+            await db.execute(
+                select(BillingAccount).where(
+                    BillingAccount.owner_type == "provider",
+                    BillingAccount.owner_id == provider_id,
+                    BillingAccount.type == "provider_earnings",
+                )
+            )
+        ).scalar_one_or_none()
+    if account is None:
         account = BillingAccount(
             owner_type="provider",
             owner_id=provider_id,
@@ -296,10 +310,15 @@ async def lock_customer(db: AsyncSession, user_id: uuid.UUID) -> None:
     submits by the same customer cannot interleave account creation with the
     scheduler's row locks and deadlock. Postgres only; no-op elsewhere (SQLite).
     """
+    await _advisory_xact_lock(db, f"customer:{user_id}")
+
+
+async def _advisory_xact_lock(db: AsyncSession, key: str) -> None:
+    """Transaction-scoped advisory lock on ``key``. Postgres only; no-op elsewhere."""
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         await db.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
-            {"k": f"customer:{user_id}"},
+            {"k": key},
         )
 
 
@@ -308,6 +327,16 @@ async def get_or_create_customer_account(
 ) -> BillingAccount:
     """Return the customer's credits account, creating it (and granting the signup
     promo credits via a credit_purchase from external) on first interaction."""
+    account = await _get_customer_account_row(db, user_id)
+    if account is not None:
+        return account
+
+    # A new customer's first page load fires several billing calls at once
+    # (balance and ledger). Without serializing here, each saw "no account",
+    # each tried to INSERT, and the loser hit uq_billing_accounts_owner_type and
+    # surfaced as a 500. Take the per-customer lock, then look again: the loser
+    # waits for the winner's commit and finds the row instead of inserting.
+    await lock_customer(db, user_id)
     account = await _get_customer_account_row(db, user_id)
     if account is not None:
         return account

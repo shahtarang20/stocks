@@ -23,7 +23,7 @@ dependencies = [
     # `sso_id_token_key_unsupported`, which means SSO is simply broken against
     # every real IdP: Okta, Entra ID, Google and Auth0 all sign RS256.
     "cryptography>=43.0.0",
-    "redis==5.2.1",
+    "redis==8.1.0",
     "email-validator==2.2.0",
     "python-multipart==0.0.20",
     "eth-account>=0.14.0",

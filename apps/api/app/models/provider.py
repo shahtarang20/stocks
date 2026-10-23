@@ -72,6 +72,17 @@ class ProviderMachine(Base, TimestampMixin):
     max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     region: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # --- Phase B: operator-controlled market policy ---
+    # Hard price floor: the marketplace must never quote this machine below it.
+    floor_price_per_hour: Mapped[decimal.Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    # Recurring windows this machine accepts work in, e.g.
+    # [{"days": [0,1,2,3,4], "start": "18:00", "end": "06:00", "tz": "UTC"}].
+    availability_windows: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Optional whitelist of model version tags; NULL/empty means "any approved".
+    model_allowlist: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # Machine credential material. ``signing_key`` is the HMAC key (a secret at
     # rest — see app.core.machine_auth for the trust decision). ``secret_hash``
     # is SHA-256 of the issued ``machine_secret`` for audit parity. The raw

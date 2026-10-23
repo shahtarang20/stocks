@@ -15,9 +15,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.base import utcnow
+from app.db.base import ensure_aware, utcnow
 from app.models.billing import LedgerTransaction
 from app.models.jobs import Job
+from app.models.reconciliation import ChainReconciliationRun
 from app.models.settlement import (
     EscrowStatus,
     OnChainEscrow,
@@ -31,9 +32,11 @@ from app.schemas.settlement import (
     ConfirmSettlementTxRequest,
     ContractDeploymentInfo,
     CreateEscrowLockRequest,
+    IssueRefundVoucherRequest,
     IssueSettlementVoucherRequest,
     OnChainReconciliationSummary,
     RecordOnChainTxRequest,
+    RefundVoucherResponse,
     SettlementVoucherResponse,
 )
 
@@ -159,12 +162,32 @@ async def create_escrow_lock(
     return escrow
 
 
+# ComputeSettlement.sol binds every voucher to the escrow's current nonce so a signed voucher
+# is single-use. A fresh escrow starts at nonce 0 and the value only advances when a voucher is
+# consumed on-chain or when governance calls invalidateVouchers(). Since this service refuses to
+# mint a second voucher for an escrow (see below), the nonce of every voucher it signs is 0.
+# NOTE: re-issuing after a governance invalidation would require persisting the nonce; that is a
+# deliberate follow-up, not something this function silently guesses at.
+SETTLEMENT_VOUCHER_NONCE = 0
+
+
 async def issue_settlement_voucher(
     db: AsyncSession,
     request: IssueSettlementVoucherRequest,
     current_user: User,
 ) -> SettlementVoucherResponse:
-    """Sign an off-chain cryptographic voucher authorizing provider payout."""
+    """Sign an off-chain cryptographic voucher authorizing provider payout.
+
+    The signed payload must match ``ComputeSettlement.settlementVoucherHash`` byte for byte:
+    ``abi.encodePacked(customer, jobId, finalCost, platformFee, nonce, expiry, chainId, contract)``.
+    ``nonce`` makes the voucher single-use and ``expiry`` time-boxes it, so a voucher that was
+    signed but never broadcast cannot be presented years later against a still-open escrow.
+    The expiry is the escrow deadline — past it the customer can self-refund on-chain anyway, so
+    honoring a payout voucher beyond that point would only create a race with their refund.
+    Callers reconstruct both values without extra API fields: ``expiry`` is the escrow ``deadline``
+    returned by ``GET /v1/settlement/escrows/{job_id}`` and ``nonce`` is readable on-chain via
+    ``escrowNonce(customer, jobId)``.
+    """
     escrow = await db.scalar(
         select(OnChainEscrow).where(
             OnChainEscrow.job_id == request.job_id,
@@ -206,13 +229,19 @@ async def issue_settlement_voucher(
     job_bytes = bytes.fromhex(escrow.job_bytes32[2:])
     contract_addr = to_checksum_address(escrow.contract_address)
 
+    deadline_aware = ensure_aware(escrow.deadline)
+    voucher_expiry = int(deadline_aware.timestamp())
+    voucher_nonce = SETTLEMENT_VOUCHER_NONCE
+
     packed_data = encode_packed(
-        ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
+        ["address", "bytes32", "uint256", "uint256", "uint256", "uint256", "uint256", "address"],
         [
             customer_addr,
             job_bytes,
             final_cost_int,
             platform_fee_int,
+            voucher_nonce,
+            voucher_expiry,
             escrow.chain_id,
             contract_addr,
         ],
@@ -242,6 +271,85 @@ async def issue_settlement_voucher(
         contract_address=escrow.contract_address,
         signer_address=acct.address,
         signature=signature_hex,
+    )
+
+
+async def issue_refund_voucher(
+    db: AsyncSession,
+    request: IssueRefundVoucherRequest,
+    current_user: User,
+) -> RefundVoucherResponse:
+    """Sign the EARLY-refund voucher ``ComputeSettlement.refundJob`` requires.
+
+    WHY this exists: before the escrow deadline, ``refundJob`` accepts no
+    unsigned call — it demands a platform signature over ``refundVoucherHash``.
+    Nothing in the API produced one, so a job cancelled a minute after
+    ``lockBudget`` left the customer's whole ``maxCost`` escrowed for the entire
+    deadline window (up to days) even though both parties agreed it was over,
+    while ``POST /v1/settlement/refund`` happily marked the DB row REFUNDED —
+    genuine DB/chain divergence.
+
+    The signed payload must match ``ComputeSettlement.refundVoucherHash`` byte
+    for byte: ``abi.encodePacked("REFUND", customer, jobId, nonce, expiry,
+    chainId, contract)``. ``expiry`` is the escrow deadline for the same reason
+    as the settlement voucher: past it the customer can self-refund on-chain
+    with no voucher at all.
+    """
+    escrow = await db.scalar(
+        select(OnChainEscrow).where(
+            OnChainEscrow.job_id == request.job_id,
+            OnChainEscrow.status == EscrowStatus.LOCKED.value,
+        )
+    )
+    if not escrow:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Active locked escrow for job {request.job_id} not found",
+        )
+    if escrow.voucher_signature:
+        # A payout voucher is already outstanding for this escrow. Signing a
+        # refund voucher as well would put two conflicting authorizations in the
+        # wild for one lock; governance must invalidate the first on-chain.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A settlement voucher has already been issued for this escrow",
+        )
+
+    customer_addr = to_checksum_address(
+        escrow.customer_address or "0x0000000000000000000000000000000000000000"
+    )
+    job_bytes = bytes.fromhex(escrow.job_bytes32[2:])
+    contract_addr = to_checksum_address(escrow.contract_address)
+    voucher_expiry = int(ensure_aware(escrow.deadline).timestamp())
+    voucher_nonce = SETTLEMENT_VOUCHER_NONCE
+
+    packed_data = encode_packed(
+        ["string", "address", "bytes32", "uint256", "uint256", "uint256", "address"],
+        [
+            "REFUND",
+            customer_addr,
+            job_bytes,
+            voucher_nonce,
+            voucher_expiry,
+            escrow.chain_id,
+            contract_addr,
+        ],
+    )
+    signable = encode_defunct(primitive=keccak(packed_data))
+    acct = Account.from_key(settings.PLATFORM_SIGNER_PRIVATE_KEY)
+    signed = acct.sign_message(signable)
+
+    return RefundVoucherResponse(
+        job_id=escrow.job_id,
+        job_bytes32=escrow.job_bytes32,
+        customer_address=customer_addr,
+        refund_amount_units=str(escrow.locked_amount_units),
+        nonce=voucher_nonce,
+        expiry=voucher_expiry,
+        chain_id=escrow.chain_id,
+        contract_address=escrow.contract_address,
+        signer_address=acct.address,
+        signature="0x" + signed.signature.hex(),
     )
 
 
@@ -511,7 +619,24 @@ async def get_reconciliation_summary(db: AsyncSession) -> OnChainReconciliationS
                 diff = abs(locked_amt - int(tx.amount_units))
                 imbalance += diff
 
-    ledger_parity = (unreconciled_escrows == 0 and imbalance == 0)
+    # HONESTY: everything above is a DB-vs-DB comparison. create_escrow_lock
+    # writes the escrow row AND its matching LOCK transaction from the SAME
+    # request body, so the LOCKED branch above compares a number against itself
+    # and can never disagree. Calling that "verified" would report a fabricated
+    # treasury balance as proven. Parity is therefore only claimed when the most
+    # recent REAL chain sweep (ChainReconciliationRun, which reads the contract
+    # over JSON-RPC) says ok — the internal consistency check is a necessary
+    # condition, never a sufficient one.
+    internally_consistent = unreconciled_escrows == 0 and imbalance == 0
+    last_run = await db.scalar(
+        select(ChainReconciliationRun)
+        .where(ChainReconciliationRun.chain_id == settings.SETTLEMENT_CHAIN_ID)
+        .order_by(ChainReconciliationRun.started_at.desc())
+        .limit(1)
+    )
+    ledger_parity = bool(
+        internally_consistent and last_run is not None and last_run.ok
+    )
 
     return OnChainReconciliationSummary(
         total_escrows=total_escrows,

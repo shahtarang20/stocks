@@ -19,6 +19,7 @@ from app.db.base import ensure_aware, utcnow
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user, require_verified_user
 from app.models.jobs import Artifact, Job, JobEvent, JobLogMetadata
+from app.models.org import OrganizationMember, Project
 from app.schemas.auth import CurrentUser
 from app.schemas.jobs import (
     ArtifactDownloadOut,
@@ -33,9 +34,10 @@ from app.schemas.marketplace import money_str
 from app.services import billing
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
-from app.services.ledger import InsufficientFunds, lock_customer
+from app.services.ledger import InsufficientFunds, lock_customer, to_minor
 from app.services.leases import recover_expired_leases, release_job_reservation
 from app.services.scheduler import JobValidationError, schedule_job, validate_job
+from app.services.spend_limits import SpendLimitExceeded, spend_guard
 from app.services.storage import get_store, grant_expiry, make_download_grant
 
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
@@ -43,6 +45,9 @@ router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 _JOB_NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 _ARTIFACT_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found"
+)
+_PROJECT_NOT_FOUND = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
 )
 
 
@@ -83,11 +88,49 @@ def shape_job(job: Job) -> JobOut:
     )
 
 
-async def _get_own_job(db: AsyncSession, customer_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:
-    result = await db.execute(
-        select(Job).where(Job.id == job_id, Job.customer_id == customer_id)
-    )
+async def _get_own_job(
+    db: AsyncSession, customer_id: uuid.UUID, job_id: uuid.UUID, *, lock: bool = False
+) -> Job | None:
+    stmt = select(Job).where(Job.id == job_id, Job.customer_id == customer_id)
+    if lock:
+        # Serializes a cancel against the agent's result POST, which reads the
+        # same status to decide between releasing and capturing the hold.
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def _assert_project_accessible(
+    db: AsyncSession, project_id: uuid.UUID | None, user: CurrentUser
+) -> None:
+    """404 unless the caller owns the project or belongs to its org.
+
+    WHY: ``project_id`` is the scope key for project spend limits and for
+    project-scoped reporting. Accepting an unvalidated id let any caller attach
+    their jobs to someone else's budget envelope (polluting it) or to an id that
+    exists only to dodge a scope they are actually subject to.
+    """
+    if project_id is None:
+        return
+    project = (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        raise _PROJECT_NOT_FOUND
+    if project.owner_id == user.id:
+        return
+    if project.org_id is not None:
+        member = (
+            await db.execute(
+                select(OrganizationMember.org_id).where(
+                    OrganizationMember.org_id == project.org_id,
+                    OrganizationMember.user_id == user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if member is not None:
+            return
+    raise _PROJECT_NOT_FOUND
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
@@ -111,6 +154,8 @@ async def create_job(
         prior = existing.scalar_one_or_none()
         if prior is not None:
             return shape_job(prior)
+
+    await _assert_project_accessible(db, body.project_id, current)
 
     retry_policy = body.retry_policy.model_dump() if body.retry_policy else {"max_retries": 0}
     job = Job(
@@ -161,8 +206,31 @@ async def create_job(
     # the job QUEUED (retried later by the sweeper / run_scheduler). The scheduler
     # HOLDs the authorized amount before reserving capacity; an insufficient balance
     # surfaces as 402 insufficient_credits and the job -> FAILED (no capacity held).
+    # Authorized ceiling for the budget check. ``max_cost`` is the customer's own
+    # hard ceiling when set; otherwise 0 still blocks a submit by an already-capped
+    # customer, and the post-spend alert step inside the guard sees the real figure.
+    authorized_minor = to_minor(job.max_cost) if job.max_cost is not None else 0
     try:
-        await schedule_job(db, job)
+        async with spend_guard(db, current.id, job.project_id, authorized_minor):
+            await schedule_job(db, job)
+            # MUST commit inside the guard: the per-customer gate is released at
+            # block exit, so the next waiter has to see this spend in the ledger
+            # or two concurrent submits could both pass the same cap.
+            await db.commit()
+    except SpendLimitExceeded as exc:
+        # Raised by the guard BEFORE it yields, so nothing was written inside the
+        # guarded block and the session is clean — no rollback (which would also
+        # discard the job row and its FSM history we are about to persist).
+        await fsm.transition(db, job, fsm.FAILED, reason="spend_limit_exceeded", actor="system")
+        job.error_code = "spend_limit_exceeded"
+        job.error_message = "job would exceed a configured spend limit"
+        await record_audit(
+            db, action="job.fail", outcome="failure", actor_user_id=current.id,
+            ip=client_ip(request), resource_type="job", resource_id=str(job.id),
+            reason=f"spend_limit:{exc.scope}/{exc.period}",
+        )
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="spend_limit_exceeded")
     except InsufficientFunds:
         await fsm.transition(db, job, fsm.FAILED, reason="insufficient_credits", actor="system")
         job.error_code = "insufficient_credits"
@@ -315,7 +383,7 @@ async def cancel_job(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JobCancelOut:
-    job = await _get_own_job(db, current.id, job_id)
+    job = await _get_own_job(db, current.id, job_id, lock=True)
     if job is None:
         raise _JOB_NOT_FOUND
 

@@ -29,6 +29,8 @@ from app.models.marketplace import Quote, ResourceReservation
 from app.models.provider import ProviderMachine
 from app.services import ledger
 from app.services.pricing import compute_breakdown, get_active_fee_rate
+from app.services.spend_limits import check_spend_allowed
+from app.services.verification import is_unbilled_job
 
 _CENTS = decimal.Decimal("0.01")
 
@@ -98,8 +100,29 @@ async def reserve_for_job(db: AsyncSession, job: Job, quote: Quote):
 
     Idempotent per job (idempotency_key ``hold:<job_id>``) so a reschedule never
     double-holds. Raises :class:`ledger.InsufficientFunds` when the customer
-    cannot cover the hold (the caller maps this to 402 insufficient_credits).
+    cannot cover the hold (the caller maps this to 402 insufficient_credits) and
+    :class:`app.services.spend_limits.SpendLimitExceeded` when the hold would
+    breach an enforcing budget.
+
+    WHY the budget check lives HERE and not only at the router: this function is
+    the single place a ``hold:<job_id>`` transaction is posted, and that hold IS
+    the customer's spend. Every other caller of ``schedule_job`` — the recovery
+    sweeper (``leases.run_recovery_cycle``), ``recover_stuck_reserved`` and
+    ``failover.reschedule_with_failover`` — funds a job outside any router-level
+    guard, so a cap enforced only at submit time could be bypassed by submitting
+    jobs that are unschedulable at that instant and letting the sweeper fund them
+    later. Checking against the REAL ``authorized`` amount also closes the
+    ``max_cost``-omitted hole, where the router could only check against 0.
+
+    WHY unbilled jobs return early: a challenge/shadow job is platform audit work
+    that is never charged to a customer (:func:`is_unbilled_job`). If it ever
+    reached the hold path (e.g. requeued by the sweeper) it would debit the
+    primary job's customer for work they never submitted, and nothing on the
+    result path would ever release that hold.
     """
+    if is_unbilled_job(job):
+        return None
+
     total = decimal.Decimal(quote.total)
     if job.max_cost is not None:
         total = min(total, decimal.Decimal(job.max_cost))
@@ -108,6 +131,14 @@ async def reserve_for_job(db: AsyncSession, job: Job, quote: Quote):
         return None
 
     customer = await ledger.get_or_create_customer_account(db, job.customer_id)
+    # Serialize this customer's money movements, then check the cap against the
+    # amount actually about to be held (Postgres advisory lock; no-op on SQLite,
+    # where the in-process ``spend_guard`` gate serializes instead).
+    await ledger.lock_customer(db, job.customer_id)
+    if await _txn_by_key(db, f"hold:{job.id}") is None:
+        # Only a NEW hold is new spend; a replay must not be refused by a cap it
+        # already passed once.
+        await check_spend_allowed(db, job.customer_id, job.project_id, authorized)
     holding = await ledger.get_platform_account(db, "holding")
     return await ledger.post_transaction(
         db,
@@ -323,7 +354,15 @@ async def refund(
     )
 
     captured_platform = await _txn_credit_to(db, capture.id, platform_rev.id)
-    captured_provider = await _txn_credit_to(db, capture.id, provider_acct.id)
+    if provider_acct.id == platform_rev.id:
+        # A job with no resolvable provider (machine deleted / never assigned)
+        # captures entirely into platform_revenue. Querying the same account
+        # twice would count that capture TWICE and double the cumulative refund
+        # cap below — which platform_revenue, deliberately not a no-negative
+        # account, would happily absorb while minting customer credit.
+        captured_provider = 0
+    else:
+        captured_provider = await _txn_credit_to(db, capture.id, provider_acct.id)
     captured_total = captured_platform + captured_provider
 
     # Cumulative cap: the sum of ALL refunds for this job (prior + this one) must

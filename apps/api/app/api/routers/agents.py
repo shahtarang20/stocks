@@ -53,9 +53,14 @@ from app.services.leases import (
     recover_expired_leases,
     release_job_reservation,
 )
+from app.services import challenge as challenge_service
+from app.services import reputation as reputation_svc
+from app.services import verification as verification_service
+from app.services.hooks import safe_hook
 from app.services.scheduler import get_model_version
 from app.services.storage import get_store, grant_expiry, make_upload_grant
 from app.services.verification import verify_output
+from app.services.webhooks import dispatch_event
 
 router = APIRouter(prefix="/v1/agents", tags=["agents"])
 
@@ -252,10 +257,21 @@ def _parse_body(raw_body: bytes, schema):
 
 
 async def _owned_running_job(
-    db: AsyncSession, machine: ProviderMachine, job_id: uuid.UUID
+    db: AsyncSession, machine: ProviderMachine, job_id: uuid.UUID, *, lock: bool = False
 ) -> Job:
-    """Fetch a job that belongs to this machine (else 404 — isolation rule)."""
-    job = await db.get(Job, job_id)
+    """Fetch a job that belongs to this machine (else 404 — isolation rule).
+
+    ``lock=True`` takes a row lock so the terminal transition is serialized
+    against a concurrent customer cancel. Without it, a cancel and a success
+    result can both read RUNNING, and the hold is then BOTH released to the
+    customer and captured to the provider for one authorization.
+    """
+    if lock:
+        job = (
+            await db.execute(select(Job).where(Job.id == job_id).with_for_update())
+        ).scalar_one_or_none()
+    else:
+        job = await db.get(Job, job_id)
     if job is None or job.machine_id != machine.id:
         raise _JOB_NOT_FOUND
     return job
@@ -402,6 +418,52 @@ async def job_logs(
     return JobLogsAppendResponse(ok=True, stored_lines=len(body.lines))
 
 
+async def _post_terminal_hooks(
+    db: AsyncSession, job: Job, *, invoice=None
+) -> None:
+    """Observational side effects for a job that just reached a terminal state.
+
+    Reputation folding and webhook fan-out are reporting, not bookkeeping: the
+    money and the FSM are already correct when we get here. Each runs in its own
+    savepoint so a bad sink URL or a reputation write error can never undo the
+    settlement or re-enter the result path (which would risk a double charge).
+    Shadow and challenge jobs are platform-internal and are not announced.
+    """
+    if verification_service.is_unbilled_job(job):
+        return
+
+    async with safe_hook(db, "reputation.record_job_outcome"):
+        await reputation_svc.record_job_outcome(db, job)
+
+    event = "job.completed" if job.status == fsm.COMPLETED else "job.failed"
+    async with safe_hook(db, f"webhooks.{event}"):
+        await dispatch_event(
+            db,
+            customer_id=job.customer_id,
+            event_type=event,
+            payload={
+                "job_id": str(job.id),
+                "status": job.status,
+                "execution_mode": job.execution_mode,
+                "error_code": job.error_code,
+            },
+            source_id=str(job.id),
+        )
+    if invoice is not None:
+        async with safe_hook(db, "webhooks.invoice.paid"):
+            await dispatch_event(
+                db,
+                customer_id=job.customer_id,
+                event_type="invoice.paid",
+                payload={
+                    "invoice_id": str(invoice.id),
+                    "job_id": str(job.id),
+                    "status": invoice.status,
+                },
+                source_id=str(invoice.id),
+            )
+
+
 @router.post("/jobs/{job_id}/result", response_model=JobResultResponse)
 async def job_result(
     job_id: uuid.UUID,
@@ -410,7 +472,9 @@ async def job_result(
 ) -> JobResultResponse:
     machine, raw_body = await authenticate_machine(request, db)
     body: JobResultRequest = _parse_body(raw_body, JobResultRequest)
-    job = await _owned_running_job(db, machine, job_id)
+    # Locked: the status read below decides whether money is captured, so it must
+    # not race a concurrent cancel (which releases the same hold).
+    job = await _owned_running_job(db, machine, job_id, lock=True)
 
     # Idempotent: a repeated result for an already-terminal job returns the same status.
     if job.status in fsm.TERMINAL_STATES:
@@ -428,17 +492,36 @@ async def job_result(
 
     if body.status == "success":
         await fsm.transition(db, job, fsm.VERIFYING, reason="result_received", actor="agent")
+        # Audit hooks run BEFORE job.verification is overwritten: the challenge
+        # link lives there. Both are advisory evidence — a failure must not cost
+        # the provider a settled job, so each runs in its own savepoint.
+        async with safe_hook(db, "challenge.evaluate"):
+            await challenge_service.evaluate_challenge_job(db, job, body.output or {})
+        async with safe_hook(db, "verification.model_identity"):
+            await verification_service.check_model_identity(
+                db, job, getattr(body, "model_weight_hash", None)
+            )
         verification = verify_output(job.workload_type, job.input, body.output or {})
         job.verification = verification
         if verification["valid"]:
             await fsm.transition(db, job, fsm.COMPLETED, reason="verified", actor="system")
             await close_running_attempt(db, job, now, outcome="completed")
             # Settle: capture the metered actual cost + release the remainder.
-            await billing.settle_job(db, job)
+            # Challenge and shadow jobs carry no hold and no authorization, so
+            # billing them would charge a customer for the platform's own audit.
+            invoice = None
+            if not verification_service.is_unbilled_job(job):
+                invoice = await billing.settle_job(db, job)
+                async with safe_hook(db, "verification.shadow_sample"):
+                    await verification_service.maybe_create_shadow_job(db, job)
+            elif job.shadow_of_job_id is not None:
+                async with safe_hook(db, "verification.resolve_redundancy"):
+                    await verification_service.resolve_redundancy(db, job, body.output or {})
             await record_audit(
                 db, action="job.complete", outcome="success", actor_user_id=None,
                 ip=client_ip(request), resource_type="job", resource_id=str(job.id),
             )
+            await _post_terminal_hooks(db, job, invoice=invoice)
         else:
             job.error_code = "output_verification_failed"
             job.error_message = f"verification failed: {verification.get('reason')}"
@@ -453,6 +536,7 @@ async def job_result(
                 ip=client_ip(request), resource_type="job", resource_id=str(job.id),
                 reason=job.error_code,
             )
+            await _post_terminal_hooks(db, job)
     else:  # "failed"
         err = body.error or {}
         job.error_code = (err.get("code") or "agent_reported_failure")[:64]
@@ -467,6 +551,7 @@ async def job_result(
             ip=client_ip(request), resource_type="job", resource_id=str(job.id),
             reason=job.error_code,
         )
+        await _post_terminal_hooks(db, job)
 
     # The reservation is ALWAYS released on a terminal transition (no capacity leak).
     await release_job_reservation(db, job, now)

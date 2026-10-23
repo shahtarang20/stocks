@@ -197,6 +197,10 @@ class JobResultRequest(BaseModel):
     metrics: dict | None = None
     evidence: dict | None = None
     error: dict | None = None
+    # Optional provider attestation of the model artifact it actually loaded.
+    # Compared against the registry's pinned digest (model identity audit); a
+    # provider that reports nothing is simply not audited on this dimension.
+    model_weight_hash: str | None = Field(default=None, max_length=128)
 
 
 class JobResultResponse(BaseModel):

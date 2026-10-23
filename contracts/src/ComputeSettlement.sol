@@ -6,19 +6,50 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /**
  * @title ComputeSettlement
  * @notice Trustless, non-custodial escrow and settlement contract for ComputeCoin compute jobs.
  * @dev Reconciles off-chain computational jobs with on-chain cryptographic settlement vouchers.
+ *
+ * Fund-safety invariants enforced by this contract:
+ *  - Tokens enter only through {lockBudget} and leave only through {settleJob} / {refundJob}.
+ *    Refunds always pay `escrow.customer`, payouts always pay `escrow.provider`, both recorded at
+ *    lock time and immutable thereafter.
+ *  - The owner CAN rotate the signer and the fee treasury, and `platformFee` is routed to the
+ *    treasury. The owner's reach into a locked balance is therefore not zero — it is bounded by
+ *    {MAX_FEE_BPS}: at most that fraction of `finalCost` can ever reach the treasury, so neither a
+ *    rogue owner nor a stolen platform signing key can confiscate the principal. The remainder of
+ *    every lock can only go to `escrow.provider` or back to `escrow.customer`.
+ *  - For every escrow: lockedAmount == providerPayout + platformFee + customerRefund (settle path)
+ *    or lockedAmount == customerRefund (refund path), so token conservation holds globally.
+ *  - Vouchers are replay-bound: each escrow carries a monotonically increasing `nonce` and every
+ *    voucher additionally carries an `expiry`. A voucher is therefore single-use AND time-boxed,
+ *    so a leaked or superseded voucher cannot be presented later (see {settleJob}).
+ *
+ * Solidity ^0.8 checked arithmetic is used throughout; there is no `unchecked` block.
  */
 contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable token;
+
+    /// @notice Hard ceiling on the protocol fee, as a fraction of `finalCost` in basis points.
+    /// @dev Immutable and deliberately not owner-settable. `platformFee` is the ONLY value in a
+    ///      settlement that reaches an owner-controlled address (`feeTreasury`), so without a cap
+    ///      the combination of {setFeeTreasury} + {setPlatformSigner} — or a single compromise of
+    ///      the off-chain platform signing key — lets a voucher with `platformFee == finalCost ==
+    ///      lockedAmount` sweep an entire escrow. With the cap, the worst case is a mispriced job.
+    uint256 public constant MAX_FEE_BPS = 3000; // 30%
+    uint256 private constant BPS_DENOMINATOR = 10_000;
+
+    /// @notice Key authorized to sign settlement / early-refund vouchers.
+    /// @dev May be an EOA or an ERC-1271 smart-contract signer (multisig), verified via
+    ///      {SignatureChecker}, so the platform can migrate to a multisig without redeploying.
     address public platformSigner;
+
     address public feeTreasury;
 
     struct EscrowLock {
@@ -26,6 +57,9 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
         address provider;
         uint256 lockedAmount;
         uint256 deadline;
+        /// @dev Current voucher nonce. A voucher is only valid at exactly this value; consuming
+        ///      or invalidating a voucher advances it, which is what makes replay impossible.
+        uint256 nonce;
         bool settled;
     }
 
@@ -52,6 +86,8 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
         address indexed customer,
         uint256 refundAmount
     );
+
+    event VouchersInvalidated(bytes32 indexed jobId, address indexed customer, uint256 newNonce);
 
     event PlatformSignerUpdated(address indexed oldSigner, address indexed newSigner);
     event FeeTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
@@ -87,6 +123,8 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
 
     /**
      * @notice Query escrow state by customer and jobId.
+     * @dev `nonce` is returned last so existing integrations that destructure the first five
+     *      values keep compiling against the new ABI.
      */
     function getEscrow(address customer, bytes32 jobId)
         external
@@ -96,11 +134,76 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
             address provider,
             uint256 lockedAmount,
             uint256 deadline,
-            bool settled
+            bool settled,
+            uint256 nonce
         )
     {
         EscrowLock storage lock = escrows[getEscrowId(customer, jobId)];
-        return (lock.customer, lock.provider, lock.lockedAmount, lock.deadline, lock.settled);
+        return (
+            lock.customer,
+            lock.provider,
+            lock.lockedAmount,
+            lock.deadline,
+            lock.settled,
+            lock.nonce
+        );
+    }
+
+    /**
+     * @notice Current voucher nonce for an escrow; the platform must sign vouchers at this value.
+     */
+    function escrowNonce(address customer, bytes32 jobId) external view returns (uint256) {
+        return escrows[getEscrowId(customer, jobId)].nonce;
+    }
+
+    /**
+     * @notice Digest a settlement voucher commits to. Exposed so off-chain signers (and tests)
+     * can reproduce the payload byte-for-byte rather than re-deriving it by hand.
+     */
+    function settlementVoucherHash(
+        address customer,
+        bytes32 jobId,
+        uint256 finalCost,
+        uint256 platformFee,
+        uint256 nonce,
+        uint256 expiry
+    ) public view returns (bytes32) {
+        return
+            keccak256(
+                abi.encodePacked(
+                    customer,
+                    jobId,
+                    finalCost,
+                    platformFee,
+                    nonce,
+                    expiry,
+                    block.chainid,
+                    address(this)
+                )
+            );
+    }
+
+    /**
+     * @notice Digest an early-refund (cancellation) voucher commits to.
+     */
+    function refundVoucherHash(
+        address customer,
+        bytes32 jobId,
+        uint256 nonce,
+        uint256 expiry
+    ) public view returns (bytes32) {
+        return
+            keccak256(
+                abi.encodePacked(
+                    "REFUND",
+                    customer,
+                    jobId,
+                    nonce,
+                    expiry,
+                    block.chainid,
+                    address(this)
+                )
+            );
     }
 
     /**
@@ -130,6 +233,7 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
             provider: provider,
             lockedAmount: maxCost,
             deadline: deadline,
+            nonce: 0,
             settled: false
         });
 
@@ -139,17 +243,27 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
 
     /**
      * @notice Settles a completed job with an authorized platform execution voucher.
+     * @dev The voucher binds (customer, jobId, finalCost, platformFee, nonce, expiry, chainId,
+     *      contract). `nonce` makes it single-use — it must equal the escrow's current nonce and
+     *      is advanced on consumption — and `expiry` time-boxes it, so a voucher that was signed
+     *      but never broadcast (or one superseded by {invalidateVouchers}) cannot be replayed
+     *      later against the same escrow. The off-chain signer in
+     *      `apps/api/app/services/settlement.py` must pack these fields in exactly this order.
      * @param customer Address of the customer who locked the budget.
      * @param jobId Unique identifier of the compute job.
      * @param finalCost Actual billable cost based on audited runtime seconds.
      * @param platformFee Protocol fee portion of the final cost.
-     * @param signature Cryptographic signature by platformSigner verifying execution receipt.
+     * @param nonce Voucher nonce; must equal the escrow's current nonce.
+     * @param expiry Unix timestamp after which the voucher is no longer honored.
+     * @param signature Signature by platformSigner (EOA or ERC-1271) over the voucher digest.
      */
     function settleJob(
         address customer,
         bytes32 jobId,
         uint256 finalCost,
         uint256 platformFee,
+        uint256 nonce,
+        uint256 expiry,
         bytes memory signature
     ) external whenNotPaused nonReentrant {
         bytes32 escrowId = getEscrowId(customer, jobId);
@@ -158,15 +272,20 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
         require(!escrow.settled, "Escrow already settled");
         require(finalCost <= escrow.lockedAmount, "Cost exceeds locked budget");
         require(platformFee <= finalCost, "Fee exceeds final cost");
+        require(platformFee * BPS_DENOMINATOR <= finalCost * MAX_FEE_BPS, "Fee above cap");
+        require(block.timestamp <= expiry, "Voucher expired");
+        require(nonce == escrow.nonce, "Stale voucher nonce");
 
-        // Verify cryptographic voucher signature bound to customer, jobId, finalCost, fee
-        bytes32 messageHash = keccak256(
-            abi.encodePacked(customer, jobId, finalCost, platformFee, block.chainid, address(this))
+        bytes32 digest = MessageHashUtils.toEthSignedMessageHash(
+            settlementVoucherHash(customer, jobId, finalCost, platformFee, nonce, expiry)
         );
-        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
-        address recoveredSigner = ECDSA.recover(ethSignedMessageHash, signature);
-        require(recoveredSigner == platformSigner, "Invalid voucher signature");
+        require(
+            SignatureChecker.isValidSignatureNow(platformSigner, digest, signature),
+            "Invalid voucher signature"
+        );
 
+        // Effects before interactions: burn the nonce and close the escrow first.
+        escrow.nonce = nonce + 1;
         escrow.settled = true;
 
         uint256 providerPayout = finalCost - platformFee;
@@ -187,14 +306,24 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
 
     /**
      * @notice Refunds locked tokens to customer if job was cancelled or expired.
+     * @dev Deliberately NOT `whenNotPaused`: pausing must never trap customer funds. After the
+     *      escrow deadline the customer (or owner, on their behalf) can always withdraw to the
+     *      customer address with no voucher at all. Before the deadline an early-refund voucher is
+     *      required, and that voucher carries the same nonce + expiry replay protection as a
+     *      settlement voucher.
      * @param customer Address of the customer who locked the budget.
      * @param jobId Unique identifier of the compute job.
-     * @param signature Optional signature from platformSigner, or empty if after deadline.
+     * @param nonce Voucher nonce; must equal the escrow's current nonce (ignored after deadline).
+     * @param expiry Unix timestamp after which the voucher is void (ignored after deadline).
+     * @param signature Platform cancellation voucher; may be empty once the deadline has passed.
      */
-    function refundJob(address customer, bytes32 jobId, bytes memory signature)
-        external
-        nonReentrant
-    {
+    function refundJob(
+        address customer,
+        bytes32 jobId,
+        uint256 nonce,
+        uint256 expiry,
+        bytes memory signature
+    ) external nonReentrant {
         bytes32 escrowId = getEscrowId(customer, jobId);
         EscrowLock storage escrow = escrows[escrowId];
         require(escrow.customer != address(0), "Escrow not found");
@@ -207,20 +336,41 @@ contract ComputeSettlement is ReentrancyGuard, Pausable, Ownable {
                 "Only customer or owner after deadline"
             );
         } else {
-            // Early refund requires platform cancellation voucher
-            bytes32 messageHash = keccak256(
-                abi.encodePacked("REFUND", customer, jobId, block.chainid, address(this))
+            // Early refund requires a platform cancellation voucher
+            require(block.timestamp <= expiry, "Voucher expired");
+            require(nonce == escrow.nonce, "Stale voucher nonce");
+
+            bytes32 digest = MessageHashUtils.toEthSignedMessageHash(
+                refundVoucherHash(customer, jobId, nonce, expiry)
             );
-            bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
-            address recoveredSigner = ECDSA.recover(ethSignedMessageHash, signature);
-            require(recoveredSigner == platformSigner, "Invalid refund signature");
+            require(
+                SignatureChecker.isValidSignatureNow(platformSigner, digest, signature),
+                "Invalid refund signature"
+            );
+            escrow.nonce = nonce + 1;
         }
 
         escrow.settled = true;
         uint256 refundAmount = escrow.lockedAmount;
+        // Always pays the recorded customer, never msg.sender — the owner-assisted path cannot
+        // be used to divert funds.
         token.safeTransfer(escrow.customer, refundAmount);
 
         emit JobRefunded(jobId, escrow.customer, refundAmount);
+    }
+
+    /**
+     * @notice Revokes every outstanding voucher for an escrow by advancing its nonce.
+     * @dev Needed for signer-key rotation and for retracting a voucher that was signed with wrong
+     *      billing data. This is purely a *negative* power: it can only stop a payout, never move
+     *      tokens. The customer's post-deadline self-refund path stays open regardless.
+     */
+    function invalidateVouchers(address customer, bytes32 jobId) external onlyOwner {
+        EscrowLock storage escrow = escrows[getEscrowId(customer, jobId)];
+        require(escrow.customer != address(0), "Escrow not found");
+        require(!escrow.settled, "Escrow already settled");
+        escrow.nonce = escrow.nonce + 1;
+        emit VouchersInvalidated(jobId, customer, escrow.nonce);
     }
 
     function setPlatformSigner(address newSigner) external onlyOwner {

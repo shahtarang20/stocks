@@ -77,6 +77,25 @@ class SettlementVoucherResponse(BaseModel):
     signature: str
 
 
+class IssueRefundVoucherRequest(BaseModel):
+    job_id: uuid.UUID
+
+
+class RefundVoucherResponse(BaseModel):
+    """Platform signature authorizing an EARLY (pre-deadline) on-chain refund."""
+
+    job_id: uuid.UUID
+    job_bytes32: str
+    customer_address: str
+    refund_amount_units: str
+    nonce: int
+    expiry: int
+    chain_id: int
+    contract_address: str
+    signer_address: str
+    signature: str
+
+
 class ConfirmSettlementTxRequest(BaseModel):
     job_id: uuid.UUID
     settle_tx_hash: str = Field(min_length=64, max_length=66)

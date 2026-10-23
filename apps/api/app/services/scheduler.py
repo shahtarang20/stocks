@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,6 +33,7 @@ from app.models.marketplace import CURRENCY, Quote
 from app.models.model_registry import ModelVersion
 from app.models.provider import ProviderMachine
 from app.services import job_fsm as fsm
+from app.services import reputation as reputation_svc
 from app.services.billing import release_hold, reserve_for_job
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ from app.services.ledger import InsufficientFunds
 from app.services.marketplace import active_reservation_slots, reserve_capacity
 from app.services.pricing import compute_breakdown, get_active_fee_rate
 from app.services.provider import derive_status
+from app.services.provider_pricing import machine_ineligibility_reason
+from app.services.spend_limits import SpendLimitExceeded
 
 SUPPORTED_WORKLOADS = ("text-generation", "batch-inference")
 
@@ -213,7 +216,19 @@ async def _eligible_machines(
         if req_tier == "confidential":
             if not m.capability or m.capability.verification_status != "VERIFIED":
                 continue
+        # Operator policy layer (floor price, availability schedule, model
+        # allowlist). Checked after the hardware/workload fit so the debug log
+        # names the real reason a machine was passed over.
+        policy_reason = machine_ineligibility_reason(m, job.model, now)
+        if policy_reason is not None:
+            logger.debug("scheduler skip (%s): machine=%s", policy_reason, m.id)
+            continue
         used = await active_reservation_slots(db, m.id, now)
+        # Challenge / shadow (unbilled) jobs are pinned straight to a machine
+        # without a ResourceReservation, so ``active_reservation_slots`` cannot
+        # see them. Counting them here keeps a machine from being oversubscribed
+        # past ``max_concurrent_jobs`` by the platform's own audit work.
+        used += await _unbilled_occupied_slots(db, m.id)
         free = m.max_concurrent_jobs - used
         if free < job.gpu_count:
             continue
@@ -226,6 +241,27 @@ async def _eligible_machines(
             )
         )
     return candidates
+
+
+async def _unbilled_occupied_slots(db: AsyncSession, machine_id: uuid.UUID) -> int:
+    """GPU slots held on ``machine_id`` by unbilled (challenge/shadow) jobs.
+
+    These jobs are placed directly (:func:`app.services.challenge.inject_challenge_job`,
+    :func:`app.services.verification.create_shadow_job`) and deliberately take no
+    ``ResourceReservation``, because reserving capacity would create a quote and a
+    hold for work nobody pays for. They still occupy the box, so capacity
+    accounting has to count them explicitly or a paying job gets scheduled on top.
+    """
+    total = (
+        await db.execute(
+            select(func.coalesce(func.sum(Job.gpu_count), 0)).where(
+                Job.machine_id == machine_id,
+                Job.status.in_((fsm.RESERVED, fsm.RUNNING)),
+                or_(Job.is_challenge.is_(True), Job.shadow_of_job_id.is_not(None)),
+            )
+        )
+    ).scalar()
+    return int(total or 0)
 
 
 # Reliability history window and Bayesian prior. A brand-new machine with no
@@ -265,8 +301,18 @@ async def _reliability_by_machine(
 def _score_candidates(
     candidates: list[_Candidate],
     reliability: dict[uuid.UUID, float] | None = None,
+    reputation: dict[uuid.UUID, float] | None = None,
 ) -> list[tuple[_Candidate, float, dict]]:
+    """Rank candidates transparently.
+
+    ``reputation`` is the PERSISTED provider reputation (Phase B3) and wins when
+    present, because it folds in evidence the raw completion rate cannot see —
+    verification failures, disputes lost and time-decay. ``reliability`` (the
+    Bayesian completion rate) stays as the fallback for a provider that has no
+    persisted row yet, so ranking never silently degrades to a constant.
+    """
     reliability = reliability or {}
+    reputation = reputation or {}
     w_price = settings.SCHEDULER_WEIGHT_PRICE
     w_rel = settings.SCHEDULER_WEIGHT_RELIABILITY
     w_avail = settings.SCHEDULER_WEIGHT_AVAILABILITY
@@ -280,8 +326,15 @@ def _score_candidates(
         price_f = float(c.price)
         # Lower price -> higher score (cheapest == 1.0).
         price_score = 1.0 if spread == 0 else (max_price - price_f) / spread
-        # Reliability from real completion history (0.5 prior for new machines).
-        reliability_score = reliability.get(c.machine.id, 0.5)
+        # Reliability: persisted reputation when the provider has one, else the
+        # Bayesian completion rate (0.5 prior for a machine with no history).
+        persisted = reputation.get(c.machine.id)
+        if persisted is not None:
+            reliability_score = float(persisted)
+            reliability_source = "reputation"
+        else:
+            reliability_score = reliability.get(c.machine.id, 0.5)
+            reliability_source = "completion_history"
         availability_score = (
             c.free_slots / c.machine.max_concurrent_jobs
             if c.machine.max_concurrent_jobs
@@ -296,6 +349,7 @@ def _score_candidates(
             "price_per_hour": f"{c.price:.2f}",
             "price_score": round(price_score, 4),
             "reliability_score": round(reliability_score, 4),
+            "reliability_source": reliability_source,
             "availability_score": round(availability_score, 4),
         }
         scored.append((c, score, factors))
@@ -349,8 +403,11 @@ async def schedule_job(
     if not candidates:
         return False
 
-    reliability = await _reliability_by_machine(db, [c.machine.id for c in candidates], now)
-    scored = _score_candidates(candidates, reliability)
+    machine_ids = [c.machine.id for c in candidates]
+    reliability = await _reliability_by_machine(db, machine_ids, now)
+    # Phase B3: persisted provider reputation outranks the raw completion rate.
+    reputation = await reputation_svc.reputation_by_machine(db, machine_ids)
+    scored = _score_candidates(candidates, reliability, reputation)
     best, best_score, factors = scored[0]
 
     # Create the pricing snapshot, then HOLD the authorized amount BEFORE reserving
@@ -360,7 +417,11 @@ async def schedule_job(
     quote = await _create_quote_for_job(db, job, best.machine, now)
     try:
         await reserve_for_job(db, job, quote)
-    except InsufficientFunds:
+    except (InsufficientFunds, SpendLimitExceeded):
+        # Both refusals happen BEFORE any ledger write, so cancelling the
+        # snapshot leaves nothing dangling. SpendLimitExceeded is raised against
+        # the real authorized amount inside ``reserve_for_job``, which is the
+        # only place a hold is posted — see its docstring.
         quote.status = "cancelled"
         await db.flush()
         raise
@@ -399,6 +460,13 @@ async def schedule_job(
     )
     await fsm.transition(db, job, fsm.RESERVED, reason="reserved", actor="scheduler")
     await db.flush()
+    # Best-effort nudge so a connected agent does not wait out its poll interval.
+    # Imported lazily to keep the service layer free of a router-level import
+    # cycle; push_job_available never raises and HTTP polling stays the source
+    # of truth, so a disconnected or unreachable agent changes nothing here.
+    from app.api.routers.ws import push_job_available
+
+    await push_job_available(best.machine.id, job_id=job.id)
     return True
 
 
@@ -418,6 +486,17 @@ async def run_scheduler(
         await fsm.transition(db, job, fsm.FAILED, reason="insufficient_credits", actor="scheduler")
         job.error_code = "insufficient_credits"
         job.error_message = "insufficient credits to authorize job"
+        await db.flush()
+        return False
+    except SpendLimitExceeded:
+        # Nothing was held, so there is nothing to release. Failing the job here
+        # is what stops the sweeper from re-driving it forever (and from funding
+        # a job the customer's budget has already refused).
+        await fsm.transition(
+            db, job, fsm.FAILED, reason="spend_limit_exceeded", actor="scheduler"
+        )
+        job.error_code = "spend_limit_exceeded"
+        job.error_message = "job would exceed a configured spend limit"
         await db.flush()
         return False
     job.attempts_made += 1

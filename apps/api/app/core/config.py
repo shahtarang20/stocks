@@ -6,6 +6,7 @@ boots without any env configured (local/test).
 
 from __future__ import annotations
 
+import decimal
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -158,6 +159,49 @@ class Settings(BaseSettings):
     PLATFORM_SIGNER_PRIVATE_KEY: str = _DEV_SIGNER_KEY
     PLATFORM_TREASURY_ADDRESS: str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 
+    # Phase B — verification, reputation/slashing, spend controls, webhooks
+    # Fraction of eligible jobs replaced by an injected known-answer challenge.
+    CHALLENGE_SAMPLE_RATE: float = 0.02
+    # Fraction of completed jobs re-run on a second machine for comparison.
+    REDUNDANCY_SAMPLE_RATE: float = 0.02
+    # When True, provider earnings for a sampled job stay in the holding account
+    # until its verification result is known.
+    VERIFICATION_HOLD_PAYOUT: bool = False
+    # Half-life window for reputation time-decay; old failures stop counting.
+    REPUTATION_DECAY_DAYS: int = 90
+    # Floor applied after any penalty so a score can never go negative.
+    REPUTATION_MIN_SCORE: float = 0.0
+    # Upper bound on a single slash, as a fraction of the job's provider payout.
+    SLASH_MAX_FRACTION: float = 1.0
+    WEBHOOK_TIMEOUT_SECONDS: float = 5.0
+    WEBHOOK_MAX_ATTEMPTS: int = 5
+    # SSRF guard: customer-supplied webhook URLs resolving to private/link-local
+    # ranges are refused unless this is explicitly enabled (local dev only).
+    WEBHOOK_ALLOW_PRIVATE_IPS: bool = False
+    # Default budget-alert thresholds, as a percent CSV (see spend_alert_thresholds).
+    SPEND_ALERT_THRESHOLDS: str = "50,80,100"
+    # When True, a missing/broken Redis STRICTLY DEGRADES rate limiting rather
+    # than trusting the best-effort in-process counters: outside dev/test the
+    # effective budget drops to ceil(limit/10) (floor 1) per window and the
+    # limiter reports `degraded`. Deliberately not fail-closed — a Redis outage
+    # must not take the whole API down. See app/core/rate_limit.py.
+    RATE_LIMIT_REQUIRE_REDIS: bool = False
+    WS_JOB_PUSH_ENABLED: bool = True
+
+    # Phase C — batches, datasets, SSO, Stripe Connect payouts
+    BATCH_MAX_ITEMS: int = 1000
+    # Disclosed bulk discount percent (Decimal string — never float money).
+    BATCH_DISCOUNT_PCT: str = "10"
+    DATASET_MAX_BYTES: int = 5 * 1024 * 1024 * 1024  # 5 GiB
+    SSO_ENABLED: bool = False
+    STRIPE_CONNECT_ENABLED: bool = False
+    STRIPE_CONNECT_CLIENT_ID: str = ""
+
+    # Phase D — chain reconciliation
+    CHAIN_RPC_URL: str = ""
+    CHAIN_RECONCILE_ENABLED: bool = False
+    CHAIN_RECONCILE_INTERVAL_SECONDS: int = 900
+
     @model_validator(mode="after")
     def _reject_insecure_defaults_in_prod(self) -> "Settings":
         """Refuse to boot a non-dev deployment that still uses shipped dev secrets.
@@ -184,6 +228,31 @@ class Settings(BaseSettings):
     @property
     def artifact_content_types(self) -> set[str]:
         return {c.strip() for c in self.ARTIFACT_CONTENT_TYPES.split(",") if c.strip()}
+
+    @property
+    def spend_alert_thresholds(self) -> list[int]:
+        """Parsed, de-duplicated, ascending alert thresholds (percent)."""
+        values: set[int] = set()
+        for raw in self.SPEND_ALERT_THRESHOLDS.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                pct = int(raw)
+            except ValueError:
+                continue
+            if 0 < pct <= 1000:
+                values.add(pct)
+        return sorted(values)
+
+    @property
+    def batch_discount_pct(self) -> decimal.Decimal:
+        """Bulk discount as a Decimal percent. Money math is never float."""
+        try:
+            pct = decimal.Decimal(self.BATCH_DISCOUNT_PCT)
+        except decimal.InvalidOperation:
+            return decimal.Decimal("0")
+        return min(max(pct, decimal.Decimal("0")), decimal.Decimal("100"))
 
     @property
     def is_test(self) -> bool:

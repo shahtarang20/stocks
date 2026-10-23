@@ -15,9 +15,14 @@ from app import __version__
 from app.api.routers import (
     admin,
     agents,
+    analytics,
     artifacts,
     auth,
+    batch,
     billing,
+    chain_recon,
+    connect,
+    datasets,
     disputes,
     health,
     inference,
@@ -25,12 +30,20 @@ from app.api.routers import (
     jobs,
     marketplace,
     metrics,
+    orgs,
     projects,
+    provider_pricing,
     providers,
     quotes,
+    reputation,
     reservations,
     settlement,
+    spend_limits,
+    sso,
     telemetry,
+    verification,
+    webhooks,
+    ws,
 )
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -59,6 +72,7 @@ async def _recovery_sweeper() -> None:
     or leaks held credits/capacity (audit H5)."""
     from app.db.session import get_sessionmaker
     from app.services.leases import run_recovery_cycle
+    from app.services.webhooks import deliver_due
 
     interval = settings.SWEEP_INTERVAL_SECONDS
     sm = get_sessionmaker()
@@ -67,6 +81,15 @@ async def _recovery_sweeper() -> None:
             async with sm() as db:
                 await run_recovery_cycle(db)
                 await db.commit()
+                # Drain the webhook outbox on the same cadence. Isolated in its
+                # own try/commit so an unreachable customer sink can never roll
+                # back or stall lease recovery.
+                try:
+                    await deliver_due(db)
+                    await db.commit()
+                except Exception:  # pragma: no cover - defensive
+                    await db.rollback()
+                    logger.exception("webhook delivery sweep failed")
         except asyncio.CancelledError:
             raise
         except Exception:  # pragma: no cover - defensive; never kill the loop
@@ -144,6 +167,26 @@ def create_app() -> FastAPI:
     application.include_router(settlement.router)
     application.include_router(providers.billing_router)
     application.include_router(admin.money_router)
+
+    # --- Phases B/C/D -----------------------------------------------------
+    # Each router declares its own prefix; none collides with the routes above
+    # (disputes.admin_router uses /v1/admin/disputes/{id}/adjudicate, which is
+    # deliberately distinct from admin.money_router's legacy /resolve path).
+    application.include_router(verification.router)
+    application.include_router(reputation.router)
+    application.include_router(spend_limits.router)
+    application.include_router(analytics.router)
+    application.include_router(webhooks.router)
+    application.include_router(disputes.admin_router)
+    application.include_router(ws.router)
+    application.include_router(batch.router)
+    application.include_router(datasets.router)
+    application.include_router(datasets.training_router)
+    application.include_router(orgs.router)
+    application.include_router(sso.router)
+    application.include_router(provider_pricing.router)
+    application.include_router(connect.router)
+    application.include_router(chain_recon.router)
 
     @application.get("/")
     async def root() -> dict:

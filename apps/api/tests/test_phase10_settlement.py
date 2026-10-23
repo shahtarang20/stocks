@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import decimal
 import uuid
 from datetime import timedelta
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import settings
 from app.core.security import create_access_token
-from app.db.base import utcnow
+from app.db.base import ensure_aware, utcnow
 from app.models.enums import Role, UserStatus
 from app.models.jobs import Job
 from app.models.org import Organization, OrganizationMember, Project
@@ -184,13 +185,22 @@ async def test_issue_settlement_voucher_cryptographic_verification(client: Async
     voucher = res_voucher.json()
     assert voucher["signature"].startswith("0x")
 
-    # 4. Cryptographic signature verification (matches OpenZeppelin ECDSA.recover & ComputeSettlement.sol)
+    # 4. Cryptographic signature verification (matches OpenZeppelin ECDSA.recover &
+    #    ComputeSettlement.settlementVoucherHash, which now also binds nonce + expiry).
     job_bytes = bytes.fromhex(voucher["job_bytes32"][2:])
     contract_addr = to_checksum_address(voucher["contract_address"])
     customer_addr = to_checksum_address(voucher["customer_address"])
+
+    # expiry is the escrow deadline; nonce is 0 for a freshly-issued voucher.
+    res_escrow = await client.get(f"/v1/settlement/escrows/{job.id}", headers=headers)
+    assert res_escrow.status_code == 200
+    deadline = ensure_aware(dt.datetime.fromisoformat(res_escrow.json()["deadline"]))
+    expiry = int(deadline.timestamp())
+    nonce = 0
+
     packed = encode_packed(
-        ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
-        [customer_addr, job_bytes, final_cost, fee, voucher["chain_id"], contract_addr],
+        ["address", "bytes32", "uint256", "uint256", "uint256", "uint256", "uint256", "address"],
+        [customer_addr, job_bytes, final_cost, fee, nonce, expiry, voucher["chain_id"], contract_addr],
     )
     msg_hash = keccak(packed)
     signable = encode_defunct(primitive=msg_hash)
@@ -199,6 +209,29 @@ async def test_issue_settlement_voucher_cryptographic_verification(client: Async
         signature=bytes.fromhex(voucher["signature"][2:]),
     )
     assert recovered_address.lower() == voucher["signer_address"].lower()
+
+    # 5. The voucher is genuinely BOUND to nonce and expiry: the pre-hardening payload (and any
+    #    other nonce/expiry pair) must recover a different address, i.e. the contract would reject
+    #    a replayed or stale-nonce voucher.
+    legacy_packed = encode_packed(
+        ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
+        [customer_addr, job_bytes, final_cost, fee, voucher["chain_id"], contract_addr],
+    )
+    legacy_recovered = Account.recover_message(
+        encode_defunct(primitive=keccak(legacy_packed)),
+        signature=bytes.fromhex(voucher["signature"][2:]),
+    )
+    assert legacy_recovered.lower() != voucher["signer_address"].lower()
+
+    replay_packed = encode_packed(
+        ["address", "bytes32", "uint256", "uint256", "uint256", "uint256", "uint256", "address"],
+        [customer_addr, job_bytes, final_cost, fee, nonce + 1, expiry, voucher["chain_id"], contract_addr],
+    )
+    replay_recovered = Account.recover_message(
+        encode_defunct(primitive=keccak(replay_packed)),
+        signature=bytes.fromhex(voucher["signature"][2:]),
+    )
+    assert replay_recovered.lower() != voucher["signer_address"].lower()
 
 
 @pytest.mark.asyncio
@@ -244,8 +277,11 @@ async def test_confirm_settlement_and_reconciliation(client: AsyncClient, db_eng
     assert res_recon.status_code == 200
     recon = res_recon.json()
     assert recon["total_escrows"] >= 1
-    assert recon["ledger_parity_verified"] is True
     assert recon["imbalance"] == 0
+    # Internally consistent, but NOT "verified": nothing here has been compared
+    # against the chain. Parity is only claimed once a real ChainReconciliation
+    # sweep (JSON-RPC against the contract) has returned ok.
+    assert recon["ledger_parity_verified"] is False
 
     # Check transactions list
     res_txs = await client.get("/v1/settlement/transactions", headers=admin_headers)
@@ -422,8 +458,29 @@ async def test_reconciliation_detects_injected_mismatch(client: AsyncClient, db_
         "job_id": str(job.id), "settle_tx_hash": "0x" + "e2" * 32}, headers=ah)
 
     recon_pre = (await client.get("/v1/settlement/reconciliation", headers=ah)).json()
-    assert recon_pre["ledger_parity_verified"] is True
     assert recon_pre["imbalance"] == 0
+    # Still not "verified" — a DB-vs-DB comparison is not evidence.
+    assert recon_pre["ledger_parity_verified"] is False
+
+    # Record a successful REAL chain sweep; only then may parity be claimed.
+    from app.models.reconciliation import ChainReconciliationRun
+
+    sm_run = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm_run() as db:
+        db.add(
+            ChainReconciliationRun(
+                chain_id=settings.SETTLEMENT_CHAIN_ID,
+                started_at=utcnow(),
+                finished_at=utcnow(),
+                escrows_checked=1,
+                drift_count=0,
+                ok=True,
+            )
+        )
+        await db.commit()
+
+    recon_verified = (await client.get("/v1/settlement/reconciliation", headers=ah)).json()
+    assert recon_verified["ledger_parity_verified"] is True
 
     # 2. Inject an off-chain/on-chain mismatch directly into DB (simulate tampering / ledger drift)
     from app.models.settlement import OnChainTransaction
@@ -446,3 +503,98 @@ async def test_reconciliation_detects_injected_mismatch(client: AsyncClient, db_
     assert recon_post["imbalance"] == 10 * 10**18
     assert recon_post["ledger_parity_verified"] is False
 
+
+
+@pytest.mark.asyncio
+async def test_issue_refund_voucher_matches_contract_refund_voucher_hash(
+    client: AsyncClient, db_engine
+):
+    """An EARLY on-chain refund needs a platform-signed REFUND voucher.
+
+    ``ComputeSettlement.refundJob`` demands a signature over
+    ``refundVoucherHash`` for any refund before the escrow deadline. Nothing in
+    the API produced one, so a cancelled job's budget stayed escrowed for the
+    whole deadline window while the DB row could be marked REFUNDED anyway.
+
+    This recovers the signer from the EXACT packed payload the contract hashes,
+    so the API and the Solidity cannot drift apart silently.
+    """
+    customer, c_token = await _create_test_user(db_engine, "cust-rv@test.com", Role.customer)
+    provider, _ = await _create_test_user(db_engine, "prov-rv@test.com", Role.provider)
+    admin, a_token = await _create_test_user(db_engine, "admin-rv@test.com", Role.administrator)
+    job = await _create_job_setup(db_engine, customer, provider)
+
+    headers = {"Authorization": f"Bearer {c_token}"}
+    admin_headers = {"Authorization": f"Bearer {a_token}"}
+    locked_amt = 100 * 10**18
+    await client.post(
+        "/v1/settlement/escrows",
+        json={
+            "job_id": str(job.id),
+            "provider_id": str(provider.id),
+            "locked_amount_units": str(locked_amt),
+            "deadline_seconds": 86400,
+            "lock_tx_hash": "0x" + "c" * 64,
+            "customer_address": "0x1111111111111111111111111111111111111111",
+            "provider_address": "0x2222222222222222222222222222222222222222",
+        },
+        headers=headers,
+    )
+
+    res = await client.post(
+        "/v1/settlement/refund-vouchers",
+        json={"job_id": str(job.id)},
+        headers=admin_headers,
+    )
+    assert res.status_code == 200, res.text
+    voucher = res.json()
+    assert voucher["signature"].startswith("0x")
+    assert voucher["refund_amount_units"] == str(locked_amt)
+
+    packed = encode_packed(
+        ["string", "address", "bytes32", "uint256", "uint256", "uint256", "address"],
+        [
+            "REFUND",
+            to_checksum_address(voucher["customer_address"]),
+            bytes.fromhex(voucher["job_bytes32"][2:]),
+            voucher["nonce"],
+            voucher["expiry"],
+            voucher["chain_id"],
+            to_checksum_address(voucher["contract_address"]),
+        ],
+    )
+    recovered = Account.recover_message(
+        encode_defunct(primitive=keccak(packed)),
+        signature=bytes.fromhex(voucher["signature"][2:]),
+    )
+    assert recovered.lower() == voucher["signer_address"].lower()
+
+    # The "REFUND" domain tag is load-bearing: without it a refund voucher would
+    # be indistinguishable from a settlement voucher payload.
+    without_tag = encode_packed(
+        ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
+        [
+            to_checksum_address(voucher["customer_address"]),
+            bytes.fromhex(voucher["job_bytes32"][2:]),
+            voucher["nonce"],
+            voucher["expiry"],
+            voucher["chain_id"],
+            to_checksum_address(voucher["contract_address"]),
+        ],
+    )
+    assert (
+        Account.recover_message(
+            encode_defunct(primitive=keccak(without_tag)),
+            signature=bytes.fromhex(voucher["signature"][2:]),
+        ).lower()
+        != voucher["signer_address"].lower()
+    )
+
+    # Non-admins may not mint a platform signature.
+    assert (
+        await client.post(
+            "/v1/settlement/refund-vouchers",
+            json={"job_id": str(job.id)},
+            headers=headers,
+        )
+    ).status_code == 403

@@ -50,7 +50,9 @@ from app.schemas.billing import (
 )
 from app.services import billing as billing_svc
 from app.services import ledger
+from app.services import reputation as reputation_svc
 from app.services.audit import record_audit
+from app.services.hooks import safe_hook
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +262,16 @@ async def resolve_dispute(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
         refund.transaction_id = txn.id
         dispute.refund_amount_minor = amount_minor
+        # A refunded dispute is one the provider lost. Reputation is reporting,
+        # not bookkeeping: a failure here must never undo the refund above.
+        if job.machine_id is not None:
+            async with safe_hook(db, "reputation.dispute_lost"):
+                machine = await db.get(ProviderMachine, job.machine_id)
+                if machine is not None:
+                    await reputation_svc.recompute_reputation(
+                        db, machine.provider_id, event_kind="dispute_lost",
+                        reason=body.resolution, job_id=job.id, machine_id=machine.id,
+                    )
 
     await record_audit(
         db, action="admin.dispute.resolve", outcome="success", actor_user_id=current.id,

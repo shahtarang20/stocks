@@ -6,9 +6,9 @@
  *   1. Token Grant & Budget Approval: Customer approves ComputeSettlement
  *   2. On-Chain Budget Escrow Lock: Customer calls lockBudget(jobId, provider, maxCost, deadline)
  *   3. Off-Chain Cryptographic Voucher: Platform generates EIP-191 signed voucher
- *   4. On-Chain Settlement: settleJob(customer, jobId, finalCost, platformFee, signature)
+ *   4. On-Chain Settlement: settleJob(customer, jobId, finalCost, platformFee, nonce, expiry, signature)
  *   5. Payout & Refund Verification: Provider paid, treasury fee paid, unspent budget refunded
- *   6. Cancellation & Refund Path: Tests refundJob(customer, jobId, signature)
+ *   6. Cancellation & Refund Path: Tests refundJob(customer, jobId, nonce, expiry, signature)
  *   7. Double-settlement & squatting immunity verification
  *   8. Financial Ledger Reconciliation: Zero-loss balance verification
  *
@@ -291,10 +291,18 @@ async function main() {
   // 1c. Platform Signs Off-Chain Voucher
   console.log("\n[1c] Platform generating off-chain cryptographic voucher...");
   // Matches ComputeSettlement.sol:
-  // bytes32 messageHash = keccak256(abi.encodePacked(customer, jobId, finalCost, platformFee, block.chainid, address(this)));
+// bytes32 messageHash = keccak256(abi.encodePacked(
+  //     customer, jobId, finalCost, platformFee, nonce, expiry, block.chainid, address(this)));
+  // The voucher is bound to the escrow's CURRENT nonce (so a retracted voucher
+  // dies) and to an expiry (so an unbroadcast voucher is not valid forever).
+  const voucherNonce1 = await settlementContract.escrowNonce(customerWallet.address, jobId1);
+  const voucherExpiry1 = deadline1;
   const packedVoucherHash = ethers.solidityPackedKeccak256(
-    ["address", "bytes32", "uint256", "uint256", "uint256", "address"],
-    [customerWallet.address, jobId1, finalCost1, platformFee1, chainId, settlementAddress]
+    ["address", "bytes32", "uint256", "uint256", "uint256", "uint256", "uint256", "address"],
+    [
+      customerWallet.address, jobId1, finalCost1, platformFee1,
+      voucherNonce1, voucherExpiry1, chainId, settlementAddress,
+    ]
   );
   const voucherSignature = await platformSignerWallet.signMessage(ethers.getBytes(packedVoucherHash));
   console.log(`     ✅ Voucher message hash: ${packedVoucherHash}`);
@@ -312,6 +320,8 @@ async function main() {
     jobId1,
     finalCost1,
     platformFee1,
+    voucherNonce1,
+    voucherExpiry1,
     voucherSignature,
     {
       nonce: nextCustomerNonce(),
@@ -371,20 +381,25 @@ async function main() {
   const customerPreRefundBal = await tokenContract.balanceOf(customerWallet.address);
 
   // Early cancellation signature
-  // bytes32 messageHash = keccak256(abi.encodePacked("REFUND", customer, jobId, block.chainid, address(this)));
+// bytes32 messageHash = keccak256(abi.encodePacked(
+  //     "REFUND", customer, jobId, nonce, expiry, block.chainid, address(this)));
   console.log("[2b] Platform issuing cancellation refund voucher...");
+  const refundNonce2 = await settlementContract.escrowNonce(customerWallet.address, jobId2);
+  const refundExpiry2 = deadline1;
   const refundMessageHash = ethers.solidityPackedKeccak256(
-    ["string", "address", "bytes32", "uint256", "address"],
-    ["REFUND", customerWallet.address, jobId2, chainId, settlementAddress]
+    ["string", "address", "bytes32", "uint256", "uint256", "uint256", "address"],
+    ["REFUND", customerWallet.address, jobId2, refundNonce2, refundExpiry2, chainId, settlementAddress]
   );
   const refundSignature = await platformSignerWallet.signMessage(ethers.getBytes(refundMessageHash));
   console.log(`     ✅ Refund signature generated: ${refundSignature.slice(0, 32)}...`);
 
   // Execute Refund
   console.log("[2c] Customer calling refundJob()...");
-  const refundTx = await customerSettlement.refundJob(customerWallet.address, jobId2, refundSignature, {
-    nonce: nextCustomerNonce(),
-  });
+  const refundTx = await customerSettlement.refundJob(
+    customerWallet.address, jobId2, refundNonce2, refundExpiry2, refundSignature, {
+      nonce: nextCustomerNonce(),
+    }
+  );
   await refundTx.wait();
   console.log(`     ✅ Refund processed! (tx: ${refundTx.hash})`);
 
@@ -411,6 +426,8 @@ async function main() {
       jobId1,
       finalCost1,
       platformFee1,
+      voucherNonce1,
+      voucherExpiry1,
       voucherSignature
     );
     throw new Error("❌ Settle should have reverted on replay!");

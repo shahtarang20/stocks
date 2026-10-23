@@ -75,6 +75,19 @@ class Job(Base, TimestampMixin):
     isolation_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="container")
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # --- Phase B/C: batching, challenges and redundant (shadow) execution ---
+    # Set when this job was submitted as part of a bulk batch.
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("batches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # True for an injected known-answer challenge. Deliberately NOT exposed to
+    # the agent API: a provider that can see this flag can cheat the audit.
+    is_challenge: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Set on a shadow re-execution; points at the primary job it duplicates.
+    shadow_of_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     lease_expires_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

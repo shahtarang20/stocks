@@ -61,6 +61,32 @@ from app.models.settlement import (
     OnChainTxType,
 )
 
+# Phase B — verification, reputation, spend controls and webhooks.
+from app.models.verification import (
+    RedundancyCheck,
+    VerificationChallenge,
+    VerificationResult,
+)
+from app.models.reputation import (
+    DisputeEvidence,
+    ProviderReputation,
+    ReputationEvent,
+    SlashEvent,
+)
+from app.models.spend import SpendAlert, SpendLimit
+from app.models.webhooks import WebhookDelivery, WebhookEndpoint
+
+# Phase C — enterprise (orgs/SSO/Connect) and bulk/training workloads.
+from app.models.enterprise import (
+    ConnectAccount,
+    OrganizationInvitation,
+    SsoConnection,
+)
+from app.models.workloads import Batch, Dataset, TrainingCheckpoint
+
+# Phase D — on-chain reconciliation audit trail.
+from app.models.reconciliation import ChainReconciliationRun
+
 __all__ = [
     "Role",
     "UserStatus",
@@ -108,4 +134,25 @@ __all__ = [
     "OnChainTransaction",
     "OnChainTxStatus",
     "OnChainTxType",
+    # Phase B
+    "VerificationChallenge",
+    "VerificationResult",
+    "RedundancyCheck",
+    "ProviderReputation",
+    "ReputationEvent",
+    "SlashEvent",
+    "DisputeEvidence",
+    "SpendLimit",
+    "SpendAlert",
+    "WebhookEndpoint",
+    "WebhookDelivery",
+    # Phase C
+    "OrganizationInvitation",
+    "SsoConnection",
+    "ConnectAccount",
+    "Batch",
+    "Dataset",
+    "TrainingCheckpoint",
+    # Phase D
+    "ChainReconciliationRun",
 ]

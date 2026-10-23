@@ -19,10 +19,12 @@ from app.schemas.settlement import (
     ContractDeploymentInfo,
     CreateEscrowLockRequest,
     EscrowResponse,
+    IssueRefundVoucherRequest,
     IssueSettlementVoucherRequest,
     OnChainReconciliationSummary,
     OnChainTransactionResponse,
     RecordOnChainTxRequest,
+    RefundVoucherResponse,
     SettlementVoucherResponse,
 )
 from app.services import settlement as settlement_service
@@ -118,6 +120,20 @@ async def issue_voucher(
     signer key, so it is a privileged platform action."""
     voucher = await settlement_service.issue_settlement_voucher(db, payload, current_user)
     return voucher
+
+
+@router.post("/refund-vouchers", response_model=RefundVoucherResponse)
+async def issue_refund_voucher(
+    payload: IssueRefundVoucherRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles("administrator")),
+):
+    """Sign the early-refund voucher ``ComputeSettlement.refundJob`` requires.
+
+    Admin-only for the same reason as the payout voucher: it signs with the
+    platform key. Without it, a pre-deadline refund is impossible on-chain and a
+    cancelled job's budget stays escrowed until the deadline elapses."""
+    return await settlement_service.issue_refund_voucher(db, payload, current_user)
 
 
 @router.post("/confirm", response_model=EscrowResponse)

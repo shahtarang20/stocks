@@ -7,6 +7,7 @@ import { Menu, X } from "lucide-react";
 import { Logo } from "@/components/layout/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "./user-menu";
+import { VerifyEmailBanner } from "./verify-email-banner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -124,6 +125,7 @@ export function ConsoleShell({
 
         <main className="min-w-0 flex-1 bg-background">
           <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+            <VerifyEmailBanner />
             {children}
           </div>
         </main>

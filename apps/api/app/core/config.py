@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     OBJECT_STORAGE_LOCAL_DIR: str = "./.artifact_store"
     OBJECT_STORAGE_ENDPOINT: str = ""  # set -> use S3Store
     OBJECT_STORAGE_BUCKET: str = "computecoin-artifacts"
+    OBJECT_STORAGE_ACCESS_KEY: str = ""
+    OBJECT_STORAGE_SECRET_KEY: str = ""
+    OBJECT_STORAGE_REGION: str = "us-east-1"
 
     # Phase 5 — billing / double-entry ledger / invoices / payouts / disputes
     BILLING_SIGNUP_GRANT_MINOR: int = 100000  # 1000.00 simulated promo credits

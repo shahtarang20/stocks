@@ -38,18 +38,39 @@ error text, `NaN`/`undefined`, or JS exceptions after the fixes below.
 | 6 | Low | React hydration errors: `Skeleton` (a `div`) rendered inside `<p>` on the provider dashboard and admin overview while loading. | Those wrappers are now `div`s. |
 | 7 | Low | `/favicon.ico` 404 on every page. | Added `src/app/icon.svg`. |
 
+## Round 2: production-like stack (Postgres + Redis + S3 + SMTP)
+
+Redis (built from source), an S3-compatible server (moto) and a local SMTP sink were run as
+user-space processes on localhost only. The API ran against all of them.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 8 | **Blocker** | **Object storage did not work in any deployed config.** `S3Store` was a stub that raised on every call, yet `docker-compose.yml`, `docker-compose.prod.yml` and `.env.example` all set `OBJECT_STORAGE_ENDPOINT`. A deployed stack could not store one job output, dataset or checkpoint. Local-filesystem dev hid it. | Real boto3 `S3Store` (path-style, retries, auto-creates the bucket, rejects traversal keys, `FileNotFoundError` on missing keys like the local store); `boto3` added to `pyproject.toml`; access key / secret / region settings added. Verified: all e2e journeys pass with artifacts landing in the bucket. |
+| 9 | **Blocker** | **Emailed links led to 404.** The API emails `/verify-email?token=` and `/reset-password?token=`, but the web app had neither page, and no forgot-password page or link. Nobody could finish signup or recover a password through the product. | New `/verify-email`, `/forgot-password`, `/reset-password` pages and a "Forgot password?" link on login. Tested in a browser against real SMTP delivery: verify, single-use link, mismatched passwords, reset, old password rejected, new password works (13/13). |
+| 10 | High | **An unverified user had no way to get a new link** (the first expires in 24h) and was locked out of billing and jobs, seeing only a bare 403. | `POST /auth/resend-verification` (session required, 3 per hour per account, no account probing) and a console banner with a Resend button. Tests added; browser flow passes. |
+| 11 | Medium | `.env.example` used names the app never reads (`EMAIL_PROVIDER_CONFIGURATION`, `RATE_LIMIT_CONFIGURATION`), and did not mention that production refuses to start unless `SETTLEMENT_ENABLED=false` or a signer key is set. Following it would leave email on console. | Replaced with the real settings and a production block. |
+
+Verified on the stack: Redis-backed rate limiting (login blocked with 429 after 5 tries),
+production mode refuses dev secrets and starts with strong ones, `/docs` is off in production,
+cookies are `Secure`/`HttpOnly`, register no longer returns the verification token, and phases
+2 to 4 plus both journey scripts pass. Load: 400 public requests at 233 req/s, 0% errors;
+1,200 authenticated requests from 30 concurrent clients at about 200 req/s, p95 220 ms,
+0 errors, 0 server errors (laptop numbers, not staging capacity).
+
 ## Regression tests added
 
 - `tests/test_phase7_admin.py::test_admin_lists_all_machines_without_being_a_provider`
 - `tests/test_pg_concurrency_live.py::test_concurrent_first_billing_calls_create_one_account`
 - `tests/test_pg_concurrency_live.py::test_concurrent_first_provider_earnings_calls_create_one_account`
+- `tests/test_storage_s3_live.py` (opt-in, `RUN_S3_INTEGRATION=1`; 5 tests)
+- `tests/test_email_verification_gate.py::test_resend_verification_*` (2 tests)
 
 The two concurrency tests need real Postgres (SQLite cannot show this race). I confirmed both
 **fail with the fix reverted and pass with it**.
 
 ## Test results
 
-- API: 431 passed, 29 skipped (opt-in: chain, GPU, live Postgres), 0 failed.
+- API: 433 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed.
 - Provider agent: 66 passed, 1 skipped (needs a GPU).
 - Web: `tsc` clean, `next lint` clean, production build passes.
 - E2E scripts on a clean DB: full journey, deep journey (45/45), phases 2, 3, 4, 5 all pass.

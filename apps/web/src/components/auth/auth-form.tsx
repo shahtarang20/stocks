@@ -143,6 +143,12 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             />
             {errors.password ? (
               <p className="text-xs text-danger">{errors.password.message}</p>
+            ) : isLogin ? (
+              <p className="text-xs">
+                <Link href="/forgot-password" className="text-primary hover:underline">
+                  Forgot password?
+                </Link>
+              </p>
             ) : (
               !isLogin && (
                 <p className="text-xs text-muted-foreground">

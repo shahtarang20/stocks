@@ -4,8 +4,8 @@ The API process NEVER executes customer code — it only stores and serves bytes
 
 Two backends:
 * :class:`LocalFsStore` — dev/test default, writes under ``OBJECT_STORAGE_LOCAL_DIR``.
-* :class:`S3Store` — a clearly-marked stub used when ``OBJECT_STORAGE_ENDPOINT``
-  is configured (prod S3/MinIO). Wiring the real client is out of Phase-4 scope.
+* :class:`S3Store` — boto3-backed, used when ``OBJECT_STORAGE_ENDPOINT`` is
+  configured (MinIO locally, S3-compatible hosted).
 
 Signed grants are short-lived HMAC tokens scoped to a resource id + expiry, keyed
 on ``AUTH_SECRET``. Upload grants are scoped to a ``job_id``; download grants to an
@@ -92,30 +92,91 @@ class LocalFsStore(ObjectStore):
 
 
 class S3Store(ObjectStore):
-    """STUB: prod S3/MinIO backend.
+    """S3-compatible backend (MinIO locally, Supabase Storage / S3 hosted).
 
-    Intentionally not implemented in Phase 4 — the real boto3/minio client is
-    wired in a later phase. Selected only when ``OBJECT_STORAGE_ENDPOINT`` is set,
-    so dev/test never reach it.
+    Selected when ``OBJECT_STORAGE_ENDPOINT`` is set. The bucket is created on
+    first use if it does not exist, so a fresh MinIO works without a manual step.
     """
 
-    def __init__(self, endpoint: str, bucket: str) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        bucket: str,
+        access_key: str = "",
+        secret_key: str = "",
+        region: str = "us-east-1",
+    ) -> None:
+        import boto3
+        from botocore.config import Config
+
         self.endpoint = endpoint
         self.bucket = bucket
-
-    def _unimplemented(self) -> RuntimeError:
-        return RuntimeError(
-            "S3Store is a Phase-4 stub; configure OBJECT_STORAGE_LOCAL_DIR for dev/test"
+        self._client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key or None,
+            aws_secret_access_key=secret_key or None,
+            region_name=region,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+                retries={"max_attempts": 3, "mode": "standard"},
+                connect_timeout=5,
+                read_timeout=30,
+            ),
         )
+        self._bucket_ready = False
+
+    def _ensure_bucket(self) -> None:
+        if self._bucket_ready:
+            return
+        from botocore.exceptions import ClientError
+
+        try:
+            self._client.head_bucket(Bucket=self.bucket)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code not in ("404", "NoSuchBucket", "NotFound"):
+                raise
+            try:
+                self._client.create_bucket(Bucket=self.bucket)
+            except ClientError as create_exc:
+                # Another worker may have created it between our check and now.
+                if create_exc.response.get("Error", {}).get("Code") not in (
+                    "BucketAlreadyOwnedByYou",
+                    "BucketAlreadyExists",
+                ):
+                    raise
+        self._bucket_ready = True
+
+    @staticmethod
+    def _check_key(key: str) -> None:
+        # Same traversal rule as LocalFsStore: keys are opaque, never paths.
+        if not key or key.startswith("/") or ".." in key.split("/"):
+            raise ValueError("invalid_object_key")
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-        raise self._unimplemented()
+        self._check_key(key)
+        self._ensure_bucket()
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
     def get(self, key: str) -> bytes:
-        raise self._unimplemented()
+        self._check_key(key)
+        self._ensure_bucket()
+        from botocore.exceptions import ClientError
+
+        try:
+            return self._client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                # Match LocalFsStore, which callers already handle.
+                raise FileNotFoundError(key) from exc
+            raise
 
     def delete(self, key: str) -> None:
-        raise self._unimplemented()
+        self._check_key(key)
+        self._ensure_bucket()
+        self._client.delete_object(Bucket=self.bucket, Key=key)  # idempotent in S3
 
 
 _store: ObjectStore | None = None
@@ -126,7 +187,13 @@ def get_store() -> ObjectStore:
     global _store
     if _store is None:
         if settings.OBJECT_STORAGE_ENDPOINT:
-            _store = S3Store(settings.OBJECT_STORAGE_ENDPOINT, settings.OBJECT_STORAGE_BUCKET)
+            _store = S3Store(
+                settings.OBJECT_STORAGE_ENDPOINT,
+                settings.OBJECT_STORAGE_BUCKET,
+                settings.OBJECT_STORAGE_ACCESS_KEY,
+                settings.OBJECT_STORAGE_SECRET_KEY,
+                settings.OBJECT_STORAGE_REGION,
+            )
         else:
             _store = LocalFsStore(settings.OBJECT_STORAGE_LOCAL_DIR)
     return _store

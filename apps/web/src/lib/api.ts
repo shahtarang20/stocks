@@ -1027,6 +1027,38 @@ export const api = {
     });
   },
 
+  /** POST /auth/verify-email — consume the token from the verification email. */
+  verifyEmail(token: string): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/verify-email", {
+      method: "POST",
+      body: { token },
+    });
+  },
+
+  /** POST /auth/resend-verification — email a fresh verification link (signed-in users). */
+  resendVerification(accessToken: string): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/resend-verification", {
+      method: "POST",
+      token: accessToken,
+    });
+  },
+
+  /** POST /auth/password-reset/request — always succeeds (no account enumeration). */
+  requestPasswordReset(email: string): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/password-reset/request", {
+      method: "POST",
+      body: { email },
+    });
+  },
+
+  /** POST /auth/password-reset/confirm — set a new password with the emailed token. */
+  confirmPasswordReset(token: string, newPassword: string): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/password-reset/confirm", {
+      method: "POST",
+      body: { token, new_password: newPassword },
+    });
+  },
+
   async login(credentials: AuthCredentials): Promise<TokenPair> {
     const tokens = await request<TokenPair>("/auth/login", {
       method: "POST",

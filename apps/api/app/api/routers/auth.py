@@ -187,6 +187,39 @@ async def verify_email(
     return MessageResponse(message="Email verified")
 
 
+@router.post("/resend-verification", response_model=MessageResponse)
+async def resend_verification(
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Email a fresh verification link to the signed-in, still-unverified user.
+
+    The link from registration expires (24h) and can be lost; without this an
+    unverified account is locked out of billing and compute for good. Requires a
+    session, so it cannot be used to probe which addresses are registered, and is
+    rate-limited per account so it cannot be used to spam an inbox."""
+    _enforce_rate_limit(f"resend_verify:{current.id}", 3, 3600)
+    if current.email_verified:
+        return MessageResponse(message="Email already verified")
+
+    raw_token = generate_opaque_token()
+    db.add(
+        EmailVerificationToken(
+            user_id=current.id,
+            token_hash=hash_token(raw_token),
+            expires_at=utcnow() + dt.timedelta(seconds=settings.EMAIL_VERIFICATION_TTL_SECONDS),
+        )
+    )
+    await record_audit(
+        db, action="user.resend_verification", outcome="success", actor_user_id=current.id,
+        ip=client_ip(request), resource_type="user", resource_id=str(current.id),
+    )
+    await db.flush()
+    await send_verification_email(current.email, raw_token)
+    return MessageResponse(message="Verification email sent")
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,

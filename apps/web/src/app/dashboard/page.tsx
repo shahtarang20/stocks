@@ -122,9 +122,9 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>
-                This is the Phase 1 console shell. The account and project
-                surfaces are wired to the ComputeCoin API; job submission and
-                live provisioning are stubbed.
+                Projects, API keys, jobs, billing and invoices are live against
+                the ComputeCoin API. The charts above are demo data; every
+                other page shows your real account.
               </p>
               <ul className="space-y-2">
                 <li>
@@ -134,7 +134,7 @@ export default function DashboardPage() {
                   >
                     View your projects
                   </Link>{" "}
-                  (live from the API when authenticated).
+                  (live).
                 </li>
                 <li>
                   <Link
@@ -143,7 +143,7 @@ export default function DashboardPage() {
                   >
                     Explore GPU listings
                   </Link>{" "}
-                  (synthetic demo inventory).
+                  (live machines from providers).
                 </li>
                 <li>
                   <Link
@@ -152,7 +152,7 @@ export default function DashboardPage() {
                   >
                     Manage API keys
                   </Link>{" "}
-                  (placeholder).
+                  (live).
                 </li>
               </ul>
             </CardContent>

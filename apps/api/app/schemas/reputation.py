@@ -11,6 +11,7 @@ import datetime as dt
 import decimal
 import uuid
 
+from app.schemas.billing import parse_money
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -52,7 +53,7 @@ class SlashCreate(BaseModel):
     @field_validator("amount", mode="before")
     @classmethod
     def _coerce(cls, v) -> decimal.Decimal:
-        return decimal.Decimal(str(v))
+        return parse_money(v)
 
 
 class SlashOut(BaseModel):

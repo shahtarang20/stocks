@@ -26,8 +26,15 @@ export function billingErrorMessage(err: unknown): string {
       return "This job has not settled yet — it can only be disputed after it completes.";
     case "dispute_exists":
       return "A dispute is already open for this job.";
+    case "email_not_verified":
+      return "Verify your email address first. Use the banner at the top of the page to resend the link.";
     default:
-      if (err instanceof ApiError && err.message) return err.message;
+      if (err instanceof ApiError && err.message) {
+        // Never show a raw snake_case API code to a user.
+        return /^[a-z0-9]+(_[a-z0-9]+)+$/.test(err.message)
+          ? err.message.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) + "."
+          : err.message;
+      }
       return "Something went wrong. Please try again.";
   }
 }

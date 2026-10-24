@@ -100,7 +100,7 @@ async def trigger_reconciliation_run(
 @router.get("/runs")
 async def list_reconciliation_runs(
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2_000_000_000),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(require_roles("administrator")),
 ) -> list[dict[str, Any]]:

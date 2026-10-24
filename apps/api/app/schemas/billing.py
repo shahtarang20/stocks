@@ -14,6 +14,34 @@ from pydantic import BaseModel, Field, field_validator
 
 CURRENCY = "USDC_CREDITS"
 
+#: Largest single money amount any endpoint accepts. Far above any real top-up or
+#: payout, and low enough that cents-in-a-BIGINT can never overflow.
+MAX_MONEY_AMOUNT = decimal.Decimal("1000000")
+
+
+def parse_money(v) -> decimal.Decimal:
+    """Strictly parse a money amount received from a client.
+
+    Every money schema used ``Decimal(str(v))``, so "NaN", "Infinity", "1e30", a
+    bare "abc" or a boolean escaped validation and crashed the request with a 500,
+    "1.999" was silently rounded UP to 2.00, and there was no upper bound at all
+    (a 999,999,999,999 top-up went straight through). Reject all of those with a
+    clean 422 instead.
+    """
+    if v is None or isinstance(v, bool):
+        raise ValueError("amount must be a decimal number")
+    try:
+        d = decimal.Decimal(str(v).strip())
+    except (decimal.InvalidOperation, ValueError):
+        raise ValueError("amount must be a decimal number") from None
+    if not d.is_finite():
+        raise ValueError("amount must be a finite decimal number")
+    if d.as_tuple().exponent < -2:
+        raise ValueError("amount can have at most 2 decimal places")
+    if abs(d) > MAX_MONEY_AMOUNT:
+        raise ValueError(f"amount cannot exceed {MAX_MONEY_AMOUNT}")
+    return d
+
 
 class AmountIn(BaseModel):
     amount: decimal.Decimal = Field(gt=0)
@@ -21,7 +49,7 @@ class AmountIn(BaseModel):
     @field_validator("amount", mode="before")
     @classmethod
     def _coerce(cls, v):
-        return decimal.Decimal(str(v))
+        return parse_money(v)
 
 
 class AccountOut(BaseModel):
@@ -133,7 +161,7 @@ class RefundCreate(BaseModel):
     @field_validator("amount", mode="before")
     @classmethod
     def _coerce(cls, v):
-        return decimal.Decimal(str(v))
+        return parse_money(v)
 
 
 class RefundOut(BaseModel):
@@ -152,7 +180,7 @@ class DisputeResolve(BaseModel):
     @field_validator("refund_amount", mode="before")
     @classmethod
     def _coerce(cls, v):
-        return None if v is None else decimal.Decimal(str(v))
+        return None if v is None else parse_money(v)
 
 
 class ReconciliationAccountOut(BaseModel):
@@ -182,7 +210,7 @@ class CheckoutSessionCreate(BaseModel):
     @field_validator("amount", mode="before")
     @classmethod
     def _coerce(cls, v):
-        return decimal.Decimal(str(v))
+        return parse_money(v)
 
 
 class CheckoutSessionOut(BaseModel):

@@ -174,7 +174,7 @@ export default function JobsPage() {
                       {formatRelativeTime(job.created_at)}
                     </TableCell>
                     <TableCell className="text-xs">
-                      {job.status === "completed" && job.final_cost != null ? (
+                      {job.final_cost != null ? (
                         <span className="font-mono tabular-nums text-foreground">
                           {job.final_cost}
                         </span>

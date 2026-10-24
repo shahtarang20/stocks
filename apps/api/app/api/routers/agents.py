@@ -135,6 +135,28 @@ async def enroll(
     report = body.capability_report
     first_gpu = report.gpus[0] if report.gpus else None
 
+    # One machine per (provider, hostname). A deregistered machine releases its
+    # hostname so a reinstalled host can enroll again; an ACTIVE duplicate is a
+    # clear 409 and the token stays unused. This used to surface as a bare 500
+    # from the unique constraint, and burned nothing but the provider's patience.
+    same_host = (
+        await db.execute(
+            select(ProviderMachine).where(
+                ProviderMachine.provider_id == token.provider_id,
+                ProviderMachine.hostname == body.hostname,
+            )
+        )
+    ).scalars().all()
+    if any(m.status != "deregistered" for m in same_host):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="machine_hostname_already_enrolled",
+        )
+    for old in same_host:
+        old.hostname = f"{old.hostname[:240]}~{str(old.id)[:8]}"
+    if same_host:
+        await db.flush()
+
     machine_secret, signing_key, secret_hash = generate_machine_credential()
     machine = ProviderMachine(
         provider_id=token.provider_id,

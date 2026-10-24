@@ -54,8 +54,8 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>Session</CardTitle>
             <CardDescription>
-              Tokens are stored in your browser during Phase 1 (dev-only). Log
-              out to clear them from this device.
+              Log out to end your session on this device. Your session is held
+              in secure cookies and in memory, never in local storage.
             </CardDescription>
           </CardHeader>
           <CardContent>

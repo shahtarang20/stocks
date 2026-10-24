@@ -9,9 +9,9 @@ web app, and the **real provider agent** (`computecoin_agent`). Everything below
 user would drive it: through a real Chrome browser against the UI where a UI exists, and through
 the real agent for the provider side. No mocks.
 
-Not covered (needs infrastructure that is not on this machine): Docker/`make up`, MinIO/S3,
-Redis-backed rate limiting, a real GPU (`RUN_GPU_TESTS`), Stripe, and the testnet chain tests
-(27 API tests are opt-in skips for this reason).
+Not covered (needs infrastructure that is not on this machine): Docker/`make up`, a real GPU
+(`RUN_GPU_TESTS`) and live Stripe. Redis, S3 and SMTP were run locally from Round 2; the token and
+chain code was run against a local Hardhat chain (25 contract tests and 51 API chain tests pass).
 
 ## Journeys exercised
 
@@ -57,6 +57,45 @@ cookies are `Secure`/`HttpOnly`, register no longer returns the verification tok
 1,200 authenticated requests from 30 concurrent clients at about 200 req/s, p95 220 ms,
 0 errors, 0 server errors (laptop numbers, not staging capacity).
 
+## Round 3: every control, every role, plus fuzzing
+
+About 360 control-level browser checks (`tests/qa/`, full list in `docs/QA_CHECKLIST.md`) and
+two fuzzers (about 15,000 hostile requests across every endpoint). All 356 browser checks pass on
+the production build from a fresh seed. The fuzzers found 6 endpoint groups returning 500; all fixed,
+and a re-run returns no 5xx (the only 503 is chain reconciliation correctly reporting that no chain
+is configured).
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| 12 | **High** | **Money inputs crashed or misbehaved.** `NaN`, `Infinity`, `1e30`, `0.001`, garbage and booleans returned 500 from credit purchase, payouts, disputes and Stripe Connect; `1.999` was silently rounded up to 2.00; a 999,999,999,999 top-up went straight through (no ceiling). | One strict `parse_money` (finite, at most 2 decimals, at most 1,000,000) used by every money schema. |
+| 13 | **High** | **Duplicate disputes.** Nothing stopped unlimited disputes on one job (each adds evidence and an admin task). The UI defined a "dispute exists" message the backend never produced. | Job row lock plus a 409 `dispute_exists` while one is open. |
+| 14 | **High** | **Admin Disputes always looked empty.** It called the customer's own-disputes endpoint instead of the admin one. | Now uses `/v1/admin/disputes`. |
+| 15 | **High** | **Artifact downloads went to the wrong host.** Signed links are API-relative, so the browser opened them on the web origin (404 anywhere web and API differ, i.e. production). | `apiAbsoluteUrl()` for artifact and invoice links. |
+| 16 | **High** | **Invoice Download did nothing.** The endpoint returns the invoice, not a link, and the page only handled a link. | Saves the invoice as a JSON file. |
+| 17 | Medium | Unknown `machine_id` on job submit was a foreign-key 500 (shown in browsers as a CORS error). | 404 `machine_not_found` before the insert. |
+| 18 | Medium | Negative `limit`, or huge `offset`/`page`, 500'd about a dozen list endpoints. | Range limits on every pagination parameter. |
+| 19 | Medium | A NUL character in any text field (project, org, token label) was a 500 on Postgres. | One handler returns 422 `invalid_characters`. |
+| 20 | Medium | Enrolling a second machine with an existing hostname was a bare 500; a deregistered host could never re-enroll. | 409 `machine_hostname_already_enrolled` (token not consumed); deregistered hostnames are released. |
+| 21 | Medium | Usage totals read 0.00 and durations read a dash even with metered jobs (UI read fields the API does not send). Disputed jobs read "not charged" despite a charge. | UI reads the real fields; cost shows whenever `final_cost` exists. |
+| 22 | Medium | Project Description was collected, sent, and discarded (no column). | Migration 0014, model, schemas, and the list now shows it. |
+| 23 | Medium | Login ignored `?next=` (deep link then login always landed on the dashboard). | Honoured, same-site paths only (no open redirect). |
+| 24 | Low | Raw codes like `isolation_tier_not_supported_by_machine` shown to users. | Plain-English messages for every job and billing error code, and a readable fallback. |
+| 25 | Low | Region filter was exact and case-sensitive ("US-East" matched nothing) while the model filter was a substring. | Case-insensitive substring. |
+| 26 | Low | Mobile (390px) overflow on API keys (long project name) and Admin vendors. | Fixed. |
+| 27 | Low | False or stale copy: "Audited smart contracts" (not audited), "tokens stored in your browser", "job submission is stubbed". | Corrected. |
+
+Regression tests added for 12 to 20, 22, 23 and 25, including pagination, amounts, disputes,
+hostnames, NUL characters, projects and region.
+
+### Product gaps found (not bugs, decide before launch)
+
+- **Account deletion is a demo no-op**, and profile editing is a disabled placeholder. Real users will expect both.
+- **The main customer dashboard charts and the public `/marketplace` list are labelled demo data** while a live marketplace exists at `/marketplace/gpus`. Honest, but a launch page should not lead with fake numbers.
+- A submit rejected by the API (budget, isolation) still leaves a `failed` job row in the customer's list.
+- Admin audit log shows actor as a truncated id, not an email; the admin Providers page lists only machines that are online.
+- Ledger shows only the most recent entries, with no pagination controls.
+- Admin Configuration and Security pages are static, not live reads of the running settings (they say so).
+
 ## Regression tests added
 
 - `tests/test_phase7_admin.py::test_admin_lists_all_machines_without_being_a_provider`
@@ -70,7 +109,9 @@ The two concurrency tests need real Postgres (SQLite cannot show this race). I c
 
 ## Test results
 
-- API: 433 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed.
+- API: 473 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. With the opt-in live Postgres and S3 suites switched on against local services: 9 of 9 pass.
+- Browser QA (`tests/qa/`): 356 of 356 control-level checks pass on the production build from a fresh seed (customer 123, provider 54, admin 70, public 66, mobile 43). Per-control results are in `docs/QA_CHECKLIST.md`.
+- Fuzzing: about 15,000 hostile requests (POST/PUT/PATCH bodies and GET path/query parameters) across every endpoint; zero 5xx apart from the intentional 503 for an unconfigured chain.
 - Provider agent: 66 passed, 1 skipped (needs a GPU).
 - Web: `tsc` clean, `next lint` clean, production build passes.
 - E2E scripts on a clean DB: full journey, deep journey (45/45), phases 2, 3, 4, 5 all pass.

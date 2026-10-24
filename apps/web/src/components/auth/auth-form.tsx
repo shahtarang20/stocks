@@ -28,6 +28,19 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+/**
+ * Where to go after signing in. The auth guard sends signed-out visitors to
+ * /login?next=<page>, but the form ignored it and always landed on /dashboard.
+ * Only same-site paths are honoured: "//evil.example" and "https://…" would turn
+ * the login page into an open redirect.
+ */
+function safeNextPath(next: string | null): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.includes("\\")) {
+    return "/dashboard";
+  }
+  return next;
+}
+
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
   const { login, register: registerUser } = useAuth();
@@ -74,7 +87,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       } else {
         await registerUser(email, values.password);
       }
-      router.push("/dashboard");
+      router.push(safeNextPath(new URL(window.location.href).searchParams.get("next")));
     } catch (err) {
       if (err instanceof ApiError) {
         setServerError(err.message);

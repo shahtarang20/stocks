@@ -63,7 +63,7 @@ async def list_escrows(
     job_id: Optional[uuid.UUID] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2_000_000_000),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -172,7 +172,7 @@ async def record_transaction(
 @router.get("/transactions", response_model=List[OnChainTransactionResponse])
 async def list_transactions(
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2_000_000_000),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(require_roles("administrator")),
 ):

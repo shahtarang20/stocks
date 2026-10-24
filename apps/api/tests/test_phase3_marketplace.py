@@ -239,6 +239,12 @@ async def test_search_filters(client: AsyncClient):
     r = await client.get("/v1/marketplace/machines", params={"region": "eu-west"})
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["price_per_hour"] == "5.00"
+    # Region is a case-insensitive substring match, like the model filter: typing
+    # "EU" or "eu" finds "eu-west" (it used to need the exact, lower-case string).
+    for typed in ("EU", "eu", " Eu-We "):
+        r = await client.get("/v1/marketplace/machines", params={"region": typed})
+        assert r.json()["total"] == 1, typed
+    assert (await client.get("/v1/marketplace/machines", params={"region": "mars"})).json()["total"] == 0
 
     # workload filter.
     r = await client.get("/v1/marketplace/machines", params={"workload": "batch-inference"})

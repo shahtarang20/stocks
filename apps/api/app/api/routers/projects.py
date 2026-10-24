@@ -71,7 +71,10 @@ async def create_project(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of that organization"
             )
-    project = Project(owner_id=current.id, org_id=org_id, name=body.name)
+    project = Project(
+        owner_id=current.id, org_id=org_id, name=body.name,
+        description=(body.description or "").strip() or None,
+    )
     db.add(project)
     await db.flush()
     return ProjectOut.model_validate(project)
@@ -114,6 +117,8 @@ async def update_project(
 ) -> ProjectOut:
     project = await _get_owned_project(db, project_id, current)
     project.name = body.name
+    if "description" in body.model_fields_set:
+        project.description = (body.description or "").strip() or None
     await db.flush()
     return ProjectOut.model_validate(project)
 

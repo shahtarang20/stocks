@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -407,8 +407,8 @@ async def reinstate_user(
 # ---------------------------------------------------------------------------
 @money_router.get("/audit-logs", response_model=list[AdminAuditLogOut])
 async def list_audit_logs(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=2_000_000_000),
     current: CurrentUser = Depends(require_roles("administrator")),
     db: AsyncSession = Depends(get_db),
 ) -> list[AdminAuditLogOut]:
@@ -438,7 +438,7 @@ async def list_audit_logs(
 # ---------------------------------------------------------------------------
 @money_router.get("/jobs", response_model=list[AdminJobOut])
 async def list_admin_jobs(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     current: CurrentUser = Depends(require_roles("administrator")),
     db: AsyncSession = Depends(get_db),
 ) -> list[AdminJobOut]:
@@ -469,7 +469,7 @@ async def list_admin_jobs(
 
 @money_router.get("/machines", response_model=list[MachineOut])
 async def list_admin_machines(
-    limit: int = 200,
+    limit: int = Query(200, ge=1, le=500),
     current: CurrentUser = Depends(require_roles("administrator")),
     db: AsyncSession = Depends(get_db),
 ) -> list[MachineOut]:

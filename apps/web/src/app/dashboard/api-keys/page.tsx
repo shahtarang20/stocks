@@ -127,7 +127,7 @@ export default function ApiKeysPage() {
       <div className="space-y-6">
         {/* Project selector */}
         {projects.length > 1 && (
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <Label htmlFor="proj-select" className="text-sm text-muted-foreground whitespace-nowrap">
               Active Project:
             </Label>
@@ -135,7 +135,7 @@ export default function ApiKeysPage() {
               id="proj-select"
               value={activeProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
-              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-primary"
+              className="min-w-0 max-w-full flex-1 truncate rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-primary sm:flex-none"
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>

@@ -26,7 +26,7 @@ export default function AdminDisputesPage() {
   const query = useQuery({
     queryKey: ["admin", "disputes"],
     enabled: Boolean(accessToken),
-    queryFn: () => api.listDisputes(token),
+    queryFn: () => api.listAdminDisputes(token),
     refetchInterval: 30000,
   });
 
@@ -36,7 +36,7 @@ export default function AdminDisputesPage() {
     <>
       <ConsolePageHeader
         title="Disputes"
-        description="Open and resolved billing disputes from GET /v1/disputes. Admins can resolve disputes and authorize refunds from Admin → Billing."
+        description="Open and resolved billing disputes across all customers from GET /v1/admin/disputes. Admins can resolve disputes and authorize refunds from Admin → Billing."
         action={
           <Button variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />

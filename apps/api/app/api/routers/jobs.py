@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.db.base import ensure_aware, utcnow
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user, require_verified_user
+from app.models.provider import ProviderMachine
 from app.models.jobs import Artifact, Job, JobEvent, JobLogMetadata
 from app.models.org import OrganizationMember, Project
 from app.schemas.auth import CurrentUser
@@ -156,6 +157,19 @@ async def create_job(
             return shape_job(prior)
 
     await _assert_project_accessible(db, body.project_id, current)
+
+    # A targeted machine must exist BEFORE the insert: jobs.machine_id is a foreign
+    # key, so an unknown id used to fail the flush and surface as a bare 500 (which
+    # the browser then reports as a CORS error) instead of machine_not_found.
+    if body.machine_id is not None:
+        known = await db.scalar(
+            select(ProviderMachine.id).where(
+                ProviderMachine.id == body.machine_id,
+                ProviderMachine.status != "deregistered",
+            )
+        )
+        if known is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="machine_not_found")
 
     retry_policy = body.retry_policy.model_dump() if body.retry_policy else {"max_retries": 0}
     job = Job(

@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ApiError, CREDITS_LABEL, type Invoice } from "@/lib/api";
+import { api, apiAbsoluteUrl, ApiError, CREDITS_LABEL, type Invoice } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { invoiceStatusVariant, humanizeStatus } from "@/lib/billing";
 import { formatRelativeTime } from "@/lib/utils";
@@ -72,7 +72,21 @@ export default function InvoiceDetailPage() {
   const downloadMut = useMutation({
     mutationFn: () => api.getInvoiceDownloadUrl(token, invoiceId),
     onSuccess: (res) => {
-      if (res?.url) window.open(res.url, "_blank", "noopener,noreferrer");
+      if (res?.url) {
+        window.open(apiAbsoluteUrl(res.url), "_blank", "noopener,noreferrer");
+        return;
+      }
+      // /v1/invoices/{id}/download returns the invoice document itself, not a
+      // link, so there was nothing to open and the button did nothing at all.
+      const blob = new Blob([JSON.stringify(res, null, 2)], { type: "application/json" });
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = `invoice-${invoiceId}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
     },
   });
 

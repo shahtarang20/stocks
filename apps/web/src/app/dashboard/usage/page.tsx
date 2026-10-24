@@ -52,7 +52,12 @@ export default function UsagePage() {
   const data = query.data;
   const records: UsageRecord[] =
     data?.usage_records ?? data?.records ?? [];
-  const summary = data?.summary;
+  // The API returns the totals flat beside the records; older shapes nest them
+  // under `summary`. Reading only `summary` left both totals at 0.00.
+  const summary = data?.summary ?? {
+    total_actual: data?.total_actual,
+    total_estimated: data?.total_estimated,
+  };
   const currency = summary?.currency ?? data?.currency ?? "USDC_CREDITS";
 
   return (
@@ -173,7 +178,7 @@ export default function UsagePage() {
                           )}
                         </TableCell>
                         <TableCell className="text-right font-mono text-sm tabular-nums">
-                          {formatDuration(r.duration_seconds)}
+                          {formatDuration(r.duration_seconds ?? r.actual_seconds)}
                         </TableCell>
                         <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
                           {r.estimated_cost ?? "—"}

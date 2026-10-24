@@ -216,7 +216,7 @@ export default function AdminSettlementPage() {
             </Badge>
           </div>
           <CardDescription>
-            Audited smart contracts governing compute budget locking, platform fee split, and cryptographic voucher settlement.
+            Smart contracts governing compute budget locking, platform fee split, and cryptographic voucher settlement. Development deployment, not independently audited.
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user, require_verified_user
 from app.models.enterprise import ConnectAccount
+from app.schemas.billing import parse_money
 from app.schemas.auth import CurrentUser
 from app.services import ledger
 from app.services.audit import record_audit
@@ -102,7 +103,7 @@ class ConnectPayoutRequest(BaseModel):
     @field_validator("amount", mode="before")
     @classmethod
     def _coerce(cls, v):
-        return decimal.Decimal(str(v))
+        return parse_money(v)
 
 
 class ConnectPayoutOut(BaseModel):

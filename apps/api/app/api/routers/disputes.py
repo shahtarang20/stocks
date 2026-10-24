@@ -28,6 +28,7 @@ from app.db.session import get_db
 from app.deps import client_ip, get_current_user, require_roles
 from app.models.billing import Dispute
 from app.models.jobs import Job
+from app.schemas.billing import parse_money
 from app.schemas.auth import CurrentUser
 from app.schemas.billing import DisputeCreate, DisputeOut
 from app.services import disputes as dispute_svc
@@ -63,7 +64,7 @@ class DisputeAdjudicate(BaseModel):
     @field_validator("refund_amount", mode="before")
     @classmethod
     def _coerce(cls, v: object) -> decimal.Decimal | None:
-        return None if v is None else decimal.Decimal(str(v))
+        return None if v is None else parse_money(v)
 
 
 def shape_dispute(d: Dispute) -> DisputeOut:
@@ -109,7 +110,9 @@ async def open_dispute(
 ) -> DisputeOut:
     job = (
         await db.execute(
-            select(Job).where(Job.id == job_id, Job.customer_id == current.id)
+            # Row lock: two simultaneous submits for one job must not both pass the
+            # "already open?" check below.
+            select(Job).where(Job.id == job_id, Job.customer_id == current.id).with_for_update()
         )
     ).scalar_one_or_none()
     if job is None:
@@ -119,6 +122,14 @@ async def open_dispute(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="job_not_settled"
         )
+
+    # One active dispute per job. Nothing used to enforce this, so every extra POST
+    # created another dispute (and another evidence bundle) for an admin to triage.
+    already_open = await db.scalar(
+        select(Dispute.id).where(Dispute.job_id == job.id, Dispute.status == "open").limit(1)
+    )
+    if already_open is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="dispute_exists")
 
     dispute = Dispute(job_id=job.id, customer_id=current.id, reason=body.reason, status="open")
     db.add(dispute)

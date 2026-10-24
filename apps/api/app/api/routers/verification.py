@@ -135,7 +135,7 @@ async def list_challenges(
     model: str | None = None,
     active: bool | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=2_000_000_000),
     current: CurrentUser = _ADMIN,
     db: AsyncSession = Depends(get_db),
 ) -> list[ChallengeOut]:
@@ -165,7 +165,7 @@ async def list_results(
     kind: str | None = None,
     passed: bool | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=2_000_000_000),
     current: CurrentUser = _ADMIN,
     db: AsyncSession = Depends(get_db),
 ) -> list[VerificationResultOut]:
@@ -191,7 +191,7 @@ async def list_results(
 async def list_redundancy_checks(
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=2_000_000_000),
     current: CurrentUser = _ADMIN,
     db: AsyncSession = Depends(get_db),
 ) -> list[RedundancyCheckOut]:

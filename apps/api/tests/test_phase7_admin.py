@@ -251,3 +251,29 @@ async def test_admin_lists_all_machines_without_being_a_provider(
         "/v1/admin/machines", headers=auth_headers(customer_client["access_token"])
     )
     assert denied.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "path,params",
+    [
+        ("/v1/admin/audit-logs", {"limit": -1}),
+        ("/v1/admin/audit-logs", {"limit": 0}),
+        ("/v1/admin/audit-logs", {"offset": 99999999999999999999}),
+        ("/v1/admin/jobs", {"limit": -1}),
+        ("/v1/admin/machines", {"limit": -1}),
+        ("/v1/billing/ledger", {"page": 99999999999999999999}),
+        ("/v1/billing/ledger", {"page": 0}),
+        ("/v1/settlement/escrows", {"offset": 99999999999999999999}),
+        ("/v1/settlement/transactions", {"offset": 99999999999999999999}),
+        ("/v1/admin/verification/results", {"offset": 99999999999999999999}),
+        ("/v1/marketplace/machines", {"page_size": 100000}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_list_endpoints_reject_out_of_range_pagination_with_422(
+    client: AsyncClient, admin_client: dict, path: str, params: dict
+):
+    """A negative LIMIT or an overflowing OFFSET/page used to reach Postgres and
+    come back as a 500 on a dozen list endpoints."""
+    r = await client.get(path, params=params, headers=auth_headers(admin_client["access_token"]))
+    assert r.status_code == 422, (path, params, r.status_code, r.text)

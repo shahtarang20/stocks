@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   api,
+  apiAbsoluteUrl,
   ApiError,
   CREDITS_LABEL,
   isTerminalJobStatus,
@@ -131,7 +132,7 @@ export default function JobDetailPage() {
     mutationFn: (artifactId: string) =>
       api.getArtifactDownloadUrl(token, jobId, artifactId),
     onSuccess: (res) => {
-      if (res?.url) window.open(res.url, "_blank", "noopener,noreferrer");
+      if (res?.url) window.open(apiAbsoluteUrl(res.url), "_blank", "noopener,noreferrer");
     },
   });
 
@@ -297,7 +298,7 @@ export default function JobDetailPage() {
               ) : null}
               <div>
                 <dt className="text-muted-foreground">Final cost</dt>
-                {job.status === "completed" && job.final_cost != null ? (
+                {job.final_cost != null ? (
                   <dd className="mt-0.5">
                     {/* Real charge from the ledger — shown verbatim. */}
                     <span className="font-mono tabular-nums">

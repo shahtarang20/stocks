@@ -134,7 +134,7 @@ def _matches_filters(
     if max_price_per_hour is not None:
         if decimal.Decimal(machine.asking_price_per_hour) > decimal.Decimal(max_price_per_hour):
             return False
-    if region is not None and (machine.region or "") != region:
+    if region is not None and region.strip().lower() not in (machine.region or "").lower():
         return False
     if verification_status is not None:
         vs = (hw.verification_status if hw else "detected")

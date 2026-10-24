@@ -93,8 +93,25 @@ export function createJobErrorMessage(err: unknown): string {
       return "The job input is not valid for this workload. Check the prompt / items payload and try again.";
     case "no_provider":
       return "No eligible provider is available right now. Try again shortly or widen your requirements.";
+    case "machine_not_found":
+      return "That machine was not found. Check the machine ID, or leave it blank to let the scheduler choose.";
+    case "gpu_count_exceeds_machine":
+      return "That machine has fewer GPUs than you requested. Lower the GPU count or choose another machine.";
+    case "isolation_tier_not_supported_by_machine":
+      return "That machine does not offer the selected isolation tier. Choose \"container\" or a machine that supports it.";
+    case "insufficient_credits":
+      return "You don't have enough credits for this job. Buy credits on the Billing page, or lower the estimate.";
+    case "spend_limit_exceeded":
+      return "This job would exceed one of your spend limits.";
+    case "email_not_verified":
+      return "Verify your email address before submitting jobs. Use the banner at the top of the page to resend the link.";
     default:
-      if (err instanceof ApiError) return err.message;
+      if (err instanceof ApiError) {
+        // Never show a raw snake_case API code to a user.
+        return /^[a-z0-9]+(_[a-z0-9]+)+$/.test(err.message)
+          ? err.message.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) + "."
+          : err.message;
+      }
       return "Something went wrong submitting the job. Please try again.";
   }
 }

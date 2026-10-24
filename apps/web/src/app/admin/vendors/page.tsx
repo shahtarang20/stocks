@@ -75,8 +75,8 @@ function ServiceCard({ v }: { v: VendorCard }) {
   const tone = STATUS[v.status] ?? STATUS.unknown;
 
   return (
-    <Card className="flex h-full flex-col">
-      <CardContent className="flex flex-1 flex-col gap-4 p-5">
+    <Card className="flex h-full min-w-0 flex-col">
+      <CardContent className="flex min-w-0 flex-1 flex-col gap-4 p-5 [overflow-wrap:anywhere]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">

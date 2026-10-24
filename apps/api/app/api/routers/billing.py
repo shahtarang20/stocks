@@ -204,7 +204,7 @@ async def stripe_webhook(
 
 @router.get("/billing/ledger", response_model=LedgerPageOut)
 async def get_ledger(
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1, le=10_000_000),
     page_size: int = Query(default=50, ge=1, le=200),
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

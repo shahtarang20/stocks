@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, Request
+from sqlalchemy.exc import DBAPIError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -134,6 +135,17 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @application.exception_handler(DBAPIError)
+    async def _reject_nul_characters(request: Request, exc: DBAPIError):
+        """Postgres cannot store a NUL character in a text column. Any free-text
+        field (project name, token label, org name, ...) given "\\u0000" used to fail
+        the INSERT and return a bare 500; it is bad input, so answer 422 once, here,
+        for every endpoint. Every other database error still surfaces as a 500."""
+        orig = getattr(exc, "orig", None)
+        if type(orig).__name__ == "CharacterNotInRepertoireError" or "0x00" in str(orig):
+            return JSONResponse({"detail": "invalid_characters"}, status_code=422)
+        raise exc
 
     @application.middleware("http")
     async def _limit_request_body(request: Request, call_next):

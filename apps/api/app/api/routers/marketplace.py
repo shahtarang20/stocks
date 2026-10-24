@@ -33,8 +33,8 @@ async def search_machines(
     region: str | None = Query(default=None),
     workload: str | None = Query(default=None),
     verification_status: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int | None = Query(default=None, ge=1),
+    page: int = Query(default=1, ge=1, le=10_000_000),
+    page_size: int | None = Query(default=None, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> MarketplaceListOut:
     size = page_size or settings.MARKETPLACE_PAGE_SIZE_DEFAULT

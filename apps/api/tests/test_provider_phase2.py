@@ -449,3 +449,34 @@ async def test_patch_updates_and_delete_deregisters(client: AsyncClient):
     headers, body = heartbeat_headers(mid, secret, _hb_body("online"))
     resp = await client.post("/v1/agents/heartbeat", content=body, headers=headers)
     assert resp.status_code == 401
+
+
+async def test_duplicate_hostname_is_409_not_500_and_keeps_the_token(client):
+    access = await become_provider(client, "dup-host@x.io")
+    first = await mint_token(client, access)
+    await enroll_machine(client, first["enrollment_token"], hostname="same-box")
+
+    second = await mint_token(client, access)
+    body = {
+        "enrollment_token": second["enrollment_token"], "agent_version": "0.1.0",
+        "hostname": "same-box", "capability_report": _capability_report(),
+    }
+    resp = await client.post("/v1/agents/enroll", json=body)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "machine_hostname_already_enrolled"
+
+    # The refused attempt did not burn the token: a different hostname works.
+    body["hostname"] = "other-box"
+    assert (await client.post("/v1/agents/enroll", json=body)).status_code == 201
+
+
+async def test_deregistered_hostname_can_be_enrolled_again(client):
+    access = await become_provider(client, "reinstall@x.io")
+    t1 = await mint_token(client, access)
+    out = await enroll_machine(client, t1["enrollment_token"], hostname="reinstalled-box")
+    r = await client.delete(f"/provider/machines/{out['machine_id']}", headers=auth_headers(access))
+    assert r.status_code == 204
+
+    t2 = await mint_token(client, access)
+    again = await enroll_machine(client, t2["enrollment_token"], hostname="reinstalled-box")
+    assert again["machine_id"] != out["machine_id"]

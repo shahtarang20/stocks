@@ -722,3 +722,15 @@ async def test_job_events_serialize_a_real_history(client):
     assert events[0]["from_state"] in (None, "created"), events[0]
     # The job really did progress past creation.
     assert any(e["to_state"] for e in events)
+
+
+async def test_unknown_machine_id_is_404_machine_not_found_and_creates_no_job(client):
+    """jobs.machine_id is a foreign key. On Postgres an unknown id used to fail the
+    insert and surface as a bare 500; it must be a clean 404 and leave no job."""
+    await seed_echo_model()
+    cust = await _customer(client, "c-nomachine@x.com")
+    r = await submit_job(client, cust, machine_id="11111111-1111-1111-1111-111111111111")
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"] == "machine_not_found"
+    listing = await client.get("/v1/jobs", headers=auth_headers(cust))
+    assert listing.json() == [] or listing.json().get("items") == []

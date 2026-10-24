@@ -511,3 +511,51 @@ async def test_money_precision_no_float_drift(client):
         total += ledger.from_minor(1)
     assert total == decimal.Decimal("1.00")
     assert ledger.to_minor(decimal.Decimal("0.01")) == 1
+
+
+async def test_only_one_open_dispute_per_job(client):
+    """Nothing used to stop a customer opening unlimited disputes on one job; each
+    one created another evidence bundle and another item for an admin to triage."""
+    await seed_echo_model()
+    m = await create_listable_machine(client, "p-dup-d@x.com", hostname="dupd")
+    cust = await _customer(client, "c-dup-d@x.com")
+    job_id = await _run_job_to_completion(client, cust, m)
+
+    first = await client.post(
+        f"/v1/jobs/{job_id}/dispute", json={"reason": "bad output"}, headers=auth_headers(cust)
+    )
+    assert first.status_code == 201, first.text
+    again = await client.post(
+        f"/v1/jobs/{job_id}/dispute", json={"reason": "bad output again"}, headers=auth_headers(cust)
+    )
+    assert again.status_code == 409, again.text
+    assert again.json()["detail"] == "dispute_exists"
+
+    listed = (await client.get("/v1/disputes", headers=auth_headers(cust))).json()
+    assert len(listed) == 1
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["NaN", "Infinity", "-Infinity", "1e30", "0.001", "1.999", "abc", "5,00", "0x10", "",
+     "99999999999999999999999", "1000000.01", 0, -5, True, None, "0", "-0.01"],
+)
+async def test_money_amounts_that_used_to_500_or_round_silently_are_422(client, bad):
+    """AmountIn parsed with Decimal(str(v)): NaN/Infinity/'1e30'/garbage/booleans
+    crashed with a 500, '1.999' was silently rounded to 2.00, and there was no
+    ceiling. They must all be clean 422s and must never touch the ledger."""
+    cust = await _customer(client, f"c-amt-{abs(hash(str(bad))) % 10**8}@x.com")
+    before = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()["balance"]
+    r = await client.post("/v1/billing/credits/purchase", json={"amount": bad}, headers=auth_headers(cust))
+    assert r.status_code == 422, (bad, r.status_code, r.text)
+    after = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()["balance"]
+    assert after == before
+
+
+@pytest.mark.parametrize("ok,credited", [("10", "10.00"), ("10.5", "10.50"), (" 7.25 ", "7.25"), (3, "3.00"), ("1000000", "1000000.00")])
+async def test_well_formed_money_amounts_are_accepted(client, ok, credited):
+    cust = await _customer(client, f"c-ok-{abs(hash(str(ok))) % 10**8}@x.com")
+    before = float((await client.get("/v1/billing/account", headers=auth_headers(cust))).json()["balance"])
+    r = await client.post("/v1/billing/credits/purchase", json={"amount": ok}, headers=auth_headers(cust))
+    assert r.status_code == 200, r.text
+    assert round(float(r.json()["balance"]) - before, 2) == float(credited)

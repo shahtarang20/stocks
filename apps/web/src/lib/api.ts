@@ -474,6 +474,7 @@ export interface UsageRecord {
   usage_id?: string;
   job_id: string;
   duration_seconds?: number | null;
+  actual_seconds?: number | null;
   estimated_cost?: string | null;
   actual_cost?: string | null;
   currency?: string;
@@ -494,6 +495,8 @@ export interface UsageSummary {
 /** GET /v1/usage — spend summary + per-job usage records. */
 export interface UsageResponse {
   summary?: UsageSummary;
+  total_estimated?: string;
+  total_actual?: string;
   usage_records?: UsageRecord[];
   records?: UsageRecord[];
   currency?: string;
@@ -907,6 +910,15 @@ export interface CurrentUser {
   email_verified: boolean;
   status: string;
   roles: string[];
+}
+
+/**
+ * Signed download grants come back as API-relative paths ("/v1/artifacts/download/…").
+ * Opened as-is they resolve against the WEB origin, which has no such route, so
+ * every artifact/invoice download 404'd as soon as web and API were on different hosts.
+ */
+export function apiAbsoluteUrl(url: string): string {
+  return /^https?:\/\//i.test(url) ? url : `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
 }
 
 let _memoryAccessToken: string | null = null;
@@ -1466,6 +1478,15 @@ export const api = {
     >("/v1/disputes", { method: "GET", token: accessToken });
     if (Array.isArray(data)) return data;
     return data?.items ?? data?.disputes ?? [];
+  },
+
+  /** GET /v1/admin/disputes — every customer's disputes (administrator only). */
+  async listAdminDisputes(accessToken: string): Promise<Dispute[]> {
+    const data = await request<Dispute[]>("/v1/admin/disputes", {
+      method: "GET",
+      token: accessToken,
+    });
+    return Array.isArray(data) ? data : [];
   },
 
   /** GET /v1/disputes/{id} — a single owned dispute. */

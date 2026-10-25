@@ -33,7 +33,8 @@ await T(G,"job form: absurd budget never leaves a stuck hold",async()=>{ await f
 
 // ---------- JOB LIST ----------
 await go("/dashboard/jobs");
-await T(G,"jobs list: shows seeded jobs with all statuses",async()=>{ const t=await body(p); return ["completed","cancelled","failed","disputed","reserved"].every(s=>t.includes(s)); });
+await T(G,"jobs list: shows seeded jobs with all statuses",async()=>{ const t=await body(p); return ["completed","cancelled","disputed","reserved"].every(s=>t.includes(s)); });
+await T(G,"jobs list: submissions the API refused are not listed (no phantom failed jobs)",async()=>{ const t=await apiLogin("cust1@example.com"); const before=(await api(t,"GET","/v1/jobs")).json.length; const r=await api(t,"POST","/v1/jobs",{workload_type:"text-generation",model:"no-such-model",input:{prompt:"x"},gpu_count:1,estimated_minutes:5,max_cost:"5.00"}); const after=(await api(t,"GET","/v1/jobs")).json; return r.status===422 && after.length===before && !after.some(j=>j.error_code==="model_not_supported"); });
 await T(G,"jobs list: completed/disputed jobs show their real cost",async()=>{ const t=await body(p); return /0\.03/.test(t); });
 await T(G,"jobs list: cancelled/failed/reserved jobs read 'not charged'",async()=>{ const rows=await p.locator("tbody tr").allInnerTexts(); return rows.filter(r=>/cancelled|reserved/.test(r)).every(r=>/not charged/.test(r)); });
 await T(G,"jobs list: 'New job' button goes to the form",async()=>{ await p.locator('main a:has-text("New job"), main button:has-text("New job")').first().click(); await settle(p); return p.url().endsWith("/jobs/new"); });

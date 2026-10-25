@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { DEMO_JOB_STATUS, DEMO_SPEND_SERIES } from "@/lib/demo-data";
+import type { DayPoint, StatusSlice } from "@/lib/dashboard-stats";
 
 const axisStyle = {
   fontSize: 12,
@@ -42,11 +42,11 @@ function ChartTooltip({
   );
 }
 
-export function SpendAreaChart() {
+export function SpendAreaChart({ data }: { data: DayPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart
-        data={DEMO_SPEND_SERIES}
+        data={data}
         margin={{ top: 8, right: 8, left: -16, bottom: 0 }}
       >
         <defs>
@@ -61,7 +61,7 @@ export function SpendAreaChart() {
         <Area
           type="monotone"
           dataKey="spend"
-          name="Spend ($)"
+          name="Spend (credits)"
           stroke="hsl(var(--primary))"
           strokeWidth={2}
           fill="url(#spendFill)"
@@ -71,11 +71,11 @@ export function SpendAreaChart() {
   );
 }
 
-export function GpuHoursChart() {
+export function ComputeHoursChart({ data }: { data: DayPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart
-        data={DEMO_SPEND_SERIES}
+        data={data}
         margin={{ top: 8, right: 8, left: -16, bottom: 0 }}
       >
         <defs>
@@ -89,8 +89,8 @@ export function GpuHoursChart() {
         <Tooltip content={<ChartTooltip />} />
         <Area
           type="monotone"
-          dataKey="gpuHours"
-          name="GPU hours"
+          dataKey="hours"
+          name="Compute hours"
           stroke="hsl(var(--success))"
           strokeWidth={2}
           fill="url(#hoursFill)"
@@ -100,12 +100,12 @@ export function GpuHoursChart() {
   );
 }
 
-export function JobStatusChart() {
+export function JobStatusChart({ data }: { data: StatusSlice[] }) {
   return (
     <ResponsiveContainer width="100%" height={220}>
       <PieChart>
         <Pie
-          data={DEMO_JOB_STATUS}
+          data={data}
           dataKey="value"
           nameKey="name"
           innerRadius={55}
@@ -113,7 +113,7 @@ export function JobStatusChart() {
           paddingAngle={2}
           stroke="none"
         >
-          {DEMO_JOB_STATUS.map((entry) => (
+          {data.map((entry) => (
             <Cell key={entry.name} fill={entry.color} />
           ))}
         </Pie>

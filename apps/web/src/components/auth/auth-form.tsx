@@ -45,6 +45,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
   const { login, register: registerUser } = useAuth();
   const [serverError, setServerError] = useState<string | null>(null);
+  const [changedNotice, setChangedNotice] = useState(false);
 
   const {
     register,
@@ -68,6 +69,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
+    if (url.searchParams.get("changed") === "1") setChangedNotice(true);
     const emailParam = url.searchParams.get("email");
     if (emailParam) {
       setValue("email", emailParam, { shouldValidate: true });
@@ -119,6 +121,14 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         noValidate
       >
         <CardContent className="space-y-4">
+          {isLogin && changedNotice ? (
+            <div
+              role="status"
+              className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-success"
+            >
+              Password changed. Sign in with your new password.
+            </div>
+          ) : null}
           {serverError ? (
             <div
               role="alert"

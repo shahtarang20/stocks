@@ -18,7 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GpuHoursChart } from "@/components/console/dashboard-charts";
+import { formatRelativeTime } from "@/lib/utils";
 import { api, ApiError, type Machine, type ProviderEarnings } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -201,10 +201,31 @@ export default function ProviderDashboardPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Served GPU hours</CardTitle>
+              <CardTitle>Recent earnings</CardTitle>
             </CardHeader>
             <CardContent>
-              <GpuHoursChart />
+              {earningsQuery.isLoading ? (
+                <Skeleton className="h-20 w-full" />
+              ) : (earnings?.recent ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No earnings yet. They appear here as jobs settle on your machines.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border text-sm">
+                  {(earnings?.recent ?? []).slice(0, 8).map((e, i) => (
+                    <li key={i} className="flex items-center justify-between gap-3 py-2">
+                      <span className="text-muted-foreground">
+                        {String(e.kind ?? "earning").replace(/_/g, " ")}
+                        {e.created_at ? ` · ${formatRelativeTime(String(e.created_at))}` : ""}
+                      </span>
+                      <span className="font-mono tabular-nums">
+                        {e.direction === "debit" ? "−" : "+"}
+                        {String(e.amount)} {earnings?.currency}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </CardContent>
           </Card>
         </section>

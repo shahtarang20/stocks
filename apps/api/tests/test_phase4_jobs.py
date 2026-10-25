@@ -734,3 +734,19 @@ async def test_unknown_machine_id_is_404_machine_not_found_and_creates_no_job(cl
     assert r.json()["detail"] == "machine_not_found"
     listing = await client.get("/v1/jobs", headers=auth_headers(cust))
     assert listing.json() == [] or listing.json().get("items") == []
+
+
+async def test_rejected_submissions_are_hidden_from_the_customers_job_list(client):
+    """A submit the API refused is kept as a FAILED row for audit, but the caller never
+    got its id, so it must not clutter their list; accepted jobs still appear."""
+    await seed_echo_model()
+    await create_listable_machine(client, "p-hide@x.com", hostname="hide")
+    cust = await _customer(client, "c-hide@x.com")
+
+    assert (await submit_job(client, cust, model="does-not-exist")).status_code == 422
+    assert (await submit_job(client, cust, input={"nope": 1})).status_code == 422
+    ok = await submit_job(client, cust)
+    assert ok.status_code == 201, ok.text
+
+    listed = (await client.get("/v1/jobs", headers=auth_headers(cust))).json()
+    assert [j["job_id"] for j in listed] == [ok.json()["job_id"]]

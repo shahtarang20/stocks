@@ -40,6 +40,7 @@ await T(G,"onboarding: a normal customer can become a provider (Become a provide
 await go("/provider/dashboard");
 await T(G,"dashboard: machine tiles reflect the fleet",async()=>{ const t=await body(p); return /alpha|Machines|machine/i.test(t) && !/NaN|undefined/.test(t); });
 await T(G,"dashboard: earnings tiles match the API",async()=>{ const e=await earn(); const t=await body(p); return t.includes(e.available) && t.includes(e.lifetime); });
+await T(G,"dashboard: shows recent earnings from the ledger, no demo chart",async()=>{ const t=await body(p); return /Recent earnings/.test(t) && !/Served GPU hours|demo/i.test(t); });
 await T(G,"dashboard: Refresh works",async()=>{ await p.locator('main button:has-text("Refresh")').first().click(); await settle(p); return !/error/i.test(await body(p)); });
 
 // ---------- HARDWARE ----------

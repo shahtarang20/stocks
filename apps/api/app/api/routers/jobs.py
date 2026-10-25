@@ -44,6 +44,18 @@ from app.services.storage import get_store, grant_expiry, make_download_grant
 router = APIRouter(prefix="/v1/jobs", tags=["jobs"])
 
 _JOB_NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+# Error codes that mean "the submit request itself was rejected" (the API answered 4xx).
+_REJECTED_AT_SUBMIT = (
+    "model_not_supported",
+    "invalid_input",
+    "machine_not_found",
+    "gpu_count_exceeds_machine",
+    "isolation_tier_not_supported_by_machine",
+    "budget_exceeded",
+    "insufficient_credits",
+    "spend_limit_exceeded",
+)
 _ARTIFACT_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found"
 )
@@ -267,8 +279,16 @@ async def list_jobs(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[JobOut]:
+    # A submission the API refused (4xx) is persisted as a FAILED job for the audit
+    # trail, but the caller never received its id: listing it makes the customer's
+    # job list fill with jobs they never successfully created. Admins still see it.
     result = await db.execute(
-        select(Job).where(Job.customer_id == current.id).order_by(Job.created_at.desc())
+        select(Job)
+        .where(
+            Job.customer_id == current.id,
+            ~((Job.status == fsm.FAILED) & Job.error_code.in_(_REJECTED_AT_SUBMIT)),
+        )
+        .order_by(Job.created_at.desc())
     )
     return [shape_job(j) for j in result.scalars().all()]
 

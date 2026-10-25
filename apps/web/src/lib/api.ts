@@ -910,6 +910,7 @@ export interface CurrentUser {
   email_verified: boolean;
   status: string;
   roles: string[];
+  display_name?: string | null;
 }
 
 /**
@@ -1036,6 +1037,41 @@ export const api = {
     return request<RegisteredUser>("/auth/register", {
       method: "POST",
       body: credentials,
+    });
+  },
+
+  /** PATCH /auth/me — update the display name. */
+  updateProfile(accessToken: string, displayName: string): Promise<CurrentUser> {
+    return request<CurrentUser>("/auth/me", {
+      method: "PATCH",
+      token: accessToken,
+      body: { display_name: displayName },
+    });
+  },
+
+  /** POST /auth/change-password — ends every session, including this one. */
+  changePassword(
+    accessToken: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/change-password", {
+      method: "POST",
+      token: accessToken,
+      body: { current_password: currentPassword, new_password: newPassword },
+    });
+  },
+
+  /** POST /auth/delete-account — anonymises the account; financial records are kept. */
+  deleteAccount(
+    accessToken: string,
+    password: string,
+    acknowledgeForfeit: boolean,
+  ): Promise<{ message: string }> {
+    return request<{ message: string }>("/auth/delete-account", {
+      method: "POST",
+      token: accessToken,
+      body: { password, acknowledge_forfeit: acknowledgeForfeit },
     });
   },
 

@@ -1,8 +1,8 @@
 # ComputeCoin QA checklist and results
 
-Generated 2026-10-24 from a live crawl of the running web app plus the browser test suites in `tests/qa/`.
+Generated 2026-10-25 from a live crawl of the running web app plus the browser test suites in `tests/qa/`.
 
-**356 of 356 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
+**372 of 372 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
 
 ## 1. Control inventory (what exists on each page)
 
@@ -10,20 +10,20 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 
 | Role | Page | Buttons | Fields | Links | Controls |
 |---|---|---|---|---|---|
-| cust1 | `/dashboard` | 0 | 0 | 13 | — |
+| cust1 | `/dashboard` | 0 | 0 | 14 | — |
 | cust1 | `/dashboard/projects` | 4 | 0 | 12 | Refresh, New project, Delete project |
 | cust1 | `/dashboard/api-keys` | 3 | 1 | 12 | Refresh, Create key, Revoke · proj-select |
 | cust1 | `/dashboard/jobs` | 1 | 0 | 18 | Refresh |
 | cust1 | `/dashboard/jobs/new` | 1 | 11 | 12 | Submit job · workload_type, isolation_tier, model, prompt, max_tokens, machine_id, gpu_count, |
-| cust1 | `/dashboard/jobs/a883c9ee-9b58-4a4d-95f9-ca78f3` | 2 | 0 | 12 | Refresh, Download |
+| cust1 | `/dashboard/jobs/83a1a044-a1c8-4a3e-82b7-fbe5e0` | 2 | 0 | 12 | Refresh, Download |
 | cust1 | `/dashboard/reservations` | 6 | 0 | 12 | Refresh, Release |
 | cust1 | `/dashboard/billing` | 2 | 0 | 12 | Buy credits, Refresh |
 | cust1 | `/dashboard/invoices` | 1 | 0 | 18 | Refresh |
-| cust1 | `/dashboard/invoices/f12ff4f2-f06c-4c14-acbc-0c` | 1 | 0 | 13 | Download |
+| cust1 | `/dashboard/invoices/148029c0-950e-4467-b6e8-4a` | 1 | 0 | 13 | Download |
 | cust1 | `/dashboard/usage` | 1 | 0 | 15 | Refresh |
 | cust1 | `/dashboard/disputes` | 1 | 0 | 14 | Refresh |
-| cust1 | `/dashboard/settings` | 3 | 2 | 12 | Save changes, Log out, Delete account · s-email, s-name |
-| cust1 | `/marketplace` | 5 | 0 | 13 | Demo only |
+| cust1 | `/dashboard/settings` | 4 | 5 | 12 | Save changes, Change password, Log out, Delete account · s-email, s-name, s-cur-pw, s-new-pw, s-new-pw2 |
+| cust1 | `/marketplace` | 5 | 6 | 13 | Refresh, Reset filters, Get quote · f-model, f-vram, f-price, f-region, f-workload, f-verif |
 | cust1 | `/marketplace/gpus` | 5 | 6 | 13 | Refresh, Reset filters, Get quote · f-model, f-vram, f-price, f-region, f-workload, f-verif |
 | prov1 | `/provider/onboarding` | 7 | 1 | 7 | Generate enrollment token, Refresh, Revoke, Copy to clipboard · token-label |
 | prov1 | `/provider/dashboard` | 1 | 0 | 7 | Refresh |
@@ -47,7 +47,7 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | public | `/developers` | 0 | 0 | 15 | — |
 | public | `/providers` | 0 | 0 | 16 | — |
 | public | `/security` | 0 | 0 | 15 | — |
-| public | `/status` | 0 | 0 | 15 | — |
+| public | `/status` | 1 | 0 | 15 | Refresh |
 | public | `/whitepaper` | 0 | 0 | 15 | — |
 | public | `/about` | 0 | 0 | 15 | — |
 | public | `/legal/terms` | 0 | 0 | 15 | — |
@@ -56,18 +56,18 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | public | `/register` | 1 | 2 | 2 | Create account · email, password |
 | public | `/forgot-password` | 1 | 1 | 2 | Send reset link · email |
 
-Totals across 45 pages: 75 buttons, 38 form fields, 585 link slots.
+Totals across 45 pages: 77 buttons, 47 form fields, 586 link slots.
 
 ## 2. Test results by area
 
 | Area | Checks | Pass | Fail |
 |---|---|---|---|
-| Customer: dashboard, navigation, projects, API keys | 34 | 34 | 0 |
-| Customer: job form, job list, job detail | 37 | 37 | 0 |
-| Customer: marketplace, quotes, reservations, billing, invoices, usage, disputes, settings | 52 | 52 | 0 |
-| Provider: onboarding, dashboard, hardware, earnings, payouts | 54 | 54 | 0 |
-| Admin: every admin page | 70 | 70 | 0 |
-| Public pages and authentication | 66 | 66 | 0 |
+| Customer: dashboard, navigation, projects, API keys | 37 | 37 | 0 |
+| Customer: job form, job list, job detail | 38 | 38 | 0 |
+| Customer: marketplace, quotes, reservations, billing, invoices, usage, disputes, settings | 59 | 59 | 0 |
+| Provider: onboarding, dashboard, hardware, earnings, payouts | 55 | 55 | 0 |
+| Admin: every admin page | 71 | 71 | 0 |
+| Public pages and authentication | 69 | 69 | 0 |
 | Mobile layout (390px) on every page | 43 | 43 | 0 |
 
 ### Failing checks
@@ -79,8 +79,11 @@ None.
 
 **Customer: dashboard, navigation, projects, API keys**
 
-- [x] dashboard: loads, greets user
-- [x] dashboard: demo data is labelled DEMO
+- [x] dashboard: loads and greets the user
+- [x] dashboard: shows real figures, no demo data left
+- [x] dashboard: tiles match the API (credits, job count, total spend)
+- [x] dashboard: charts render for a user with jobs
+- [x] dashboard: a brand-new user sees a clear 'No jobs yet' state with a way forward
 - [x] dashboard: 'Browse GPUs' link works
 - [x] sidebar: "Dashboard" navigates to /dashboard
 - [x] sidebar: "Projects" navigates to /dashboard/projects
@@ -136,6 +139,7 @@ None.
 - [x] job form: credits are held on submit (reserved balance rises)
 - [x] job form: absurd budget never leaves a stuck hold
 - [x] jobs list: shows seeded jobs with all statuses
+- [x] jobs list: submissions the API refused are not listed (no phantom failed jobs)
 - [x] jobs list: completed/disputed jobs show their real cost
 - [x] jobs list: cancelled/failed/reserved jobs read 'not charged'
 - [x] jobs list: 'New job' button goes to the form
@@ -205,8 +209,15 @@ None.
 - [x] dispute: cannot dispute someone else's job
 - [x] settings: email is shown
 - [x] settings: no stale 'tokens stored in browser' claim
-- [x] settings: Delete account dialog opens and Cancel closes it
-- [x] settings: Delete account is a demo no-op (documented gap)
+- [x] settings: display name saves, persists and appears in the greeting
+- [x] settings: a 121-character name is cut off by the field, never a 500
+- [x] settings: password change validates, then signs out and the new password works
+- [x] settings: Delete account -> Cancel keeps the account
+- [x] settings: deleting needs the password and, when credits remain, an explicit forfeit tick
+- [x] settings: wrong password on delete shows a clear error and keeps the account
+- [x] settings: a user with a job in progress cannot delete, with a plain explanation
+- [x] settings: confirmed deletion signs out, anonymises the account and frees the email
+- [x] settings: a deleted person can sign up again with the same email
 - [x] settings: Log out ends the session and protects the dashboard
 
 **Provider: onboarding, dashboard, hardware, earnings, payouts**
@@ -230,6 +241,7 @@ None.
 - [x] onboarding: a normal customer can become a provider (Become a provider)
 - [x] dashboard: machine tiles reflect the fleet
 - [x] dashboard: earnings tiles match the API
+- [x] dashboard: shows recent earnings from the ledger, no demo chart
 - [x] dashboard: Refresh works
 - [x] hardware: lists the provider's machines with GPU, status and price
 - [x] hardware: online vs offline status is shown correctly
@@ -288,6 +300,7 @@ None.
 - [x] users: API refuses self-suspension
 - [x] users: unknown user id is a clean 404
 - [x] users: non-admin cannot list or suspend (403)
+- [x] users: a deleted account shows as deleted and cannot be reinstated
 - [x] users: Refresh works
 - [x] providers: every live machine is listed with GPU, region, price
 - [x] providers: Refresh works
@@ -383,7 +396,10 @@ None.
 - [x] pricing: nothing claims real fiat prices/guaranteed returns
 - [x] whitepaper/token pages: no price, market cap or guaranteed-appreciation claims
 - [x] legal pages exist with real content (not lorem ipsum)
-- [x] marketplace (public): demo rows are clearly labelled DEMO
+- [x] marketplace: /marketplace forwards to the live listing (no demo rows)
+- [x] marketplace: an anonymous visitor can browse live machines
+- [x] marketplace: asking for a quote while signed out prompts sign-in instead of failing silently
+- [x] status page: shows live API, database and cache checks (no placeholder)
 - [x] no JavaScript errors on any public page
 - [x] login: empty form shows field errors and sends nothing
 - [x] login: malformed email shows a validation error
@@ -428,7 +444,7 @@ None.
 - [x] cust1 /dashboard/api-keys: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs/new: no horizontal page scroll at 390px
-- [x] cust1 /dashboard/jobs/a883c9ee-9b58-4a4d-95f9-…: no horizontal page scroll at 390px
+- [x] cust1 /dashboard/jobs/83a1a044-a1c8-4a3e-82b7-…: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/reservations: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/billing: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/invoices: no horizontal page scroll at 390px

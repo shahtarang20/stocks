@@ -70,6 +70,22 @@ class CurrentUser(BaseModel):
     email_verified: bool
     status: str
     roles: list[str]
+    display_name: str | None = None
+
+
+class ProfileUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    # Remaining (simulated) credits are forfeited; the caller must say they accept that.
+    acknowledge_forfeit: bool = False
 
 
 class SessionInfo(BaseModel):

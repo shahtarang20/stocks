@@ -80,6 +80,7 @@ async def _authenticate_api_key(db: AsyncSession, raw_key: str) -> CurrentUser:
         email_verified=user.email_verified,
         status=user.status.value,
         roles=roles,
+        display_name=user.display_name,
     )
 
 
@@ -144,6 +145,7 @@ async def get_current_user(
         email_verified=user.email_verified,
         status=user.status.value,
         roles=roles,
+        display_name=user.display_name,
     )
 
 

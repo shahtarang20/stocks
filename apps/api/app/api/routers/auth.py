@@ -6,7 +6,7 @@ import datetime as dt
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -20,7 +20,7 @@ from app.core.security import (
 from app.db.base import ensure_aware, utcnow
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user
-from app.models.enums import Role
+from app.models.enums import Role, UserStatus
 from app.models.user import (
     EmailVerificationToken,
     PasswordResetToken,
@@ -28,7 +28,10 @@ from app.models.user import (
     UserRole,
 )
 from app.schemas.auth import (
+    ChangePasswordRequest,
     CurrentUser,
+    DeleteAccountRequest,
+    ProfileUpdate,
     LoginRequest,
     LogoutRequest,
     MessageResponse,
@@ -406,6 +409,160 @@ async def logout(
 async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """Return authenticated user profile for web and API clients."""
     return current_user
+
+
+@router.patch("/me", response_model=CurrentUser)
+async def update_me(
+    body: ProfileUpdate,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CurrentUser:
+    """Update the signed-in user's profile (display name)."""
+    user = await db.get(User, current.id)
+    name = (body.display_name or "").strip()
+    user.display_name = name or None
+    await db.flush()
+    return current.model_copy(update={"display_name": user.display_name})
+
+
+@router.post("/change-password", response_model=MessageResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Change the password. Needs the current one, and signs out every other device."""
+    _enforce_rate_limit(f"change_password:{current.id}", 5, 900)
+    user = await db.get(User, current.id)
+    if not verify_password(user.password_hash, body.current_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="current_password_incorrect")
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="new_password_same_as_current")
+    user.password_hash = hash_password(body.new_password)
+    # A changed password must end every existing session, as a password reset does.
+    await revoke_all_user_sessions(db, user.id)
+    await record_audit(
+        db, action="user.password_change", outcome="success", actor_user_id=user.id,
+        ip=client_ip(request), resource_type="user", resource_id=str(user.id),
+    )
+    await db.flush()
+    return MessageResponse(message="Password changed. Please sign in again.")
+
+
+@router.post("/delete-account", response_model=MessageResponse)
+async def delete_account(
+    body: DeleteAccountRequest,
+    request: Request,
+    response: Response,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Delete (anonymise) the signed-in account.
+
+    The user row is anonymised rather than removed: jobs, invoices and the
+    double-entry ledger reference it and must stay intact and balanced. Everything
+    that could still act for the account is revoked (sessions, API keys, enrollment
+    tokens, machines, webhooks). Refused while money or work is still in flight.
+    """
+    from sqlalchemy import update as sa_update
+
+    from app.models.billing import Dispute, ProviderPayout
+    from app.models.jobs import Job
+    from app.models.org import ApiKey, Project
+    from app.models.provider import EnrollmentToken, Provider, ProviderMachine
+    from app.models.webhooks import WebhookEndpoint
+    from app.services import billing as billing_svc
+    from app.services import job_fsm as fsm
+    from app.services import ledger
+
+    _enforce_rate_limit(f"delete_account:{current.id}", 5, 900)
+    if "administrator" in current.roles:
+        # The last line of defence for the platform: remove admin rights deliberately first.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="administrator_cannot_self_delete")
+
+    user = await db.get(User, current.id)
+    if not verify_password(user.password_hash, body.password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="password_incorrect")
+
+    active = await db.scalar(
+        select(func.count()).select_from(Job).where(
+            Job.customer_id == user.id, Job.status.notin_(list(fsm.TERMINAL_STATES))
+        )
+    )
+    if active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_has_active_jobs")
+    open_disputes = await db.scalar(
+        select(func.count()).select_from(Dispute).where(
+            Dispute.customer_id == user.id, Dispute.status == "open"
+        )
+    )
+    if open_disputes:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_has_open_disputes")
+
+    provider = (await db.execute(select(Provider).where(Provider.user_id == user.id))).scalar_one_or_none()
+    if provider is not None:
+        pending = await db.scalar(
+            select(func.count()).select_from(ProviderPayout).where(
+                ProviderPayout.provider_id == provider.id, ProviderPayout.status == "requested"
+            )
+        )
+        if pending:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_has_pending_payouts")
+
+    account = await ledger.get_or_create_customer_account(db, user.id)
+    reserved = await billing_svc.customer_reserved_minor(db, user.id)
+    if reserved:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_has_held_credits")
+    if account.balance_minor > 0 and not body.acknowledge_forfeit:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="credits_would_be_forfeited",
+            headers={"X-Forfeit-Amount": ledger.minor_to_str(account.balance_minor)},
+        )
+
+    now = utcnow()
+    original_email_hash = hash_token(user.email)  # audit correlation without keeping the address
+    await revoke_all_user_sessions(db, user.id)
+    await db.execute(
+        sa_update(ApiKey)
+        .where(ApiKey.project_id.in_(select(Project.id).where(Project.owner_id == user.id)), ApiKey.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        sa_update(WebhookEndpoint).where(WebhookEndpoint.customer_id == user.id).values(active=False)
+    )
+    if provider is not None:
+        provider.display_name = None
+        provider.contact_email = None
+        provider.status = "deleted"
+        await db.execute(
+            sa_update(EnrollmentToken)
+            .where(EnrollmentToken.provider_id == provider.id, EnrollmentToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        await db.execute(
+            sa_update(ProviderMachine)
+            .where(ProviderMachine.provider_id == provider.id)
+            .values(status="deregistered", availability="offline", signing_key="")
+        )
+    await db.execute(sa_update(EmailVerificationToken).where(EmailVerificationToken.user_id == user.id).values(used_at=now))
+    await db.execute(sa_update(PasswordResetToken).where(PasswordResetToken.user_id == user.id).values(used_at=now))
+
+    user.email = f"deleted-{user.id}@deleted.invalid"
+    user.display_name = None
+    user.password_hash = hash_password(generate_opaque_token())  # nobody knows it
+    user.email_verified = False
+    user.status = UserStatus.deleted
+    user.deleted_at = now
+    await record_audit(
+        db, action="user.delete", outcome="success", actor_user_id=user.id,
+        ip=client_ip(request), resource_type="user", resource_id=str(user.id),
+        reason=f"forfeited={ledger.minor_to_str(account.balance_minor)} email_sha={original_email_hash[:12]}",
+    )
+    await db.flush()
+    clear_auth_cookies(response)
+    return MessageResponse(message="Account deleted")
 
 
 @router.post("/password-reset/request", response_model=PasswordResetRequestResponse)

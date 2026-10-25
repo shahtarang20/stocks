@@ -38,8 +38,8 @@ export default function ProvidersPage() {
           <p>
             We do not promise guaranteed utilization or a fixed return. Earnings
             depend on real demand, your pricing, and your verification tier.
-            Reporting in the provider console is clearly labelled as demo data
-            during Phase 1.
+            Your provider console shows only what your machines have actually
+            earned, straight from the ledger.
           </p>
         </Prose>
         <div className="flex flex-wrap gap-3">

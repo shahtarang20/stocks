@@ -87,14 +87,18 @@ is configured).
 Regression tests added for 12 to 20, 22, 23 and 25, including pagination, amounts, disputes,
 hostnames, NUL characters, projects and region.
 
-### Product gaps found (not bugs, decide before launch)
+### Product gaps found, and what was done about them
 
-- **Account deletion is a demo no-op**, and profile editing is a disabled placeholder. Real users will expect both.
-- **The main customer dashboard charts and the public `/marketplace` list are labelled demo data** while a live marketplace exists at `/marketplace/gpus`. Honest, but a launch page should not lead with fake numbers.
-- A submit rejected by the API (budget, isolation) still leaves a `failed` job row in the customer's list.
-- Admin audit log shows actor as a truncated id, not an email; the admin Providers page lists only machines that are online.
-- Ledger shows only the most recent entries, with no pagination controls.
-- Admin Configuration and Security pages are static, not live reads of the running settings (they say so).
+| Gap | Outcome |
+|---|---|
+| Account deletion was a demo no-op; profile editing a disabled placeholder | **Built.** Display name; password change (ends every session); account deletion that anonymises the user, revokes sessions, API keys, webhooks, enrollment tokens and machines, and keeps jobs, invoices and the ledger intact and balanced. Needs the password, an explicit "I give up my remaining credits" tick, and is refused while jobs, held credits, open disputes or pending payouts exist. Admins cannot self-delete or reinstate a deleted account. The email is freed for a fresh sign-up. |
+| Customer dashboard and provider dashboard charts, and the public `/marketplace`, showed demo data | **Replaced with real data.** Customer dashboard: credits, job count, spend and compute hours from the API, an empty state for new users; provider dashboard: recent earnings from the ledger; `/marketplace` forwards to the live listing; the status page is now a live API/database/cache health check. The fake "utilization" tile was removed because nothing measures it. |
+| A rejected job submission still appeared as a failed job in the customer's list | **Fixed.** Kept for the audit trail and visible to admins, hidden from the customer's own list. |
+
+Still open (not bugs, decide before launch): the admin audit log shows actors as truncated ids;
+the admin Providers page lists only machines that are online; the ledger shows only recent
+entries without pagination controls; the admin Configuration and Security pages are static
+(they say so).
 
 ## Regression tests added
 
@@ -103,15 +107,17 @@ hostnames, NUL characters, projects and region.
 - `tests/test_pg_concurrency_live.py::test_concurrent_first_provider_earnings_calls_create_one_account`
 - `tests/test_storage_s3_live.py` (opt-in, `RUN_S3_INTEGRATION=1`; 5 tests)
 - `tests/test_email_verification_gate.py::test_resend_verification_*` (2 tests)
+- `tests/test_account_profile_deletion.py` (9 tests: profile, password change, every deletion rule, anonymisation, provider machines, ledger stays balanced, admin guards)
+- `tests/test_phase4_jobs.py::test_rejected_submissions_are_hidden_from_the_customers_job_list`
 
 The two concurrency tests need real Postgres (SQLite cannot show this race). I confirmed both
 **fail with the fix reverted and pass with it**.
 
 ## Test results
 
-- API: 473 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. With the opt-in live Postgres and S3 suites switched on against local services: 9 of 9 pass.
-- Browser QA (`tests/qa/`): 356 of 356 control-level checks pass on the production build from a fresh seed (customer 123, provider 54, admin 70, public 66, mobile 43). Per-control results are in `docs/QA_CHECKLIST.md`.
-- Fuzzing: about 15,000 hostile requests (POST/PUT/PATCH bodies and GET path/query parameters) across every endpoint; zero 5xx apart from the intentional 503 for an unconfigured chain.
+- API: 483 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. With the opt-in live Postgres and S3 suites switched on against local services: 9 of 9 pass.
+- Browser QA (`tests/qa/`): 372 of 372 control-level checks pass on the production build from a fresh seed (customer 134, provider 55, admin 71, public 69, mobile 43). Per-control results are in `docs/QA_CHECKLIST.md`; `tests/qa/stack.sh` rebuilds the whole local stack and reruns everything.
+- Fuzzing: about 15,200 hostile requests (POST/PUT/PATCH bodies and GET path/query parameters) across every endpoint, including the new profile, password and deletion endpoints; zero 5xx apart from the intentional 503 for an unconfigured chain.
 - Provider agent: 66 passed, 1 skipped (needs a GPU).
 - Web: `tsc` clean, `next lint` clean, production build passes.
 - E2E scripts on a clean DB: full journey, deep journey (45/45), phases 2, 3, 4, 5 all pass.

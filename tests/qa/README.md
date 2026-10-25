@@ -17,24 +17,32 @@ fuzzers that hit every API endpoint with hostile input.
 
 ## Running
 
-Needs the stack up (Postgres, API, web app; Redis/S3/SMTP optional) and a Chrome.
-The seed assumes a **fresh database**, an API with `LEASE_TTL_SECONDS=3600` and
-`ONLINE_WINDOW_SECONDS=86400` (so seeded machines stay listed and claimed jobs stay
-running), and `EMAIL_PROVIDER` set so the dev API returns verification tokens.
+`stack.sh` builds and runs a complete, private local stack (Postgres, Redis, an
+S3-compatible server, an SMTP sink, the API and the web app) as ordinary user
+processes on localhost. Nothing is installed system-wide and no other database or
+service on the machine is touched. Needs: Postgres 16 binaries, Node, Python 3,
+a Chrome, `curl`, `make`/`gcc` (Redis is built from source), the API venv
+(`apps/api/.venv`) and the agent venv (`provider-agent/.venv`).
 
 ```bash
-npm i playwright-core                 # once, in this folder
-export QA_WEB=http://localhost:3000 QA_API=http://localhost:8010 \
-       QA_PG=postgresql://user@localhost:5432/computecoin \
-       QA_CHROME=/usr/bin/google-chrome
-python seed.py                        # writes out/seed.json
-node crawl.mjs                        # warms every route + writes out/inventory.json
-for s in c1 c2 c3 p1 a1 pub mobile; do node $s.mjs; done
-python fuzz.py; python fuzz_get.py    # needs the provider-agent venv or any python with httpx
-python gen_checklist.py               # rewrites docs/QA_CHECKLIST.md
+cd tests/qa
+./stack.sh setup            # once: builds Redis, installs moto/aiosmtpd/playwright-core into $QA_HOME
+(cd ../../apps/web && npm run build)      # the suites run against the production build
+./stack.sh up fresh         # fresh database + migrations, then starts everything
+./stack.sh seed             # users in every role, machines, jobs in every status, disputes, payouts
+./stack.sh suites           # warms every route, then runs every suite (output in $QA_DIR/<suite>.out)
+./stack.sh run c3           # or one suite
+python fuzz.py; python fuzz_get.py        # hostile-input fuzzers (QA_API selects the API)
+python gen_checklist.py     # rewrites docs/QA_CHECKLIST.md from $QA_DIR
+./stack.sh down
 ```
 
-Run `seed.py` with the provider-agent virtualenv (it imports `computecoin_agent`).
-The web dev server compiles routes on first visit, so run `crawl.mjs` first to warm
-them; otherwise early checks can time out and look like failures.
-`out/` is ignored by git.
+`QA_HOME` (default `/tmp/computecoin-qa`) holds the databases, logs and results, so it
+can be deleted at any time. The seed assumes a **fresh database**, which `up fresh`
+provides. The API is started with `LEASE_TTL_SECONDS=3600` and
+`ONLINE_WINDOW_SECONDS=86400` so seeded machines stay listed and claimed jobs stay
+running.
+
+Run the suites against the **production build** (`WEB_MODE=start`, the default): the
+dev server compiles each route on first visit, which makes early checks time out and
+look like failures. Use `WEB_MODE=dev ./stack.sh up` only while iterating.

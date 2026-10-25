@@ -177,7 +177,9 @@ export default function AdminUsersPage() {
                         {formatRelativeTime(user.created_at)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {user.status === "active" ? (
+                        {user.status === "deleted" ? (
+                          <span className="text-xs text-muted-foreground">Deleted</span>
+                        ) : user.status === "active" ? (
                           <Button
                             variant="outline"
                             size="sm"

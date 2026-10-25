@@ -28,6 +28,8 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, name="user_status"), default=UserStatus.active, nullable=False
     )

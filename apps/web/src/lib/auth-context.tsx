@@ -45,6 +45,8 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => void;
+  /** Re-read /auth/me (after a profile change). */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -115,6 +117,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    setUser(await api.getMe());
+  }, []);
+
   const value = useMemo<AuthContextValue>(() => {
     const roles = user?.roles ?? [];
     const primaryRole = roles[0] ?? null;
@@ -131,8 +137,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       register,
       logout,
+      refreshUser,
     };
-  }, [user, isReady, login, register, logout]);
+  }, [user, isReady, login, register, logout, refreshUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

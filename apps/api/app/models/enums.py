@@ -8,6 +8,7 @@ import enum
 class UserStatus(str, enum.Enum):
     active = "active"
     suspended = "suspended"
+    deleted = "deleted"
 
 
 class Role(str, enum.Enum):

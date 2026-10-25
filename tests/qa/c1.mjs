@@ -6,8 +6,11 @@ setBefore(async()=>{ await p.keyboard.press("Escape").catch(()=>{}); await p.wai
 
 // ---------- DASHBOARD ----------
 await go("/dashboard");
-await T(G,"dashboard: loads, greets user",async()=>/Welcome back, cust1@example.com/.test(await body(p)));
-await T(G,"dashboard: demo data is labelled DEMO",async()=>/DEMO MODE/.test(await body(p)));
+await T(G,"dashboard: loads and greets the user",async()=>/Welcome back, /.test(await body(p)));
+await T(G,"dashboard: shows real figures, no demo data left",async()=>{ const t=await body(p); return !/DEMO MODE|\(demo\)|placeholder/i.test(t) && /Available credits/.test(t) && /Total jobs/.test(t); });
+await T(G,"dashboard: tiles match the API (credits, job count, total spend)",async()=>{ const t=await apiLogin("cust1@example.com"); const a=(await api(t,"GET","/v1/billing/account")).json; const jobs=(await api(t,"GET","/v1/jobs")).json; const u=(await api(t,"GET","/v1/usage")).json; const tx=await body(p); return tx.includes(a.available) && tx.includes(String(jobs.length)) && tx.includes(u.total_actual); });
+await T(G,"dashboard: charts render for a user with jobs",async()=>(await p.locator(".recharts-surface").count())>=3);
+await T(G,"dashboard: a brand-new user sees a clear 'No jobs yet' state with a way forward",async()=>{ const e=await newUser(b,"dash"); const pg=await login(b,e); await pg.goto(WEB+"/dashboard",{waitUntil:"networkidle",timeout:60000}); await settle(pg,1500); const t=await body(pg); const bad=pg.__issues.filter(i=>i.startsWith("HTTP 5")); const hasCta=await pg.locator('main a:has-text("Submit your first job")').count(); await pg.context().close(); return /No jobs yet/.test(t) && hasCta>0 && bad.length===0 && !/NaN|undefined/.test(t); });
 await T(G,"dashboard: 'Browse GPUs' link works",async()=>{ await p.click('main a:has-text("Browse GPUs")'); await p.waitForURL(/marketplace/,{timeout:20000}); return true; });
 for(const [label,href] of [["Dashboard","/dashboard"],["Projects","/dashboard/projects"],["Jobs","/dashboard/jobs"],["Reservations","/dashboard/reservations"],["Usage","/dashboard/usage"],["Billing","/dashboard/billing"],["Invoices","/dashboard/invoices"],["Disputes","/dashboard/disputes"],["API keys","/dashboard/api-keys"],["Settings","/dashboard/settings"]]){
   await T(G,`sidebar: "${label}" navigates to ${href}`,async()=>{ await go("/dashboard"); await p.locator(`aside a:has-text("${label}"), nav a:has-text("${label}")`).first().click(); await p.waitForURL(u=>u.pathname===href,{timeout:20000}); await settle(p); return true; });

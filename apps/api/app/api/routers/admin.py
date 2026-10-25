@@ -388,6 +388,10 @@ async def reinstate_user(
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
+    if user.status == UserStatus.deleted:
+        # A deleted account is anonymised and its credentials are gone; there is
+        # nothing to reinstate.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_deleted")
     user.status = UserStatus.active
     await record_audit(
         db, action="admin.user.reinstate", outcome="success", actor_user_id=current.id,

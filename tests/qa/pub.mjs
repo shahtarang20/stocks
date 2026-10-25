@@ -22,7 +22,10 @@ await T(G,"status page: states what is demo vs live (no fake uptime)",async()=>{
 await T(G,"pricing: nothing claims real fiat prices/guaranteed returns",async()=>{ await go("/pricing"); const t=await body(p); return !/guaranteed (return|profit|appreciation)/i.test(t); });
 await T(G,"whitepaper/token pages: no price, market cap or guaranteed-appreciation claims",async()=>{ await go("/whitepaper"); const t=await body(p); return !/market cap(italization)?\s*[:$]|token price\s*[:$]|guaranteed (return|profit|appreciation)/i.test(t); });
 await T(G,"legal pages exist with real content (not lorem ipsum)",async()=>{ for(const u of ["/legal/terms","/legal/privacy"]){ await go(u); const t=await body(p); if(t.length<600 || /lorem ipsum/i.test(t)) return false; } return true; });
-await T(G,"marketplace (public): demo rows are clearly labelled DEMO",async()=>{ await go("/marketplace"); return /DEMO MODE/.test(await body(p)); });
+await T(G,"marketplace: /marketplace forwards to the live listing (no demo rows)",async()=>{ await go("/marketplace"); await p.waitForURL(/marketplace\/gpus/,{timeout:15000}); const t=await body(p); return /Live GPU listings/.test(t) && !/DEMO MODE|synthetic|Demo only/i.test(t); });
+await T(G,"marketplace: an anonymous visitor can browse live machines",async()=>{ await go("/marketplace/gpus"); await p.waitForTimeout(2000); const t=await body(p); return /live machines?/.test(t) && !/error/i.test(t); });
+await T(G,"marketplace: asking for a quote while signed out prompts sign-in instead of failing silently",async()=>{ await go("/marketplace/gpus"); await p.waitForTimeout(1500); const btn=p.locator('button:has-text("Get quote")').first(); if(!(await btn.count())) return "no machines"; await btn.click(); await p.waitForTimeout(800); const t=await body(p); return /sign in|log in|login/i.test(t) || /\/login/.test(p.url()); });
+await T(G,"status page: shows live API, database and cache checks (no placeholder)",async()=>{ await go("/status"); await p.waitForTimeout(2500); const t=await body(p); return /Operational/.test(t) && /Database/.test(t) && /Cache/.test(t) && !/Placeholder|DEMO MODE/i.test(t); });
 await T(G,"no JavaScript errors on any public page",async()=>issues.length===0);
 
 // ---------- AUTH FORMS ----------

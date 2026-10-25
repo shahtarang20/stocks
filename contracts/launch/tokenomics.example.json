@@ -1,0 +1,22 @@
+{
+  "_comment": "PLACEHOLDER numbers for rehearsal only. The owner must decide every figure below, then set status to APPROVED. The launch script refuses to run on a mainnet chain unless status is APPROVED.",
+  "status": "PLACEHOLDER",
+  "timelockDelaySeconds": 172800,
+  "tokenOwner": "safe",
+  "settlementOwner": "timelock",
+  "wallets": {
+    "SAFE": "<multisig address that will own the token and propose timelock actions>",
+    "LIQUIDITY_WALLET": "<address that will receive the tokens for the DEX pool>",
+    "TEAM_WALLET": "<address of the team beneficiary>",
+    "PLATFORM_SIGNER": "<address whose key signs settlement vouchers>",
+    "FEE_TREASURY": "<address that receives platform fees>"
+  },
+  "allocations": [
+    { "name": "liquidity",  "bps": 1000, "kind": "direct",  "beneficiary": "LIQUIDITY_WALLET" },
+    { "name": "treasury",   "bps": 2500, "kind": "direct",  "beneficiary": "SAFE" },
+    { "name": "ecosystem",  "bps": 2500, "kind": "vesting", "beneficiary": "SAFE", "vestingMonths": 48, "cliffMonths": 0 },
+    { "name": "team",       "bps": 1500, "kind": "vesting", "beneficiary": "TEAM_WALLET", "vestingMonths": 48, "cliffMonths": 12 },
+    { "name": "community",  "bps": 1500, "kind": "direct",  "beneficiary": "SAFE" },
+    { "name": "reserve",    "bps": 1000, "kind": "vesting", "beneficiary": "SAFE", "vestingMonths": 24, "cliffMonths": 6 }
+  ]
+}

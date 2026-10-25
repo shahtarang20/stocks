@@ -11,7 +11,9 @@
     "create:pool": "hardhat run scripts/create-liquidity-pool.js",
     "deploy:settlement": "hardhat run scripts/deploy-settlement.js",
     "verify:contracts": "hardhat run scripts/verify-contracts.js",
-    "testnet:e2e": "hardhat run scripts/e2e-testnet-settlement.js"
+    "testnet:e2e": "hardhat run scripts/e2e-testnet-settlement.js",
+    "launch": "node scripts/launch.mjs",
+    "launch:rehearsal": "node scripts/launch-rehearsal.mjs"
   },
   "keywords": [],
   "type": "module",

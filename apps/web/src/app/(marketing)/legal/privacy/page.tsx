@@ -24,12 +24,18 @@ export default function PrivacyPage() {
             via the API. When you use the console, we process project and usage
             metadata needed to operate the service.
           </p>
-          <h2>Tokens in your browser</h2>
+          <h2>Cookies</h2>
           <p>
-            During Phase 1, the console stores authentication tokens in your
-            browser&apos;s local storage for development convenience. This is a
-            known limitation; tokens will move to secure, httpOnly cookies
-            before production. Clearing your browser storage signs you out.
+            The console keeps you signed in with httpOnly, Secure cookies set
+            by the API, plus a CSRF cookie. They are strictly necessary for
+            sign-in; we do not use advertising or tracking cookies. Clearing
+            your cookies signs you out.
+          </p>
+          <h2>Wallet addresses</h2>
+          <p>
+            If you link a wallet, we store its address with your account and
+            read its public on-chain COMPUTE balance. Blockchain data is public
+            and cannot be deleted by us.
           </p>
           <h2>How we use data</h2>
           <ul>

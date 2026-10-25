@@ -22,6 +22,12 @@ export function getWalletProvider(): Eip1193Provider | null {
 
 /** Networks a wallet may not know yet, so "switch" can fall back to "add". */
 const KNOWN_CHAINS: Record<number, { chainName: string; rpcUrls: string[]; nativeCurrency: { name: string; symbol: string; decimals: number }; blockExplorerUrls: string[] }> = {
+  56: {
+    chainName: "BNB Smart Chain",
+    rpcUrls: ["https://bsc-dataseed.binance.org"],
+    nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+    blockExplorerUrls: ["https://bscscan.com"],
+  },
   97: {
     chainName: "BNB Smart Chain Testnet",
     rpcUrls: ["https://data-seed-prebsc-1-s1.binance.org:8545"],
@@ -41,6 +47,13 @@ const KNOWN_CHAINS: Record<number, { chainName: string; rpcUrls: string[]; nativ
     blockExplorerUrls: ["https://sepolia.basescan.org"],
   },
 };
+
+/** Chains where the native coin has real value. Anything else is treated as a test network. */
+const MAINNET_CHAIN_IDS = new Set([1, 56, 137, 8453, 42161, 10]);
+
+export function isMainnetChain(chainId: number): boolean {
+  return MAINNET_CHAIN_IDS.has(chainId);
+}
 
 export class WalletError extends Error {
   code: string;

@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, apiErrorCode, ApiError, CREDITS_LABEL } from "@/lib/api";
 import { CopyField } from "@/components/provider/copy-field";
 import { useAuth } from "@/lib/auth-context";
-import { connectWallet, ensureChain, getWalletProvider, signMessage, WalletError } from "@/lib/ethereum";
+import { connectWallet, ensureChain, getWalletProvider, isMainnetChain, signMessage, WalletError } from "@/lib/ethereum";
 import { formatRelativeTime } from "@/lib/utils";
 
 const LINK_ERRORS: Record<string, string> = {
@@ -104,13 +104,23 @@ export default function WalletPage() {
       />
 
       <div className="max-w-2xl space-y-6">
-        <div role="note" className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
-          <p className="font-medium">Test network, no monetary value</p>
-          <p className="text-muted-foreground">
-            COMPUTE tokens shown here exist on a test network only. Platform credits are simulated.
-            Nothing on this page is money, and tokens are not converted to credits (or back) yet.
-          </p>
-        </div>
+        {data && isMainnetChain(data.chain.chain_id) ? (
+          <div role="note" className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+            <p className="font-medium">Your COMPUTE tokens are real; your platform credits are not</p>
+            <p className="text-muted-foreground">
+              The token balance below is held on {net} and is controlled by your own wallet. Platform credits are a
+              separate, simulated balance. Tokens are not converted to credits (or back) yet.
+            </p>
+          </div>
+        ) : (
+          <div role="note" className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+            <p className="font-medium">Test network, no monetary value</p>
+            <p className="text-muted-foreground">
+              COMPUTE tokens shown here exist on a test network only. Platform credits are simulated.
+              Nothing on this page is money, and tokens are not converted to credits (or back) yet.
+            </p>
+          </div>
+        )}
 
         {query.isError ? (
           <div role="alert" className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">

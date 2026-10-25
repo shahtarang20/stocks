@@ -1,157 +1,138 @@
-# ComputeCoin ($COMPUTE): A Trust-Minimized Decentralized AI GPU Compute & Settlement Network
+# ComputeCoin ($COMPUTE): A Marketplace for AI GPU Compute, Settled On-Chain
 
-**Technical Whitepaper v1.0**  
-*Phase 1 Developer Preview & Settlement Architecture*  
-*Date: October 2026*  
-*Website: [https://stocks-djt51clzc-welcome5.vercel.app](https://stocks-djt51clzc-welcome5.vercel.app)*  
+**Technical Whitepaper v1.1: Developer Preview**
+*October 2026*
 
----
-
-## 1. Abstract
-
-The explosive expansion of artificial intelligence, foundational models, and deep learning has created unprecedented global demand for high-performance GPU compute (NVIDIA H100, A100, L40S, RTX 4090). Access to this critical compute infrastructure is currently dominated by centralized cloud hyperscalers who impose exorbitant margins (300–500% over bare-metal cost), rigid multi-month lock-in contracts, opaque provisioning queues, and censorship risks. Concurrently, thousands of enterprise data centers, independent miners, and regional clusters hold vast reserves of underutilized GPU capacity with no frictionless mechanism to monetize them.
-
-**ComputeCoin** is a trust-minimized, decentralized physical infrastructure network (DePIN) for AI GPU compute. The protocol couples high-throughput, low-latency off-chain compute scheduling and telemetry with an Ethereum/Base-compatible smart contract escrow and settlement layer powered by the **$COMPUTE** utility token. By enforcing cryptographic telemetry heartbeats, containerized workload sandboxing, double-entry ledger settlement, and deflationary token burn mechanics, ComputeCoin provides the missing liquidity, transparency, and trust layer for permissionless AI compute.
+> **Read this first.** ComputeCoin is a developer preview. This document separates what is built and tested
+> from what is not built. Nothing in it is an offer, a promise of future value, or investment advice. The smart
+> contracts have **not** been audited by an independent firm.
 
 ---
 
-## 2. The Problem & Market Opportunity
+## 1. Summary
 
-### 2.1 The GPU Compute Bottleneck
-* **Supply Concentration:** Over 75% of high-end enterprise AI GPUs are monopolized by a handful of tier-1 cloud providers.
-* **Capital Inefficiency:** Small-to-medium AI labs and independent researchers face minimum commitment thresholds ranging from $50,000 to $1,000,000+ for enterprise clusters.
-* **Idle Capacity:** Globally, an estimated 35–45% of independent data center and workstation GPU capacity sits idle or runs low-margin batch workloads during off-peak windows.
-* **Lack of Trust in DePIN:** Early decentralized compute networks suffered from fabricated hardware specs, unreliable uptime, lack of atomic reservations, and volatility in native payment rails.
+AI teams rent GPUs from a few large clouds at high margins, while independent data centres and workstation
+owners leave capacity idle. ComputeCoin is a marketplace that connects the two: providers run an agent on their
+NVIDIA GPUs, customers submit containerised jobs through a console, API or SDK, and payment is escrowed and
+settled against metered runtime. Job scheduling and metering run off-chain for speed. An optional on-chain
+escrow settles payments in the **$COMPUTE** token on BNB Smart Chain.
 
-### 2.2 The ComputeCoin Thesis: "Measured, Not Promised"
-ComputeCoin replaces blind trust with strict verifiable execution:
-1. **Honest Hardware Attestation:** Hardware capabilities (GPU count, VRAM, PCIe bandwidth, compute benchmarks) are labeled as **Detected** directly by local low-level agent probes and verified against active workloads—never faked or asserted.
-2. **Deterministic Pricing:** Hourly pricing and platform fees are locked atomically via time-bounded quotes before any compute commitment.
-3. **Escrow Guarantee:** Customer funds remain in cryptographic escrow and are only settled to providers upon successful job completion and artifact verification.
+## 2. Status today
 
----
+| Component | Status |
+|---|---|
+| Web console, REST API, Python and TypeScript SDKs | Built and in developer preview |
+| Provider agent (NVIDIA GPUs only; AMD, Intel and Apple GPUs are not supported) | Built. Hardware it reports is self-reported and labelled "Detected", not independently verified |
+| Job execution | Containerised runner is implemented. **It has not yet been validated on real GPU hardware; jobs run in simulated mode by default** |
+| Customer credits and payments | **Credits are test credits.** A Stripe test-mode payment rail is built; live payments are not enabled |
+| `ComputeCoinToken` (ERC-20) | Built and unit-tested. **Not audited** |
+| `ComputeSettlement` (escrow) | Built and unit-tested (25 contract tests). **Not audited** |
+| Timelock and vesting contracts | Built from unmodified OpenZeppelin components. Used to hold and release allocations |
+| Public deployment | Planned first on BNB Smart Chain **testnet** (test coins, no monetary value). Not deployed on mainnet |
+| External security audit | **Not done** |
+| Legal review of the token | **Not done** |
 
-## 3. Protocol Architecture
+## 3. Architecture
 
-ComputeCoin operates a four-tier architecture designed for sub-second quote negotiation and robust cryptographic finality:
+- **Off-chain orchestration.** An API schedules jobs, reserves machine capacity atomically (database row locks and
+  expiring leases), meters runtime per second, and keeps a double-entry ledger in which debits equal credits.
+- **Providers.** `computecoin-agent` detects NVIDIA GPUs through NVML, sends signed heartbeats every 30 seconds, and
+  runs workloads in a locked-down container. A machine that misses heartbeats for 90 seconds is marked offline and
+  its reservations are re-queued.
+- **Quotes and reservations.** A quote fixes the price for a short window (120 seconds by default). Accepting it moves funds from available
+  balance into a reservation; completion captures the metered cost, failure releases the hold.
+- **On-chain settlement (optional).** `ComputeSettlement` escrows tokens for a job and pays out against a voucher
+  signed by the platform (section 6).
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Application Layer                        │
-│   Web Console (Next.js 15)  •  Python SDK  •  TypeScript SDK│
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTPS / TLS
-┌──────────────────────────────▼──────────────────────────────┐
-│             Orchestration & Gateway Layer (API)             │
-│    FastAPI Core  •  Zero-Trust RBAC  •  Double-Entry Ledger │
-│    In-Memory Capacity Locks (Redis)  •  PostgreSQL DB       │
-└─────────────────┬───────────────────────────┬───────────────┘
-                  │ Signed Telemetry          │ Batch Settlement
-┌─────────────────▼───────────────┐ ┌─────────▼───────────────┐
-│       Provider Node Layer       │ │    On-Chain Settlement  │
-│  Autonomous Hardware Probes     │ │  ComputeSettlement.sol  │
-│  Isolated Docker / Podman Sandbx│ │  ComputeCoinToken (ERC20│
-│  Signed Ed25519 Heartbeats      │ │  Arbitrum / Base / Eth  │
-└─────────────────────────────────┘ └─────────────────────────┘
-```
+## 4. The $COMPUTE token
 
-### 3.1 The Provider Agent (`computecoin-agent`)
-The provider node daemon is a lightweight, auditable agent installed directly on bare-metal GPU hosts:
-* **Hardware Detection:** Queries NVIDIA's NVML library to detect GPU model names, VRAM and temperature. **Only NVIDIA GPUs are supported in this release**; AMD (ROCm), Intel and Apple GPUs are not detected and cannot host jobs yet. Detected hardware is self-reported by the host's agent and labelled "Detected": it is not independently verified.
-* **HMAC / Ed25519 Heartbeat Protocol:** Sends periodic (30s) cryptographically signed telemetry heartbeats containing system load, GPU temperature, and active lease statuses. If a node fails to heartbeat within 90 seconds, the coordinator flags the machine offline and redistributes active reservations.
-* **Workload Isolation:** AI workloads run within hardened container boundaries with strict limits on memory, filesystem access, and host namespace isolation.
+| Property | Value |
+|---|---|
+| Name and symbol | ComputeCoin, `COMPUTE` |
+| Standard | ERC-20 with EIP-2612 permit, 18 decimals |
+| Supply | 1,000,000,000, minted once, in the constructor. **There is no mint function**, so supply can never increase |
+| Burning | Any holder may burn their own tokens. Nothing burns tokens automatically |
+| Pause switch | The token owner can pause **all transfers**, which also halts trading. Who holds that power (a multisig, a timelock, or nobody if ownership is renounced) is published with the launch |
+| Chain | BNB Smart Chain (testnet first) |
 
-### 3.2 Marketplace & Atomic Reservation Engine
-* **Atomic Capacity Locking:** To prevent double-booking across concurrent global requests, machine capacity is serialized via atomic row locks on Postgres and high-throughput Redis TTL leases.
-* **Quote Negotiation:** A developer requests a quote $\rightarrow$ the system computes exact GPU cost + platform fee $\rightarrow$ returns a cryptographically signed quote valid for 300 seconds.
-* **Reservation Lifecycle:** When accepted, funds are moved from available balance into reserved escrow (`active`). Upon completion, the reservation is captured into the double-entry ledger. If a job fails or times out, the lease expires and funds are released back to the user instantly.
+### 4.1 Distribution (proposed; final figures and addresses are published at launch)
 
----
+| Allocation | Share | Terms |
+|---|---|---|
+| Liquidity | 10% | Seeds the PancakeSwap pool; the resulting LP tokens are locked or burned (section 7) |
+| Treasury | 25% | Multisig |
+| Ecosystem | 25% | Vesting contract, linear over 48 months |
+| Team | 15% | Vesting contract, 12-month cliff then linear over 48 months |
+| Community | 15% | Multisig |
+| Reserve | 10% | Vesting contract, 6-month cliff then linear over 24 months |
 
-## 4. Tokenomics & $COMPUTE Economics
+The launch tooling splits the supply exactly to these shares, locks the vested shares in vesting contracts, and
+leaves the deploying key with zero tokens and no rights. This is checked by an automated rehearsal before launch.
 
-The **$COMPUTE** token is the native utility, staking, and settlement asset of the ComputeCoin ecosystem. It operates on Ethereum (ERC-20) with cross-chain settlement bridges to Base and Arbitrum for low-gas micro-transactions.
+### 4.2 What the token does today
 
-### 4.1 Token Specification
-* **Token Name:** ComputeCoin
-* **Token Ticker:** `$COMPUTE`
-* **Total & Max Supply:** 1,000,000,000 (1 Billion $COMPUTE, Fixed Genesis Cap)
-* **Standard:** ERC-20 with EIP-2612 Permit & Deflationary Burn Interface
-* **Decimals:** 18
+1. It is the settlement asset of the escrow contract in section 6.
+2. Deposits: COMPUTE sent from a wallet you have linked to your account can be credited to your platform balance.
+   This is built, tested and **switched off by default**; the exchange rate has not been set.
 
-### 4.2 Supply Allocation
-```
-┌────────────────────────────────────────────────────────┐
-│  40%  Ecosystem & Provider Mining Rewards (400,000,000)│
-│  20%  Public & Protocol Liquidity (200,000,000)        │
-│  15%  Core Engineering & Contributors (150,000,000)    │
-│  15%  Treasury & Research Reserve (150,000,000)        │
-│  10%  Early Community & Testnet Incentives (100M)      │
-└────────────────────────────────────────────────────────┘
-```
-* **Mining & Hardware Rewards (40%):** Emitted over 48 months to hardware providers based on verified compute hours delivered, reliability scores, and uptime.
-* **Contributor Vesting:** 12-month cliff followed by 36-month linear monthly vesting.
+### 4.3 What is not built
 
-### 4.3 Core Token Utilities
-1. **Compute Fee Discounts:** Customers paying for AI inference, fine-tuning, or rendering in `$COMPUTE` receive an automatic 20% discount on protocol fees compared to fiat or stablecoins.
-2. **Provider Staking (Slashing Bonding):** Hardware providers must stake a minimum amount of `$COMPUTE` proportional to their listed hardware value. If a provider drops a running workload or submits fraudulent telemetry, a portion of their stake is slashed and awarded to the affected user.
-3. **Deflationary Buy-Back & Burn:** 25% of all protocol fees collected across both fiat (Stripe) and crypto payment rails are automatically routed to market buy-backs and burned on-chain via `ComputeCoinToken.burn()`.
-4. **Governance:** Token holders vote on protocol parameters, including supported hardware architectures, protocol fee tiers, and treasury grant distributions.
+The following are ideas, **not** features. They are not implemented and nothing here commits the project to build
+them: provider staking and slashing, fee discounts for paying in COMPUTE, automatic buy-back and burn, on-chain
+governance voting, mining or emission rewards, and bridges to other chains.
 
----
+## 5. Control of the contracts
 
-## 5. Smart Contract Architecture
+- The token owner and the settlement owner are set at launch to a multisig and a timelock. A change made through
+  the timelock is visible on-chain for the full delay before it can run; the delay and the owners are published
+  with the launch.
+- Anyone can read these settings on BscScan once the contracts are verified.
 
-The on-chain settlement layer consists of two production-audited contracts:
+## 6. Settlement contract
 
-### 5.1 `ComputeCoinToken.sol`
-* Implements OpenZeppelin ERC-20, ERC20Burnable, and Pausable standards.
-* **Circuit Breaker:** Emergency owner pause function allows instant halts in the event of upstream bridge vulnerabilities or critical zero-day exploits.
-* **Fixed Genesis:** Strict cap of 1,000,000,000 tokens minted at deployment; no unauthorized mint function exists.
+`ComputeSettlement` is a non-custodial escrow:
 
-### 5.2 `ComputeSettlement.sol`
-* **Job Escrow:** `lockBudget(jobId, provider, cost, maxBudget)` locks customer funds in contract escrow prior to job execution.
-* **Cryptographic Settle:** `settle(jobId, cost, fee, deadline, signature)` settles funds between provider and treasury upon verified off-chain cryptographic signature verification from the authorized platform signer.
-* **Non-Custodial Refund:** If a job exceeds its declared deadline without a settlement proof, the customer can invoke `refund(jobId)` directly from their wallet, guaranteeing funds are never permanently locked.
+1. **`lockBudget(jobId, provider, maxCost, deadline)`**: the customer locks the job's maximum budget. The escrow is
+   keyed by the customer's address and the job id, so nobody can occupy another customer's job id.
+2. **`settleJob(...)`**: pays the provider, the fee treasury and refunds the unused budget, against a voucher signed
+   by the platform signer. A voucher is bound to the customer, job, amounts, escrow nonce, expiry, chain and
+   contract, so it cannot be replayed, reused or moved to another contract or chain.
+3. **`refundJob(...)`**: after the deadline the customer can always withdraw the locked amount with no voucher.
+   Before the deadline a platform cancellation voucher is needed. Refunds still work while the contract is paused.
 
----
+What the contract guarantees: tokens only leave through settlement or refund, to the provider or customer recorded
+at lock time; the protocol fee is capped at **30%** of the final cost by an immutable constant, so a compromised
+signing key cannot sweep an escrow; every settlement conserves tokens exactly.
 
-## 6. Security, Auditing & Invariants
+What it does not remove: the **final cost is set by a voucher signed by the platform**. The customer is protected by
+the budget they locked and by the deadline refund, but they trust the platform's metering within that budget. The
+owner can rotate the signer and the fee treasury and can pause new locks and settlements.
 
-ComputeCoin is engineered with mathematical guarantees across financial and operational paths:
+## 7. Trading
 
-1. **No-Double-Charge Invariant:** Double-entry ledger enforces balance conservation: $\sum \text{Debits} \equiv \sum \text{Credits}$ at all times.
-2. **Strict Non-Negative Balances:** Check constraints on both off-chain PostgreSQL (`balance_minor >= 0`) and on-chain ERC-20 balances guarantee no synthetic debt can be minted.
-3. **Double-Submit CSRF & Timing-Safe Verification:** Cryptographic comparison (`secrets.compare_digest`) on all authentication tokens prevents timing side-channel attacks.
-4. **Audit Readiness:** Full test coverage (100% pass across Hardhat Solidity suites, Python unit tests, and cross-process concurrency integration tests).
+When the token is launched publicly, liquidity is seeded on **PancakeSwap V2** on BNB Smart Chain against BNB.
+The first deposit sets the opening price, so the pool and its price are published before anyone trades. The
+pool-creation tooling refuses to proceed if the pair has already been funded by someone else, bounds the
+slippage of the deposit, and sends the LP tokens to a burn address or a time lock, so the project cannot withdraw
+the pool. The market price is set by trading and is not set or guaranteed by the project. Contract and pool
+addresses are published here and on BscScan after deployment, and only those addresses are genuine.
 
----
+## 8. Risks
 
-## 7. Development & Launch Roadmap
+- **Smart-contract risk.** The contracts are unaudited. Bugs can lose funds permanently.
+- **Control risk.** The owner can pause token transfers and the settlement contract, and can change the platform
+  signer and fee treasury (behind a timelock if configured).
+- **Operator trust.** Metering and voucher signing are run by the platform, which holds the signing key.
+- **Execution risk.** Real-GPU execution is unvalidated; jobs are simulated in this preview.
+- **Market risk.** A token can lose all of its value. Liquidity may be thin and prices volatile.
+- **Regulatory risk.** The legal treatment of tokens differs by country and is not yet reviewed.
+- **Preview software.** Features may change or break. Demo data is synthetic.
 
-* **Phase 1 (Complete):**
-  - Web Developer Console & Marketplace UI (Next.js 15, Tailwind, Vercel)
-  - Core REST API & Database Models (FastAPI, PostgreSQL, Supabase, Redis)
-  - Dual Bearer & Secure HttpOnly Cookie Authentication Engine
-  - Simulated Credit Accounting (`USDC_CREDITS`) & Automated Smoke Test Suite
-* **Phase 2 (Current):**
-  - Public Sepolia Testnet Contract Deployment & Etherscan Verification
-  - Decentralized Provider Node Enrollment Protocol
-  - Interactive Web-Based Whitepaper & Community Faucets
-* **Phase 3 (Next):**
-  - Comprehensive External Smart Contract Security Audit (CertiK / OpenZeppelin)
-  - Base L2 Mainnet Deployment
-  - Public Token Generation Event (TGE) & Uniswap DEX Liquidity Pool Pairing
-* **Phase 4:**
-  - Zero-Knowledge (zk-SNARK) Verification for LLM Inference Proofs
-  - Fully Autonomous DAO Treasury Governance
+## 9. Roadmap (no dates are promised)
 
----
-
-## 8. Conclusion
-
-ComputeCoin removes the artificial scarcity and monopolistic barriers of centralized cloud computing. By combining verifiable off-chain hardware metrics with non-custodial on-chain financial settlement, ComputeCoin creates an efficient, censorship-resistant global marketplace for artificial intelligence compute.
-
-**Join the Network:**
-* **Developer Console:** [https://stocks-djt51clzc-welcome5.vercel.app](https://stocks-djt51clzc-welcome5.vercel.app)
-* **Status & Metrics:** [https://stocks-djt51clzc-welcome5.vercel.app/status](https://stocks-djt51clzc-welcome5.vercel.app/status)
+1. Deploy to BNB Smart Chain testnet, verify the contracts on BscScan, publish the addresses and run a public
+   testnet pool.
+2. Validate real GPU execution on hardware and enable live payments.
+3. Independent smart-contract audit; fix and re-verify every finding; freeze the audited bytecode.
+4. Legal review of the token and its distribution.
+5. Only after steps 3 and 4: consider a mainnet deployment.

@@ -43,13 +43,25 @@ export default function TermsPage() {
             settled from escrow against verifiable completion. No token price or
             trading activity is offered through this product.
           </p>
-          <h2>5. No warranty</h2>
+          <h2>5. The COMPUTE token</h2>
+          <p>
+            COMPUTE is a software token used to settle compute jobs on this
+            platform. This service does not sell it, set its price, or promise
+            that it has or will keep any value, and nothing here is financial,
+            investment, legal or tax advice. Where the token exists on a test
+            network it has no monetary value. The token contracts have not been
+            independently audited, and token owners can pause transfers.
+            Platform credits are separate from tokens and are not convertible
+            to them. You are responsible for checking whether holding or
+            trading a token is lawful where you live.
+          </p>
+          <h2>6. No warranty</h2>
           <p>
             The preview is provided &quot;as is&quot; without warranties of any
             kind. We do not warrant that decentralized compute will be cheaper,
             faster, or more reliable than alternatives.
           </p>
-          <h2>6. Changes</h2>
+          <h2>7. Changes</h2>
           <p>
             Final terms will be published before general availability and will
             supersede these preview terms.

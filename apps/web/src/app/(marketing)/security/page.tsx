@@ -50,10 +50,15 @@ export default function SecurityPage() {
               refresh tokens issued by the API.
             </li>
             <li>
-              <strong>Known limitation:</strong> the web console currently
-              stores tokens in the browser for development convenience. Moving
-              tokens to secure, httpOnly cookies is required before production
-              and is tracked in the codebase.
+              <strong>Implemented:</strong> the web console signs you in with
+              httpOnly, Secure cookies set by the API, with CSRF protection.
+              Page scripts cannot read them, and no token is written to
+              browser storage.
+            </li>
+            <li>
+              <strong>Smart contracts:</strong> the token and escrow contracts
+              have unit tests but have <em>not</em> been audited by an
+              independent firm.
             </li>
             <li>
               <strong>Enforcement:</strong> authorization is enforced

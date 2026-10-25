@@ -108,6 +108,17 @@ Also done after a live-site test: **sign-up now asks "Use GPUs" or "Host my GPU"
 | Not built, on purpose | Moving value between credits and tokens. [ADR-0004](docs/architecture/ADR-0004-token-and-ledger.md) lays out the options, the invariant a bridge must keep, and the five owner decisions needed first (rate, direction, limits, gas, legal). |
 | Public testnet | BNB testnet RPC is reachable and a throwaway deployer wallet exists, but **it needs test BNB from the faucet before the real deploy can run**; `scripts/testnet-balance.mjs` reports when it is ready. |
 
+### Round 5: governance for the token, and token deposits (steps 2 and 3 of the launch list)
+
+| What | Outcome |
+|---|---|
+| **Governance** | New `ComputeTimelock` and `ComputeVesting` (thin, unmodified OpenZeppelin wrappers; the token and settlement logic is untouched, so there is nothing new to audit in them). `scripts/launch.mjs` takes a written allocation plan (basis points that must total 10,000, real addresses, sane cliffs), deploys, splits the supply exactly, locks vested shares, and hands ownership to a multisig and a timelock. The deployer ends with zero tokens and no rights. A placeholder plan is refused on any mainnet chain id, and an approved one still needs `I_UNDERSTAND_MAINNET=yes`. |
+| **Proof** | `scripts/launch-rehearsal.mjs` runs 41 self-checks on a real local chain: exact split, vesting before/after the cliff and at the end, timelock delay enforced (strangers refused, early execution refused, execution after the delay works), no admin backdoor. Timing is deterministic (10 of 10 repeat runs pass). |
+| **Deposits (stage 1 of ADR-0004)** | COMPUTE sent to the platform address from a **linked** wallet is credited to the ledger. Each transfer once (unique on chain, tx hash, log index), only after N confirmations, in integers rounded down to the cent, as a balanced ledger entry. Unlinked senders are `unclaimed` (credit nothing); out-of-range or sub-cent amounts are `rejected`. Reconciliation compares the chain with the ledger. Admin page "Token deposits"; the worker scans every sweep. **Off unless the rate and address are configured.** |
+| **Tested for real** | Fake-chain unit tests (17, including rounding, confirmations, idempotency, deleted accounts, tampered rows), a real-chain test with a real transfer and a **real chain reorganisation** (a deposit reorganised away before confirming is never credited), and a browser test of the whole flow. Mutation checks confirm the tests fail when the rounding, confirmation or link rules are broken. |
+| **Bug found by running on Postgres** | The ledger's reference column is 64 characters; a transaction hash plus log index is longer. SQLite never complains, so it passed every unit test and crashed the first real scan. Fixed (reference the deposit row), with a test that checks column lengths. |
+| **Not done** | Withdrawals (credits back to tokens), the public-testnet deployment (still needs test coins), the audit and the legal review. The exchange rate, limits and who pays gas are owner decisions; nothing is switched on. |
+
 Still open (not bugs, decide before launch): the admin audit log shows actors as truncated ids;
 the admin Providers page lists only machines that are online; the ledger shows only recent
 entries without pagination controls; the admin Configuration and Security pages are static
@@ -128,8 +139,8 @@ The two concurrency tests need real Postgres (SQLite cannot show this race). I c
 
 ## Test results
 
-- API: 492 passed, 37 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. The opt-in live suites pass when switched on: Postgres/S3 9 of 9, local-chain 15 of 15 (including the real ERC-20 balance read).
-- Browser QA (`tests/qa/`): 402 of 402 control-level checks pass on the production build from a fresh seed (customer 134, provider 60, admin 71, public 73, mobile 44, wallet 20). Per-control results are in `docs/QA_CHECKLIST.md`; `tests/qa/stack.sh` rebuilds the whole local stack (optionally with a real local chain) and reruns everything.
+- API: 509 passed, 40 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. The opt-in live suites pass when switched on: Postgres/S3 9 of 9, local-chain 18 of 18 (ERC-20 balance read, deposits credited once, a real chain reorganisation).
+- Browser QA (`tests/qa/`): 419 of 419 control-level checks pass on the production build from a fresh seed (customer 134, provider 60, admin 71, public 73, mobile 45, wallet 20, token deposits 16). `tests/qa/stack.sh` rebuilds the whole local stack, including a real local chain, and reruns everything.
 - Fuzzing: about 15,200 hostile requests (POST/PUT/PATCH bodies and GET path/query parameters) across every endpoint, including the new profile, password and deletion endpoints; zero 5xx apart from the intentional 503 for an unconfigured chain.
 - Provider agent: 66 passed, 1 skipped (needs a GPU).
 - Web: `tsc` clean, `next lint` clean, production build passes.

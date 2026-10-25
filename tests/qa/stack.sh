@@ -21,7 +21,7 @@ mkdir -p "$QA_HOME" "$QA_DIR"
 listening() { ss -ltn | grep -q ":$1 "; }
 kill_port() { ss -ltnp | grep ":$1 " | sed 's/.*pid=\([0-9]*\).*/\1/' | xargs -r kill; }
 
-set# The hardhat dev key #0 is public and only ever holds worthless local-chain coins.
+# The hardhat dev key #0 is public and only ever holds worthless local-chain coins.
 HH_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 chain() {
   kill_port 8545; sleep 1
@@ -34,7 +34,10 @@ import json, sys
 d = json.load(open(sys.argv[1] + "/chain.json"))
 open(sys.argv[1] + "/chain.env", "w").write(
     "export CHAIN_RPC_URL=http://127.0.0.1:8545 COMPUTE_TOKEN_ADDRESS=%s SETTLEMENT_CONTRACT_ADDRESS=%s "
-    "SETTLEMENT_CHAIN_ID=%s WALLET_CHAIN_NAME='Local test chain'\n" % (d["ComputeCoinToken"], d["ComputeSettlement"], d["chainId"]))
+    "SETTLEMENT_CHAIN_ID=%s WALLET_CHAIN_NAME='Local test chain' "
+    # Token deposits ON for the local chain: hardhat account #9 is the platform deposit address, 1 COMPUTE = 10 credits.
+    "TOKEN_DEPOSIT_ENABLED=true TOKEN_DEPOSIT_ADDRESS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720 TOKEN_CREDITS_PER_TOKEN=10 "
+    "TOKEN_DEPOSIT_CONFIRMATIONS=1 TOKEN_DEPOSIT_MIN_TOKENS=1 TOKEN_DEPOSIT_MAX_TOKENS=1000\n" % (d["ComputeCoinToken"], d["ComputeSettlement"], d["chainId"]))
 PY
   cat "$QA_DIR/chain.json"
 }
@@ -89,7 +92,7 @@ up() {
 
 seed() { (cd "$REPO" && QA_API="http://localhost:$APIPORT" QA_OUT="$QA_DIR/seed.json" provider-agent/.venv/bin/python "$HERE/seed.py"); }
 run()  { (cd "$HERE" && QA_WEB="http://localhost:$WEBPORT" QA_API="http://localhost:$APIPORT" node "$1.mjs"); }
-suites() { for s in crawl c1 c2 c3 p1 a1 pub mobile $([ -f "$QA_DIR/chain.json" ] && echo w1); do run $s > "$QA_DIR/$s.out" 2>&1; done; echo done > "$QA_DIR/suites.done"; }
+suites() { for s in crawl c1 c2 c3 p1 a1 pub mobile $([ -f "$QA_DIR/chain.json" ] && echo w1 w2); do run $s > "$QA_DIR/$s.out" 2>&1; done; echo done > "$QA_DIR/suites.done"; }
 down() {
   for p in $WEBPORT $APIPORT $REDISPORT $S3PORT $SMTPPORT 8545; do kill_port $p; done
   "$PGBIN/pg_ctl" -D "$QA_HOME/pg" stop -m fast 2>&1 | tail -1

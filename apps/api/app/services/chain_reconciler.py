@@ -279,6 +279,51 @@ class JsonRpcChainClient:
             raise ChainClientError("token_not_deployed_at_address")
         return int(result, 16)
 
+    #: ``Transfer(address indexed from, address indexed to, uint256 value)``.
+    TRANSFER_TOPIC = _topic("Transfer(address,address,uint256)")
+
+    async def latest_block(self) -> int:
+        return await self._latest_block()
+
+    async def transfer_logs(
+        self, token_address: str, to_address: str, from_block: int, to_block: int
+    ) -> list[dict[str, Any]]:
+        """ERC-20 ``Transfer`` events into ``to_address`` between two blocks (inclusive).
+
+        Returns plain dicts: tx_hash, log_index, block_number, from_address, amount. Filtering on the
+        indexed ``to`` topic is done by the node, so only transfers into the deposit address come back.
+        """
+        to_topic = "0x" + to_address.lower().removeprefix("0x").rjust(64, "0")
+        raw = await self._rpc(
+            "eth_getLogs",
+            [
+                {
+                    "address": token_address,
+                    "fromBlock": hex(from_block),
+                    "toBlock": hex(to_block),
+                    "topics": [self.TRANSFER_TOPIC, None, to_topic],
+                }
+            ],
+        )
+        if not isinstance(raw, list):
+            raise ChainClientError("getlogs_malformed_response")
+        out: list[dict[str, Any]] = []
+        for log in raw:
+            try:
+                topics = log["topics"]
+                out.append(
+                    {
+                        "tx_hash": log["transactionHash"].lower(),
+                        "log_index": int(log["logIndex"], 16),
+                        "block_number": int(log["blockNumber"], 16),
+                        "from_address": "0x" + topics[1][-40:].lower(),
+                        "amount": int(log["data"], 16),
+                    }
+                )
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ChainClientError("transfer_log_malformed") from exc
+        return out
+
     async def _latest_block(self) -> int:
         result = await self._rpc("eth_blockNumber", [])
         try:

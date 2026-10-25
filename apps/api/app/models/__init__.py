@@ -61,6 +61,7 @@ from app.models.settlement import (
     OnChainTxType,
 )
 
+from app.models.token_deposit import TokenDeposit  # noqa: F401
 from app.models.wallet import LinkedWallet  # noqa: F401
 
 # Phase B — verification, reputation, spend controls and webhooks.
@@ -92,6 +93,7 @@ from app.models.reconciliation import ChainReconciliationRun
 
 __all__ = [
     "LinkedWallet",
+    "TokenDeposit",
     "Role",
     "UserStatus",
     "User",

@@ -1,6 +1,6 @@
 # ADR-0004: How COMPUTE tokens and the platform ledger relate
 
-Status: **proposed, needs owner decisions (section 5). Phase 1 is built; phase 2 is not.**
+Status: **phase 1 built (wallet link, balance view). Stage 1 of the bridge (deposits only) is built and OFF by default; it needs the owner decisions in section 5 before it is switched on. Withdrawals are not built.**
 
 ## 1. Context
 
@@ -58,7 +58,23 @@ platform funds, only mis-credit); stage 2 withdrawals with daily limits and a pa
 - The reconciliation job passes after each scenario and fails when a row is deliberately corrupted.
 - Fuzz the amount inputs with the strict `parse_money` already used for credits.
 
+## 6a. Built: stage 1, deposits only (off until configured)
+
+Switch it on by setting `TOKEN_DEPOSIT_ENABLED=true`, `TOKEN_DEPOSIT_ADDRESS`, `TOKEN_CREDITS_PER_TOKEN` (the rate: your decision),
+`TOKEN_DEPOSIT_CONFIRMATIONS`, `TOKEN_DEPOSIT_MIN_TOKENS`, `TOKEN_DEPOSIT_MAX_TOKENS` and `TOKEN_DEPOSIT_FROM_BLOCK`, plus the chain
+settings. With any of them missing or invalid it stays off and every endpoint says so.
+
+- A transfer of COMPUTE to the deposit address is credited **only** if its sender is a wallet linked to an account (signature-proven).
+  Other senders are recorded as `unclaimed` (credits nothing); sizes outside the limits, or worth under one cent, are `rejected`.
+- Each on-chain transfer is stored once (unique on chain, tx hash, log index): rescans, restarts and two scanners cannot double-credit.
+- Only blocks `TOKEN_DEPOSIT_CONFIRMATIONS` deep are read, so a block that is reorganised away is never credited (tested with a real
+  chain revert).
+- Credits = tokens x rate, in integers, rounded **down** to the cent, posted as a balanced ledger entry.
+- `GET /v1/admin/token-deposits/reconciliation` and the admin page "Token deposits" compare the chain with the ledger and report a
+  mismatch; the background worker scans every sweep, and an admin can scan on demand.
+- Deleting an account unlinks its wallets, so a deposit from one can never be credited to a deleted account.
+
 ## 7. Not done, deliberately
 
-No deposit watcher, no withdrawal signer, no token-to-credit conversion. Phase 1 only makes balances visible and binds
-addresses to accounts, which is safe to ship and is required by every option above.
+No withdrawal signer and no credit-to-token conversion. Deposits (tokens in, credits out) exist behind a switch that stays off until
+you decide the rate and limits; the reverse direction needs its own design review, the daily limits and the pause switch.

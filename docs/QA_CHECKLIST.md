@@ -2,7 +2,7 @@
 
 Generated 2026-10-25 from a live crawl of the running web app plus the browser test suites in `tests/qa/`.
 
-**402 of 402 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
+**419 of 419 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
 
 ## 1. Control inventory (what exists on each page)
 
@@ -15,12 +15,12 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | cust1 | `/dashboard/api-keys` | 3 | 1 | 13 | Refresh, Create key, Revoke · proj-select |
 | cust1 | `/dashboard/jobs` | 1 | 0 | 19 | Refresh |
 | cust1 | `/dashboard/jobs/new` | 1 | 11 | 13 | Submit job · workload_type, isolation_tier, model, prompt, max_tokens, machine_id, gpu_count, |
-| cust1 | `/dashboard/jobs/a82343b1-13c3-45ed-a84e-26988d` | 2 | 0 | 13 | Refresh, Download |
+| cust1 | `/dashboard/jobs/b0190135-1395-4b8b-9439-5ff930` | 2 | 0 | 13 | Refresh, Download |
 | cust1 | `/dashboard/reservations` | 6 | 0 | 13 | Refresh, Release |
 | cust1 | `/dashboard/billing` | 2 | 0 | 13 | Buy credits, Refresh |
 | cust1 | `/dashboard/wallet` | 2 | 0 | 13 | Refresh, Connect and link wallet |
 | cust1 | `/dashboard/invoices` | 1 | 0 | 19 | Refresh |
-| cust1 | `/dashboard/invoices/19ffe7e0-b6ed-4d2e-a558-27` | 1 | 0 | 14 | Download |
+| cust1 | `/dashboard/invoices/bfffccfe-9eeb-49e0-9735-69` | 1 | 0 | 14 | Download |
 | cust1 | `/dashboard/usage` | 1 | 0 | 16 | Refresh |
 | cust1 | `/dashboard/disputes` | 1 | 0 | 15 | Refresh |
 | cust1 | `/dashboard/settings` | 4 | 5 | 13 | Save changes, Change password, Log out, Delete account · s-email, s-name, s-cur-pw, s-new-pw, s-new-pw2 |
@@ -31,18 +31,19 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | prov1 | `/provider/hardware` | 4 | 0 | 8 | Refresh, Machine actions |
 | prov1 | `/provider/earnings` | 1 | 0 | 8 | Refresh |
 | prov1 | `/provider/payouts` | 2 | 0 | 8 | Refresh, Request payout |
-| admin | `/admin/overview` | 1 | 0 | 22 | Refresh |
-| admin | `/admin/users` | 9 | 0 | 14 | Refresh, Reinstate, Suspend |
-| admin | `/admin/providers` | 1 | 0 | 14 | Refresh |
-| admin | `/admin/jobs` | 1 | 0 | 22 | Refresh |
-| admin | `/admin/billing` | 4 | 8 | 14 | Refresh, Post refund, Authorize payout, Resolve dispute · refund-job, refund-invoice, refund-amount, refund-reason, authorize-payout, reso |
-| admin | `/admin/disputes` | 1 | 0 | 14 | Refresh |
-| admin | `/admin/settlement` | 2 | 3 | 14 | Refresh State, Generate Platform Voucher · Job ID (e.g. 550e8, 400000000000000000 |
-| admin | `/admin/security` | 0 | 0 | 14 | — |
-| admin | `/admin/telemetry` | 1 | 1 | 14 | Refresh · select-one |
-| admin | `/admin/vendors` | 1 | 0 | 21 | Check now |
-| admin | `/admin/audit-logs` | 1 | 0 | 14 | Refresh |
-| admin | `/admin/configuration` | 0 | 0 | 14 | — |
+| admin | `/admin/overview` | 1 | 0 | 23 | Refresh |
+| admin | `/admin/users` | 8 | 0 | 15 | Refresh, Reinstate, Suspend |
+| admin | `/admin/providers` | 1 | 0 | 15 | Refresh |
+| admin | `/admin/jobs` | 1 | 0 | 23 | Refresh |
+| admin | `/admin/billing` | 4 | 8 | 15 | Refresh, Post refund, Authorize payout, Resolve dispute · refund-job, refund-invoice, refund-amount, refund-reason, authorize-payout, reso |
+| admin | `/admin/disputes` | 1 | 0 | 15 | Refresh |
+| admin | `/admin/settlement` | 2 | 3 | 15 | Refresh State, Generate Platform Voucher · Job ID (e.g. 550e8, 400000000000000000 |
+| admin | `/admin/security` | 0 | 0 | 15 | — |
+| admin | `/admin/telemetry` | 1 | 1 | 15 | Refresh · select-one |
+| admin | `/admin/vendors` | 1 | 0 | 22 | Check now |
+| admin | `/admin/token-deposits` | 2 | 1 | 15 | Refresh, Scan now · deposit-filter |
+| admin | `/admin/audit-logs` | 1 | 0 | 15 | Refresh |
+| admin | `/admin/configuration` | 0 | 0 | 15 | — |
 | public | `/` | 0 | 0 | 15 | — |
 | public | `/pricing` | 0 | 0 | 15 | — |
 | public | `/developers` | 0 | 0 | 15 | — |
@@ -57,7 +58,7 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | public | `/register` | 1 | 4 | 2 | Create account · intent-customer, intent-host, email, password |
 | public | `/forgot-password` | 1 | 1 | 2 | Send reset link · email |
 
-Totals across 46 pages: 80 buttons, 49 form fields, 617 link slots.
+Totals across 47 pages: 81 buttons, 50 form fields, 644 link slots.
 
 ## 2. Test results by area
 
@@ -69,8 +70,9 @@ Totals across 46 pages: 80 buttons, 49 form fields, 617 link slots.
 | Provider: onboarding, dashboard, hardware, earnings, payouts | 60 | 60 | 0 |
 | Admin: every admin page | 71 | 71 | 0 |
 | Public pages and authentication | 73 | 73 | 0 |
-| Mobile layout (390px) on every page | 44 | 44 | 0 |
+| Mobile layout (390px) on every page | 45 | 45 | 0 |
 | Wallet: link, balance, refusal and ownership checks against a real local chain | 20 | 20 | 0 |
+| Token deposits: real on-chain transfers credited once, unclaimed and rejected cases, admin reconciliation | 16 | 16 | 0 |
 
 ### Failing checks
 
@@ -455,7 +457,7 @@ None.
 - [x] cust1 /dashboard/api-keys: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs/new: no horizontal page scroll at 390px
-- [x] cust1 /dashboard/jobs/a82343b1-13c3-45ed-a84e-…: no horizontal page scroll at 390px
+- [x] cust1 /dashboard/jobs/b0190135-1395-4b8b-9439-…: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/reservations: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/billing: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/wallet: no horizontal page scroll at 390px
@@ -479,6 +481,7 @@ None.
 - [x] admin /admin/security: no horizontal page scroll at 390px
 - [x] admin /admin/telemetry: no horizontal page scroll at 390px
 - [x] admin /admin/vendors: no horizontal page scroll at 390px
+- [x] admin /admin/token-deposits: no horizontal page scroll at 390px
 - [x] admin /admin/audit-logs: no horizontal page scroll at 390px
 - [x] admin /admin/configuration: no horizontal page scroll at 390px
 
@@ -504,3 +507,22 @@ None.
 - [x] verification: an unverified account is told to verify its email first
 - [x] provider navigation: hosts also reach the Wallet page
 - [x] security: the API refuses a signature made by a different key through the same UI path
+
+**Token deposits: real on-chain transfers credited once, unclaimed and rejected cases, admin reconciliation**
+
+- [x] deposit card: appears once the server has deposits enabled, with rate, limits and confirmations
+- [x] deposit card: before linking a wallet it asks the user to link first and shows no address
+- [x] deposit card: after linking it shows the deposit address and a 'send only from your linked wallet' warning
+- [x] admin: the page shows reconciliation before any scan
+- [x] admin: 'Scan now' reads the real transfer and credits it
+- [x] admin: the deposit is listed as credited, and chain and ledger are reported as balanced
+- [x] customer: the credits arrived in the ledger at exactly 25 x 10 = 250.00
+- [x] customer: the wallet page shows the deposit and the new credit balance
+- [x] customer: the Billing ledger shows the credit
+- [x] scanning again does not credit the same deposit twice
+- [x] a transfer from an address nobody linked is held as 'unclaimed' and credits nothing
+- [x] admin: the status filter finds the unclaimed transfer
+- [x] admin: reconciliation still balances and counts the unclaimed tokens
+- [x] a deposit above the maximum is rejected and credits nothing, and the customer sees why
+- [x] a customer cannot open the admin deposits page or call its API
+- [x] a customer sees only their own deposits (another user's wallet page is empty)

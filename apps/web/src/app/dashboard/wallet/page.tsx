@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, apiErrorCode, ApiError, CREDITS_LABEL } from "@/lib/api";
+import { CopyField } from "@/components/provider/copy-field";
 import { useAuth } from "@/lib/auth-context";
 import { connectWallet, ensureChain, getWalletProvider, signMessage, WalletError } from "@/lib/ethereum";
 import { formatRelativeTime } from "@/lib/utils";
@@ -73,6 +74,13 @@ export default function WalletPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["wallet"] }),
   });
 
+  const depositsEnabled = Boolean(data?.deposits?.enabled);
+  const depositsQuery = useQuery({
+    queryKey: ["wallet-deposits"],
+    enabled: Boolean(accessToken) && depositsEnabled,
+    queryFn: () => api.getWalletDeposits(token),
+  });
+
   const unlinkMut = useMutation({
     mutationFn: () => api.walletUnlink(token),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["wallet"] }),
@@ -88,7 +96,7 @@ export default function WalletPage() {
         title="Wallet"
         description="Your credits on the platform, and your COMPUTE tokens on the blockchain. They are separate balances."
         action={
-          <Button variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
+          <Button variant="outline" onClick={() => { query.refetch(); if (depositsEnabled) depositsQuery.refetch(); }} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
             Refresh
           </Button>
@@ -215,6 +223,68 @@ export default function WalletPage() {
             ) : null}
           </CardContent>
         </Card>
+
+        {depositsEnabled && data?.deposits ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Deposit COMPUTE for credits</CardTitle>
+              <CardDescription>
+                Send COMPUTE from your linked wallet to the address below and it is credited to your balance.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <dl className="divide-y divide-border">
+                <Row label="Rate">
+                  <span data-testid="deposit-rate">1 {data.chain.symbol} = {data.deposits.credits_per_token} credits</span>
+                </Row>
+                <Row label="Allowed size">
+                  {data.deposits.min_tokens} to {data.deposits.max_tokens} {data.chain.symbol} per transfer
+                </Row>
+                <Row label="Credited after">{data.deposits.confirmations} block confirmations</Row>
+              </dl>
+              {data.wallet ? (
+                <>
+                  <p className="text-sm text-muted-foreground">Deposit address</p>
+                  <CopyField value={data.deposits.address ?? ""} />
+                  <p className="text-xs text-muted-foreground">
+                    Send only from <span className="font-mono">{data.wallet.address}</span>. A transfer from any other
+                    address is not credited automatically, and the tokens cannot be returned by this page.
+                    Amounts are rounded down to a whole cent of credit.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Link your wallet above first. Deposits are only credited from a wallet you have linked.</p>
+              )}
+              <div>
+                <h3 className="mb-2 text-sm font-medium">Your deposits</h3>
+                {depositsQuery.isLoading ? (
+                  <Skeleton className="h-10 w-full" />
+                ) : (depositsQuery.data ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No deposits yet.</p>
+                ) : (
+                  <ul className="divide-y divide-border text-sm" data-testid="deposit-list">
+                    {(depositsQuery.data ?? []).map((d) => (
+                      <li key={d.tx_hash} className="flex items-center justify-between gap-3 py-2">
+                        <span className="min-w-0">
+                          <span className="font-mono tabular-nums">{d.amount} {data.chain.symbol}</span>
+                          <span className="ml-2 text-xs text-muted-foreground">{formatRelativeTime(d.created_at)}</span>
+                        </span>
+                        <span className="flex items-center gap-2">
+                          {d.status === "credited" ? (
+                            <span className="font-mono tabular-nums">+{d.credits} credits</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{d.reason?.replace(/_/g, " ")}</span>
+                          )}
+                          <Badge variant={d.status === "credited" ? "success" : "warning"}>{d.status}</Badge>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </>
   );

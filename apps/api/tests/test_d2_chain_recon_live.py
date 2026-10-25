@@ -698,3 +698,118 @@ def test_token_balance_where_no_token_is_deployed_is_an_explicit_error(chain_set
     client = _client(chain_settings)
     with pytest.raises(ChainClientError, match="token_not_deployed"):
         asyncio.get_event_loop().run_until_complete(client.token_balance("0x" + "cd" * 20, "0x" + "ab" * 20))
+
+
+# ---------------------------------------------------------------------------
+# Token deposits (ADR-0004 stage 1) against the REAL token on a REAL chain
+# ---------------------------------------------------------------------------
+_HH0 = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"  # holds the supply (it deployed the token)
+_HH1 = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+_HH9 = "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"  # used as the platform deposit address
+
+
+def _send_tokens(live_chain, sender: str, to: str, tokens: int) -> str:
+    """A real ERC-20 transfer(to, amount) sent from an unlocked Hardhat account."""
+    data = "0xa9059cbb" + to.lower()[2:].rjust(64, "0") + hex(tokens * 10**18)[2:].rjust(64, "0")
+    return _rpc(live_chain, "eth_sendTransaction", [{"from": sender, "to": live_chain["token_address"], "data": data}])
+
+
+@pytest.fixture
+def deposit_cfg(chain_settings, monkeypatch):
+    for k, v in dict(
+        TOKEN_DEPOSIT_ENABLED=True, CHAIN_RPC_URL=chain_settings["rpc_url"], TOKEN_DEPOSIT_ADDRESS=_HH9,
+        COMPUTE_TOKEN_ADDRESS=chain_settings["token_address"], TOKEN_CREDITS_PER_TOKEN="10",
+        TOKEN_DEPOSIT_CONFIRMATIONS=1, TOKEN_DEPOSIT_MIN_TOKENS="1", TOKEN_DEPOSIT_MAX_TOKENS="1000",
+        TOKEN_DEPOSIT_FROM_BLOCK=int(_rpc(chain_settings, "eth_blockNumber", []), 16),
+    ).items():
+        monkeypatch.setattr(settings, k, v)
+    return chain_settings
+
+
+async def _link(db_engine, user, address):
+    from app.models.wallet import LinkedWallet
+
+    sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm() as db:
+        db.add(LinkedWallet(user_id=user.id, chain_id=settings.wallet_chain_id, address=address.lower()))
+        await db.commit()
+
+
+async def _deposit_scan(db_engine, client):
+    from app.services import token_deposits as svc
+
+    sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm() as db:
+        return await svc.scan_deposits(db, client)
+
+
+async def _credits(db_engine, user) -> int:
+    from app.services import ledger
+
+    sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm() as db:
+        acct = await ledger.get_or_create_customer_account(db, user.id)
+        await db.commit()
+        return acct.balance_minor
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+async def test_a_real_token_transfer_is_credited_once_and_reconciles(db_engine, deposit_cfg):
+    from app.services import token_deposits as svc
+
+    user, _ = await _make_user(db_engine, f"dep-{uuid.uuid4().hex[:8]}@d2live.test", Role.customer)
+    await _link(db_engine, user, _HH0)
+    base = await _credits(db_engine, user)
+    client = _client(deposit_cfg)
+
+    _send_tokens(deposit_cfg, _HH0, _HH9, 12)  # a real on-chain transfer into the deposit address
+    first = await _deposit_scan(db_engine, client)
+    assert first["enabled"] and first["credited"] == 0, "the block is not yet confirmed"
+    _rpc(deposit_cfg, "evm_mine", [])  # one more block: now 1 confirmation deep
+    second = await _deposit_scan(db_engine, client)
+    assert second["credited"] == 1, second
+    assert await _credits(db_engine, user) - base == 12 * 10 * 100  # 12 COMPUTE x 10 credits, in cents
+
+    _rpc(deposit_cfg, "evm_mine", [])
+    assert (await _deposit_scan(db_engine, client))["credited"] == 0, "a rescan must not credit it again"
+    assert await _credits(db_engine, user) - base == 12 * 10 * 100
+
+    sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    async with sm() as db:
+        rec = await svc.reconcile(db, client)
+    assert rec["ok"] is True, rec
+    assert rec["credits_issued"] == rec["ledger_credits"]
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+async def test_a_transfer_from_an_unlinked_real_address_is_not_credited(db_engine, deposit_cfg):
+    user, _ = await _make_user(db_engine, f"dep2-{uuid.uuid4().hex[:8]}@d2live.test", Role.customer)
+    await _link(db_engine, user, _HH0)  # a different address than the one that sends below
+    base = await _credits(db_engine, user)
+    client = _client(deposit_cfg)
+
+    _send_tokens(deposit_cfg, _HH0, _HH1, 5)  # give account #1 some tokens
+    _send_tokens(deposit_cfg, _HH1, _HH9, 3)  # #1 is NOT linked to anyone
+    _rpc(deposit_cfg, "evm_mine", [])
+    _rpc(deposit_cfg, "evm_mine", [])
+    out = await _deposit_scan(db_engine, client)
+    assert out["unclaimed"] == 1 and out["credited"] == 0, out
+    assert await _credits(db_engine, user) == base
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+async def test_a_deposit_that_is_reorganised_away_before_confirming_is_never_credited(db_engine, deposit_cfg):
+    user, _ = await _make_user(db_engine, f"dep3-{uuid.uuid4().hex[:8]}@d2live.test", Role.customer)
+    await _link(db_engine, user, _HH0)
+    base = await _credits(db_engine, user)
+    client = _client(deposit_cfg)
+
+    snap = _rpc(deposit_cfg, "evm_snapshot", [])
+    _send_tokens(deposit_cfg, _HH0, _HH9, 20)  # included in a block, but not yet confirmed
+    assert (await _deposit_scan(db_engine, client))["credited"] == 0
+    assert _rpc(deposit_cfg, "evm_revert", [snap]) is True  # the chain reorganises: the transfer vanishes
+    for _ in range(3):
+        _rpc(deposit_cfg, "evm_mine", [])
+    out = await _deposit_scan(db_engine, client)
+    assert out["credited"] == 0
+    assert await _credits(db_engine, user) == base, "credits were issued for tokens that never settled"

@@ -40,6 +40,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/admin/billing", label: "Billing & reconciliation", icon: Scale },
       { href: "/admin/settlement", label: "On-chain settlement", icon: Coins },
+      { href: "/admin/token-deposits", label: "Token deposits", icon: Coins },
     ],
   },
   {

@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.db.session import get_sessionmaker
 from app.services.leases import run_recovery_cycle
+from app.services.token_deposits import scan_deposits
 
 setup_logging()
 logger = logging.getLogger("computecoin.worker")
@@ -66,6 +67,15 @@ async def main() -> None:
                     logger.info("Recovery sweep completed: %s", recovered)
         except Exception as exc:
             logger.exception("Worker recovery cycle encountered an error: %s", exc)
+
+        if settings.token_deposits_enabled:
+            try:
+                async with sm() as db:
+                    result = await scan_deposits(db)
+                    if any(result.get(k) for k in ("credited", "unclaimed", "rejected")):
+                        logger.info("Token deposit scan: %s", result)
+            except Exception as exc:
+                logger.exception("Token deposit scan failed (will retry next sweep): %s", exc)
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)

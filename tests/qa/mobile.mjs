@@ -4,7 +4,7 @@ const jobId=seed.jobs["done-1"];
 const SETS={ "":["/","/pricing","/developers","/providers","/security","/status","/whitepaper","/about","/legal/terms","/marketplace","/login","/register","/forgot-password"],
  "cust1@example.com":["/dashboard","/dashboard/projects","/dashboard/api-keys","/dashboard/jobs","/dashboard/jobs/new","/dashboard/jobs/"+jobId,"/dashboard/reservations","/dashboard/billing","/dashboard/wallet","/dashboard/invoices","/dashboard/usage","/dashboard/disputes","/dashboard/settings","/marketplace/gpus"],
  "prov1@example.com":["/provider/onboarding","/provider/dashboard","/provider/hardware","/provider/earnings","/provider/payouts"],
- "admin@example.com":["/admin/overview","/admin/users","/admin/providers","/admin/jobs","/admin/billing","/admin/disputes","/admin/settlement","/admin/security","/admin/telemetry","/admin/vendors","/admin/audit-logs","/admin/configuration"] };
+ "admin@example.com":["/admin/overview","/admin/users","/admin/providers","/admin/jobs","/admin/billing","/admin/disputes","/admin/settlement","/admin/security","/admin/telemetry","/admin/vendors","/admin/token-deposits","/admin/audit-logs","/admin/configuration"] };
 for(const [email,paths] of Object.entries(SETS)){
   const vp={width:390,height:844}; let p;
   if(email) p=await login(b,email,"Password123!",vp); else { p=await (await b.newContext({viewport:vp})).newPage(); p.setDefaultTimeout(8000); }

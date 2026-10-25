@@ -162,6 +162,16 @@ class Settings(BaseSettings):
     WALLET_CHAIN_NAME: str = ""
     WALLET_EXPLORER_BASE: str = ""
     WALLET_LINK_MESSAGE_TTL_SECONDS: int = 600
+
+    # Token deposits (stage 1 of ADR-0004): COMPUTE sent to the platform address from a wallet the
+    # user has linked is credited to their ledger balance. OFF unless every setting below is valid.
+    TOKEN_DEPOSIT_ENABLED: bool = False
+    TOKEN_DEPOSIT_ADDRESS: str = ""  # the platform address that receives deposits
+    TOKEN_CREDITS_PER_TOKEN: str = ""  # credits per 1 COMPUTE, a decimal string; the owner decides this
+    TOKEN_DEPOSIT_CONFIRMATIONS: int = 12  # blocks to wait, so a reorganised block is never credited
+    TOKEN_DEPOSIT_MIN_TOKENS: str = "1"
+    TOKEN_DEPOSIT_MAX_TOKENS: str = "100000"
+    TOKEN_DEPOSIT_FROM_BLOCK: int = 0  # first block to scan: set to the token's deployment block
     # Dev/test platform signer private key (matches account #3 on standard dev nodes).
     # In a non-dev ENVIRONMENT this default is rejected at startup when settlement
     # is enabled (the private half is public).
@@ -242,6 +252,21 @@ class Settings(BaseSettings):
                 "Set strong values via environment variables."
             )
         return self
+
+    @property
+    def token_deposits_enabled(self) -> bool:
+        import decimal
+
+        if not self.TOKEN_DEPOSIT_ENABLED or not self.CHAIN_RPC_URL.strip():
+            return False
+        try:
+            rate = decimal.Decimal(self.TOKEN_CREDITS_PER_TOKEN)
+            lo, hi = decimal.Decimal(self.TOKEN_DEPOSIT_MIN_TOKENS), decimal.Decimal(self.TOKEN_DEPOSIT_MAX_TOKENS)
+        except (decimal.InvalidOperation, ValueError):
+            return False
+        a = self.TOKEN_DEPOSIT_ADDRESS.strip()
+        valid_address = len(a) == 42 and a.startswith("0x")
+        return rate > 0 and 0 < lo <= hi and valid_address and self.TOKEN_DEPOSIT_CONFIRMATIONS >= 0
 
     @property
     def wallet_chain_id(self) -> int:

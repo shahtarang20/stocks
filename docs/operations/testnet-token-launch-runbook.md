@@ -206,3 +206,44 @@ PLATFORM_SIGNER_PRIVATE_KEY=<the signer key matching PLATFORM_SIGNER_ADDRESS>
 ```
 
 Testnet keys are throwaway. Never reuse them on mainnet.
+
+---
+
+## Launching with a multisig, a timelock and vesting (instead of one key holding everything)
+
+`scripts/deploy-testnet.mjs` mints the whole supply to one address that also keeps the admin powers. For anything
+beyond a throwaway test, use the launch script, which splits the supply by a written plan and hands control away:
+
+```bash
+cd contracts
+cp launch/tokenomics.example.json launch/tokenomics.json    # edit every figure and address
+node scripts/launch-rehearsal.mjs                           # needs `npx hardhat node`; 41 self-checks, run it first
+DOTENV_CONFIG_PATH=testnet.env node scripts/launch.mjs launch/tokenomics.json
+```
+
+What the plan controls (all of it is the owner's decision; the example numbers are placeholders):
+
+| Setting | Meaning |
+|---|---|
+| `allocations[].bps` | Share of the 1,000,000,000 supply in basis points; they must add up to exactly 10,000 |
+| `kind: vesting` | The share is locked in a vesting wallet: nothing before the cliff, then linear until the end |
+| `timelockDelaySeconds` | Delay before any admin change on a contract owned by the timelock can run (minimum 3,600) |
+| `tokenOwner` | `safe`: a multisig can pause/unpause the token. `timelock`: the same, but delayed (a pause then cannot be an emergency stop). `renounce`: nobody can ever pause it |
+| `settlementOwner` | Who may rotate the voucher signer, change the fee treasury or pause settlement |
+| `status` | Must be `APPROVED`, and `I_UNDERSTAND_MAINNET=yes` set, before the script will touch a mainnet chain |
+
+Think about `tokenOwner` before a public launch: a freeze switch in the owner's hands is the first thing buyers of a traded token
+look for. `renounce` removes it for good at the cost of having no emergency stop; a multisig keeps it but asks buyers to trust the
+signers. The script never uses the same address for deployer and owner at the end: the deployer finishes with zero tokens and no rights.
+
+## Token deposits (credits for COMPUTE), off by default
+
+Set these on the API to let users deposit COMPUTE and receive credits (see ADR-0004). Without all of them it stays off.
+
+```
+TOKEN_DEPOSIT_ENABLED=true            TOKEN_DEPOSIT_ADDRESS=<platform address that receives deposits>
+TOKEN_CREDITS_PER_TOKEN=<credits per 1 COMPUTE, your decision>
+TOKEN_DEPOSIT_CONFIRMATIONS=12        TOKEN_DEPOSIT_MIN_TOKENS=1     TOKEN_DEPOSIT_MAX_TOKENS=100000
+TOKEN_DEPOSIT_FROM_BLOCK=<the token's deployment block>
+```
+

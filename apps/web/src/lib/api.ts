@@ -1046,6 +1046,43 @@ export interface WalletView {
   wallet: { address: string; chain_id: number; linked_at: string } | null;
   token_balance: string | null;
   token_balance_error: string | null;
+  deposits: {
+    enabled: boolean;
+    address?: string;
+    credits_per_token?: string;
+    confirmations?: number;
+    min_tokens?: string;
+    max_tokens?: string;
+  };
+}
+
+export interface TokenDeposit {
+  tx_hash: string;
+  block_number: number;
+  amount: string;
+  status: "credited" | "unclaimed" | "rejected";
+  reason: string | null;
+  credits: string | null;
+  created_at: string;
+  user_id?: string | null;
+  from_address?: string;
+}
+
+export interface TokenDepositReconciliation {
+  enabled: boolean;
+  ok: boolean;
+  tokens_ok: boolean;
+  ledger_ok: boolean;
+  deposit_address: string;
+  on_chain_balance: string;
+  recorded_deposits: string;
+  not_yet_recorded: string;
+  credited_tokens: string;
+  unclaimed_tokens: string;
+  rejected_tokens: string;
+  credits_issued: string;
+  ledger_credits: string;
+  deposits: number;
 }
 
 export const api = {
@@ -1059,6 +1096,27 @@ export const api = {
   /** GET /v1/wallet — credits, the linked wallet and its on-chain COMPUTE balance. */
   getWallet(accessToken: string): Promise<WalletView> {
     return request<WalletView>("/v1/wallet", { method: "GET", token: accessToken });
+  },
+
+  /** GET /v1/wallet/deposits — the caller's COMPUTE deposits. */
+  getWalletDeposits(accessToken: string): Promise<TokenDeposit[]> {
+    return request<TokenDeposit[]>("/v1/wallet/deposits", { method: "GET", token: accessToken });
+  },
+
+  /** GET /v1/admin/token-deposits — every deposit, optionally by status (administrator only). */
+  adminListTokenDeposits(accessToken: string, status?: string): Promise<TokenDeposit[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request<TokenDeposit[]>(`/v1/admin/token-deposits${q}`, { method: "GET", token: accessToken });
+  },
+
+  /** POST /v1/admin/token-deposits/scan — read newly confirmed transfers now. */
+  adminScanTokenDeposits(accessToken: string): Promise<Record<string, number | boolean | null>> {
+    return request("/v1/admin/token-deposits/scan", { method: "POST", token: accessToken });
+  },
+
+  /** GET /v1/admin/token-deposits/reconciliation — does the chain agree with the ledger? */
+  adminTokenDepositReconciliation(accessToken: string): Promise<TokenDepositReconciliation> {
+    return request<TokenDepositReconciliation>("/v1/admin/token-deposits/reconciliation", { method: "GET", token: accessToken });
   },
 
   /** POST /v1/wallet/link-challenge — the message the wallet must sign. */

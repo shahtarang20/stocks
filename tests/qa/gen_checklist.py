@@ -2,7 +2,7 @@ import json, glob, re, collections, datetime
 import os
 S=os.environ.get("QA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
 inv=json.load(open(S+"/inventory.json"))
-files=["c1","c2","c3","p1","a1","pub","mobile","w1"]
+files=["c1","c2","c3","p1","a1","pub","mobile","w1","w2"]
 results=[]
 for f in files:
     try: results+= [dict(r,suite=f) for r in json.load(open(f"{S}/{f}.json"))]
@@ -29,7 +29,7 @@ out.append(f"\nTotals across {len(inv)} pages: {tb} buttons, {tf} form fields, {
 out.append("## 2. Test results by area\n")
 by=collections.OrderedDict()
 for r in results: by.setdefault((r["group"],r["suite"]),[]).append(r)
-names={"c1":"Customer: dashboard, navigation, projects, API keys","c2":"Customer: job form, job list, job detail","c3":"Customer: marketplace, quotes, reservations, billing, invoices, usage, disputes, settings","p1":"Provider: onboarding, dashboard, hardware, earnings, payouts","a1":"Admin: every admin page","pub":"Public pages and authentication","mobile":"Mobile layout (390px) on every page","w1":"Wallet: link, balance, refusal and ownership checks against a real local chain"}
+names={"c1":"Customer: dashboard, navigation, projects, API keys","c2":"Customer: job form, job list, job detail","c3":"Customer: marketplace, quotes, reservations, billing, invoices, usage, disputes, settings","p1":"Provider: onboarding, dashboard, hardware, earnings, payouts","a1":"Admin: every admin page","pub":"Public pages and authentication","mobile":"Mobile layout (390px) on every page","w1":"Wallet: link, balance, refusal and ownership checks against a real local chain","w2":"Token deposits: real on-chain transfers credited once, unclaimed and rejected cases, admin reconciliation"}
 out.append("| Area | Checks | Pass | Fail |\n|---|---|---|---|")
 for (g,s),rs in by.items():
     out.append(f"| {names.get(s,s)} | {len(rs)} | {sum(x['ok'] for x in rs)} | {sum(not x['ok'] for x in rs)} |")

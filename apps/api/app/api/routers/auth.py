@@ -465,12 +465,14 @@ async def delete_account(
     that could still act for the account is revoked (sessions, API keys, enrollment
     tokens, machines, webhooks). Refused while money or work is still in flight.
     """
+    from sqlalchemy import delete as sa_delete
     from sqlalchemy import update as sa_update
 
     from app.models.billing import Dispute, ProviderPayout
     from app.models.jobs import Job
     from app.models.org import ApiKey, Project
     from app.models.provider import EnrollmentToken, Provider, ProviderMachine
+    from app.models.wallet import LinkedWallet
     from app.models.webhooks import WebhookEndpoint
     from app.services import billing as billing_svc
     from app.services import job_fsm as fsm
@@ -532,6 +534,8 @@ async def delete_account(
     await db.execute(
         sa_update(WebhookEndpoint).where(WebhookEndpoint.customer_id == user.id).values(active=False)
     )
+    # Unlink wallets so a deposit from one can never be credited to a deleted account.
+    await db.execute(sa_delete(LinkedWallet).where(LinkedWallet.user_id == user.id))
     if provider is not None:
         provider.display_name = None
         provider.contact_email = None

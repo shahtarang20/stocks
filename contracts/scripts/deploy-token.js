@@ -240,7 +240,7 @@ async function main() {
 
   console.log("🌊 NEXT STEP: CREATE A TESTNET LIQUIDITY POOL:");
   console.log("  Run the liquidity pool creation script to make your token tradable:");
-  console.log(`  👉 npm run create:pool -- --network ${networkName}\n`);
+  console.log(`  👉 node scripts/pool.mjs launch/pool.testnet.json --report launch.<chainId>.json   (see docs/operations/launch-checklist.md)\n`);
 }
 
 main().catch((error) => {

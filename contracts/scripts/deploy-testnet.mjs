@@ -107,8 +107,8 @@ async function main() {
     console.log(`  Token:      ${explorer}/address/${tokenAddr}`);
     console.log(`  Settlement: ${explorer}/address/${settlementAddr}`);
   }
-  console.log(`\nYour coin now exists on-chain. Next: add liquidity to make it tradable:`);
-  console.log(`  TOKEN_ADDRESS=${tokenAddr} node scripts/add-liquidity-testnet.mjs`);
+  console.log(`\nYour coin now exists on-chain.`);
+  console.log("  This quick deploy gives the whole supply to one key. For anything public use scripts/launch.mjs, then scripts/pool.mjs (docs/operations/launch-checklist.md).");
 }
 
 main().catch((e) => {

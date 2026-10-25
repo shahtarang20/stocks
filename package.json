@@ -8,11 +8,12 @@
     "lint": "npm --prefix apps/web run lint",
     "typecheck": "npm --prefix apps/web run typecheck",
     "deploy:token": "npm --prefix contracts run deploy:token",
-    "create:pool": "npm --prefix contracts run create:pool",
     "deploy:settlement": "npm --prefix contracts run deploy:settlement",
-    "verify:contracts": "npm --prefix contracts run verify:contracts",
     "testnet:e2e": "npm --prefix contracts run testnet:e2e",
     "smoke:test": "bash scripts/smoke-test.sh",
-    "load:test": "python3 scripts/staging-load-test.py"
+    "load:test": "python3 scripts/staging-load-test.py",
+    "pool": "npm --prefix contracts run pool --",
+    "preflight": "npm --prefix contracts run preflight --",
+    "verify:launch": "npm --prefix contracts run verify:launch --"
   }
 }

@@ -1,0 +1,9 @@
+{
+  "_comment": "PLACEHOLDER MAINNET pool (PancakeSwap V2, BNB Smart Chain, chain 56). The owner must decide every figure. The price is nativeAmount / tokenAmount, so these two numbers ARE the launch price. Mainnet also needs CONFIRM_TOKEN_AMOUNT and CONFIRM_NATIVE_AMOUNT in the environment, typed again, equal to the two strings below.",
+  "dex": "pancake-v2-bsc",
+  "tokenAmount": "100000000",
+  "nativeAmount": "10",
+  "slippageBps": 100,
+  "deadlineSeconds": 600,
+  "lp": { "mode": "lock", "lockMonths": 12, "beneficiary": "SAFE" }
+}

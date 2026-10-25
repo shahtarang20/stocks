@@ -1,0 +1,58 @@
+{
+  "_comment": "BSC TESTNET plan (chain 97). SAFE, LIQUIDITY_WALLET and TEAM_WALLET are throwaway testnet wallets whose keys are in contracts/testnet-wallets.env (git-ignored). Replace any address with your own before launching. NOT a mainnet plan: mainnet needs a real Safe multisig and status APPROVED. FEE_TREASURY is set to the same testnet wallet as SAFE.",
+  "status": "TESTNET",
+  "timelockDelaySeconds": 3600,
+  "tokenOwner": "safe",
+  "settlementOwner": "timelock",
+  "wallets": {
+    "SAFE": "0x49b2159241c7596d6F31547cF3007d965Da20c5E",
+    "LIQUIDITY_WALLET": "0x45E62F42BAab3D2111a3C3bd6AfF3db025183B3F",
+    "TEAM_WALLET": "0x385Ccdcc8218e808E0c5D5EDE081E0DD02936B9C",
+    "PLATFORM_SIGNER": "0x24a750694509528a326A625b074A64Efab12345c",
+    "FEE_TREASURY": "0x49b2159241c7596d6F31547cF3007d965Da20c5E"
+  },
+  "allocations": [
+    {
+      "name": "liquidity",
+      "bps": 1000,
+      "kind": "direct",
+      "beneficiary": "LIQUIDITY_WALLET"
+    },
+    {
+      "name": "treasury",
+      "bps": 2500,
+      "kind": "direct",
+      "beneficiary": "SAFE"
+    },
+    {
+      "name": "ecosystem",
+      "bps": 2500,
+      "kind": "vesting",
+      "beneficiary": "SAFE",
+      "vestingMonths": 48,
+      "cliffMonths": 0
+    },
+    {
+      "name": "team",
+      "bps": 1500,
+      "kind": "vesting",
+      "beneficiary": "TEAM_WALLET",
+      "vestingMonths": 48,
+      "cliffMonths": 12
+    },
+    {
+      "name": "community",
+      "bps": 1500,
+      "kind": "direct",
+      "beneficiary": "SAFE"
+    },
+    {
+      "name": "reserve",
+      "bps": 1000,
+      "kind": "vesting",
+      "beneficiary": "SAFE",
+      "vestingMonths": 24,
+      "cliffMonths": 6
+    }
+  ]
+}

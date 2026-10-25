@@ -1,0 +1,9 @@
+{
+  "_comment": "BSC TESTNET pool: PancakeSwap V2 on chain 97. Test money only. 10,000,000 COMPUTE against 0.05 tBNB.",
+  "dex": "pancake-v2-bsc-testnet",
+  "tokenAmount": "10000000",
+  "nativeAmount": "0.05",
+  "slippageBps": 100,
+  "deadlineSeconds": 600,
+  "lp": { "mode": "lock", "lockMonths": 1, "beneficiary": "SAFE" }
+}

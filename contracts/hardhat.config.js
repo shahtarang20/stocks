@@ -37,6 +37,11 @@ export default {
       chainId: 31337,
     },
   },
+  // Lets `hardhat node --fork` simulate BNB Smart Chain testnet (chain 97), which Hardhat does not know
+  // about by default. Used only by scripts/testnet-dress-rehearsal.mjs; no effect on real networks.
+  chainDescriptors: {
+    97: { name: "BNB Smart Chain Testnet", hardforkHistory: { cancun: { blockNumber: 0 } } },
+  },
   paths: {
     sources: "./src",
     tests: "./test",

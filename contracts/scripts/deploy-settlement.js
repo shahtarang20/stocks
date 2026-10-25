@@ -384,7 +384,7 @@ async function main() {
 
   console.log("\n📋 Next Steps in Workstream D:");
   console.log(`  1. Verify source code on Etherscan:`);
-  console.log(`     npm run verify:contracts -- --network ${networkName}`);
+  console.log(`     node scripts/verify-launch.mjs launch.<chainId>.json   (see docs/operations/launch-checklist.md)`);
   console.log(`  2. Run the end-to-end testnet settlement lifecycle:`);
   console.log(`     npm run testnet:e2e -- --network ${networkName}`);
   console.log("========================================================\n");

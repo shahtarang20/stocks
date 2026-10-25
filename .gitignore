@@ -51,3 +51,8 @@ miniodata/
 coverage/
 htmlcov/
 .coverage
+
+# ---- Local-chain rehearsal output (real launch reports launch.<chainId>.json are records: commit those) ----
+contracts/launch.31337.json
+contracts/pool.31337.json
+contracts/verification/31337/

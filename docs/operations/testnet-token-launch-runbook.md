@@ -2,6 +2,12 @@
 
 > **Goal:** Deploy the real `ComputeCoinToken.sol` ERC-20 contract to a public testnet for **₹0 / $0**, receive the 1 Billion `COMPUTE` genesis supply into your MetaMask wallet, view your live token on a public block explorer (Etherscan / Basescan / BscScan), and create a testnet decentralized exchange (DEX) liquidity pool so people can trade it with test money.
 
+> **Superseded for real launches by [launch-checklist.md](launch-checklist.md).** That document covers the
+> safe path (multisig, timelock, vesting, locked liquidity, preflight, verification, rehearsals). This runbook
+> keeps the beginner walkthrough for a throwaway single-key token. The old `create:pool` command has been
+> replaced by `scripts/pool.mjs`, which checks the DEX addresses against the chain, refuses a pair someone
+> funded first, bounds slippage and locks the LP tokens.
+
 ---
 
 ## Prerequisites (100% Free)
@@ -128,24 +134,18 @@ Anyone in the world can open this link and see your coin.
 
 ## Step 6: Create a Liquidity Pool (Make it Tradable)
 
-To let people buy and sell `COMPUTE` using test coins on Uniswap or PancakeSwap, create a liquidity pool:
+The pool is created by `scripts/pool.mjs` from a small config file (see `launch/pool.testnet.json`):
 
 ```bash
-# From contracts/ directory:
-npm run create:pool -- --network sepolia
+# From contracts/ ; look first (sends nothing), then create:
+DOTENV_CONFIG_PATH=testnet.env node scripts/pool.mjs launch/pool.testnet.json --report launch.97.json
+DOTENV_CONFIG_PATH=testnet.env node scripts/pool.mjs launch/pool.testnet.json --report launch.97.json --execute
 ```
 
-### What this script does:
-1. Reads your deployed token address from `deployments/sepolia-token.json`.
-2. Approves the Uniswap / PancakeSwap router to transfer `COMPUTE`.
-3. Calls `addLiquidityETH` with **10,000,000 COMPUTE** paired with **0.005 test ETH**.
-4. Discovers the newly created **LP Pair Contract address**.
-5. Saves the pool receipt to `contracts/deployments/sepolia-liquidity-pool.json`.
-6. Prints the **direct Uniswap / PancakeSwap Swap URL**!
-
-Anyone can now open the testnet DEX link and swap test ETH for `COMPUTE`!
-
----
+The key must belong to the wallet that holds the COMPUTE for the pool (the plan's `LIQUIDITY_WALLET`). It checks the
+router, factory and WBNB against the chain, refuses a pair that already holds funds, bounds the slippage on both
+sides, approves exactly the pool amount, sends the LP tokens to a lock (or the burn address), then verifies the
+reserves and prints the PancakeSwap swap link. Only BNB Smart Chain (PancakeSwap V2) is configured.
 
 ## Step 7: Verify Contract Source Code (Optional)
 
@@ -166,16 +166,10 @@ To show the green **"Verified"** checkmark on Etherscan:
 ## Summary of Commands
 
 ```bash
-# 1. Setup env
 cd contracts
-cp .env.example .env
-# (edit .env with your private key)
-
-# 2. Deploy token
-npm run deploy:token -- --network sepolia
-
-# 3. Create liquidity pool
-npm run create:pool -- --network sepolia
+# deploy (split supply, timelock, vesting) and create the pool: see launch-checklist.md
+DOTENV_CONFIG_PATH=testnet.env node scripts/launch.mjs launch/tokenomics.testnet.json
+DOTENV_CONFIG_PATH=testnet-liquidity.env node scripts/pool.mjs launch/pool.testnet.json --report launch.97.json --execute
 ```
 
 ---

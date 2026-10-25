@@ -106,7 +106,7 @@ npm run deploy:settlement -- --network sepolia
 To get the green **"Verified"** checkmark and expose the full contract ABI and methods on Etherscan:
 
 ```bash
-npm run verify:contracts -- --network sepolia
+node scripts/verify-launch.mjs launch.<chainId>.json --pool pool.<chainId>.json --submit   # see launch-checklist.md
 ```
 
 This script reads the recorded constructor arguments and registers the Solidity source code with Etherscan. Once complete, you will be able to read and interact with contract functions directly on Etherscan.

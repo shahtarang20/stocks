@@ -54,14 +54,21 @@ def job_id_to_bytes32(job_id: uuid.UUID) -> str:
     return "0x" + h.hex()
 
 
+_NETWORK_NAMES = {
+    31337: "Local Hardhat / Dev EVM (Cancun)",
+    56: "BNB Smart Chain",
+    97: "BNB Smart Chain Testnet",
+    11155111: "Sepolia Testnet",
+    84532: "Base Sepolia",
+}
+
+
 def get_contract_deployment_info() -> ContractDeploymentInfo:
     """Return on-chain contract registry details for frontend web3 clients."""
     signer_addr = get_signer_address()
     return ContractDeploymentInfo(
         chain_id=settings.SETTLEMENT_CHAIN_ID,
-        network_name="Local Hardhat / Dev EVM (Cancun)"
-        if settings.SETTLEMENT_CHAIN_ID == 31337
-        else "Sepolia Testnet",
+        network_name=_NETWORK_NAMES.get(settings.SETTLEMENT_CHAIN_ID, f"Chain {settings.SETTLEMENT_CHAIN_ID}"),
         token_address=settings.COMPUTE_TOKEN_ADDRESS,
         token_symbol="COMPUTE",
         token_name="ComputeCoin",

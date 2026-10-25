@@ -7,6 +7,7 @@ boots without any env configured (local/test).
 from __future__ import annotations
 
 import decimal
+import re
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -18,6 +19,15 @@ _DEV_AUTH_SECRET = "dev-auth-secret-change-me"
 _DEV_SESSION_SECRET = "dev-session-secret-change-me"
 _DEV_SIGNER_KEY = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
 _DEV_ENVS = {"development", "dev", "test", "testing", "local"}
+# Local-chain contract addresses shipped as defaults. On a real network these point at nothing (or at a
+# stranger's contract), so a non-dev deployment with settlement on must set its own.
+_DEV_CONTRACT_DEFAULTS = {
+    "SETTLEMENT_CONTRACT_ADDRESS": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "COMPUTE_TOKEN_ADDRESS": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "PLATFORM_TREASURY_ADDRESS": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+}
+_LOCAL_CHAIN_ID = 31337
+_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 
 
 class Settings(BaseSettings):
@@ -245,6 +255,13 @@ class Settings(BaseSettings):
             insecure.append("SESSION_SECRET")
         if self.SETTLEMENT_ENABLED and self.PLATFORM_SIGNER_PRIVATE_KEY == _DEV_SIGNER_KEY:
             insecure.append("PLATFORM_SIGNER_PRIVATE_KEY")
+        if self.SETTLEMENT_ENABLED:
+            for name, dev_value in _DEV_CONTRACT_DEFAULTS.items():
+                value = getattr(self, name)
+                if value.lower() == dev_value.lower() or not _ADDRESS_RE.fullmatch(value):
+                    insecure.append(name)
+            if self.SETTLEMENT_CHAIN_ID == _LOCAL_CHAIN_ID:
+                insecure.append("SETTLEMENT_CHAIN_ID")
         if insecure:
             raise ValueError(
                 f"Refusing to start in ENVIRONMENT={self.ENVIRONMENT!r} with insecure "

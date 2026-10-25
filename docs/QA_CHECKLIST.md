@@ -2,7 +2,7 @@
 
 Generated 2026-10-25 from a live crawl of the running web app plus the browser test suites in `tests/qa/`.
 
-**381 of 381 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
+**402 of 402 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
 
 ## 1. Control inventory (what exists on each page)
 
@@ -10,28 +10,29 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 
 | Role | Page | Buttons | Fields | Links | Controls |
 |---|---|---|---|---|---|
-| cust1 | `/dashboard` | 0 | 0 | 14 | — |
-| cust1 | `/dashboard/projects` | 4 | 0 | 12 | Refresh, New project, Delete project |
-| cust1 | `/dashboard/api-keys` | 3 | 1 | 12 | Refresh, Create key, Revoke · proj-select |
-| cust1 | `/dashboard/jobs` | 1 | 0 | 18 | Refresh |
-| cust1 | `/dashboard/jobs/new` | 1 | 11 | 12 | Submit job · workload_type, isolation_tier, model, prompt, max_tokens, machine_id, gpu_count, |
-| cust1 | `/dashboard/jobs/41185384-8eb9-4948-b70f-1c78cd` | 2 | 0 | 12 | Refresh, Download |
-| cust1 | `/dashboard/reservations` | 6 | 0 | 12 | Refresh, Release |
-| cust1 | `/dashboard/billing` | 2 | 0 | 12 | Buy credits, Refresh |
-| cust1 | `/dashboard/invoices` | 1 | 0 | 18 | Refresh |
-| cust1 | `/dashboard/invoices/c85daf68-56a9-4545-8e72-8c` | 1 | 0 | 13 | Download |
-| cust1 | `/dashboard/usage` | 1 | 0 | 15 | Refresh |
-| cust1 | `/dashboard/disputes` | 1 | 0 | 14 | Refresh |
-| cust1 | `/dashboard/settings` | 4 | 5 | 12 | Save changes, Change password, Log out, Delete account · s-email, s-name, s-cur-pw, s-new-pw, s-new-pw2 |
+| cust1 | `/dashboard` | 0 | 0 | 15 | — |
+| cust1 | `/dashboard/projects` | 4 | 0 | 13 | Refresh, New project, Delete project |
+| cust1 | `/dashboard/api-keys` | 3 | 1 | 13 | Refresh, Create key, Revoke · proj-select |
+| cust1 | `/dashboard/jobs` | 1 | 0 | 19 | Refresh |
+| cust1 | `/dashboard/jobs/new` | 1 | 11 | 13 | Submit job · workload_type, isolation_tier, model, prompt, max_tokens, machine_id, gpu_count, |
+| cust1 | `/dashboard/jobs/a82343b1-13c3-45ed-a84e-26988d` | 2 | 0 | 13 | Refresh, Download |
+| cust1 | `/dashboard/reservations` | 6 | 0 | 13 | Refresh, Release |
+| cust1 | `/dashboard/billing` | 2 | 0 | 13 | Buy credits, Refresh |
+| cust1 | `/dashboard/wallet` | 2 | 0 | 13 | Refresh, Connect and link wallet |
+| cust1 | `/dashboard/invoices` | 1 | 0 | 19 | Refresh |
+| cust1 | `/dashboard/invoices/19ffe7e0-b6ed-4d2e-a558-27` | 1 | 0 | 14 | Download |
+| cust1 | `/dashboard/usage` | 1 | 0 | 16 | Refresh |
+| cust1 | `/dashboard/disputes` | 1 | 0 | 15 | Refresh |
+| cust1 | `/dashboard/settings` | 4 | 5 | 13 | Save changes, Change password, Log out, Delete account · s-email, s-name, s-cur-pw, s-new-pw, s-new-pw2 |
 | cust1 | `/marketplace` | 5 | 6 | 13 | Refresh, Reset filters, Get quote · f-model, f-vram, f-price, f-region, f-workload, f-verif |
 | cust1 | `/marketplace/gpus` | 5 | 6 | 13 | Refresh, Reset filters, Get quote · f-model, f-vram, f-price, f-region, f-workload, f-verif |
-| prov1 | `/provider/onboarding` | 7 | 1 | 7 | Generate enrollment token, Refresh, Revoke, Copy to clipboard · token-label |
-| prov1 | `/provider/dashboard` | 1 | 0 | 7 | Refresh |
-| prov1 | `/provider/hardware` | 4 | 0 | 7 | Refresh, Machine actions |
-| prov1 | `/provider/earnings` | 1 | 0 | 7 | Refresh |
-| prov1 | `/provider/payouts` | 2 | 0 | 7 | Refresh, Request payout |
+| prov1 | `/provider/onboarding` | 7 | 1 | 8 | Generate enrollment token, Refresh, Revoke, Copy to clipboard · token-label |
+| prov1 | `/provider/dashboard` | 1 | 0 | 8 | Refresh |
+| prov1 | `/provider/hardware` | 4 | 0 | 8 | Refresh, Machine actions |
+| prov1 | `/provider/earnings` | 1 | 0 | 8 | Refresh |
+| prov1 | `/provider/payouts` | 2 | 0 | 8 | Refresh, Request payout |
 | admin | `/admin/overview` | 1 | 0 | 22 | Refresh |
-| admin | `/admin/users` | 8 | 0 | 14 | Refresh, Reinstate, Suspend |
+| admin | `/admin/users` | 9 | 0 | 14 | Refresh, Reinstate, Suspend |
 | admin | `/admin/providers` | 1 | 0 | 14 | Refresh |
 | admin | `/admin/jobs` | 1 | 0 | 22 | Refresh |
 | admin | `/admin/billing` | 4 | 8 | 14 | Refresh, Post refund, Authorize payout, Resolve dispute · refund-job, refund-invoice, refund-amount, refund-reason, authorize-payout, reso |
@@ -56,7 +57,7 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | public | `/register` | 1 | 4 | 2 | Create account · intent-customer, intent-host, email, password |
 | public | `/forgot-password` | 1 | 1 | 2 | Send reset link · email |
 
-Totals across 45 pages: 77 buttons, 49 form fields, 586 link slots.
+Totals across 46 pages: 80 buttons, 49 form fields, 617 link slots.
 
 ## 2. Test results by area
 
@@ -68,7 +69,8 @@ Totals across 45 pages: 77 buttons, 49 form fields, 586 link slots.
 | Provider: onboarding, dashboard, hardware, earnings, payouts | 60 | 60 | 0 |
 | Admin: every admin page | 71 | 71 | 0 |
 | Public pages and authentication | 73 | 73 | 0 |
-| Mobile layout (390px) on every page | 43 | 43 | 0 |
+| Mobile layout (390px) on every page | 44 | 44 | 0 |
+| Wallet: link, balance, refusal and ownership checks against a real local chain | 20 | 20 | 0 |
 
 ### Failing checks
 
@@ -453,9 +455,10 @@ None.
 - [x] cust1 /dashboard/api-keys: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs/new: no horizontal page scroll at 390px
-- [x] cust1 /dashboard/jobs/41185384-8eb9-4948-b70f-…: no horizontal page scroll at 390px
+- [x] cust1 /dashboard/jobs/a82343b1-13c3-45ed-a84e-…: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/reservations: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/billing: no horizontal page scroll at 390px
+- [x] cust1 /dashboard/wallet: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/invoices: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/usage: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/disputes: no horizontal page scroll at 390px
@@ -478,3 +481,26 @@ None.
 - [x] admin /admin/vendors: no horizontal page scroll at 390px
 - [x] admin /admin/audit-logs: no horizontal page scroll at 390px
 - [x] admin /admin/configuration: no horizontal page scroll at 390px
+
+**Wallet: link, balance, refusal and ownership checks against a real local chain**
+
+- [x] wallet page: shows simulated credits and the no-monetary-value notice before linking
+- [x] wallet page: with no browser wallet installed it explains what to do
+- [x] link: connects, switches network, signs and shows the linked address
+- [x] link: nothing was sent on-chain and the wallet needed no funds
+- [x] balance: a wallet that holds no tokens shows 0 COMPUTE
+- [x] balance: tokens received on-chain appear after Refresh, matching the chain exactly
+- [x] balance: a second transfer is reflected (no stale cache)
+- [x] link: persists after a reload and shows the token contract
+- [x] credits and tokens stay separate: linking changed no ledger balance
+- [x] sidebar: Wallet is reachable from the customer navigation
+- [x] unlink: removes the wallet and hides the balance
+- [x] unlink: the same wallet can be linked again
+- [x] refusal: declining the connect prompt says so and links nothing
+- [x] refusal: declining the signature says so and links nothing
+- [x] refusal: a wallet that will not switch to the right network gives a clear error
+- [x] ownership: an address already linked to another account is refused in plain English
+- [x] ownership: an account cannot link a second wallet on the same network
+- [x] verification: an unverified account is told to verify its email first
+- [x] provider navigation: hosts also reach the Wallet page
+- [x] security: the API refuses a signature made by a different key through the same UI path

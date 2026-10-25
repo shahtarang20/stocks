@@ -656,3 +656,45 @@ def test_invalidate_vouchers_advances_the_nonce_the_signer_must_use(chain_settin
         f"the contract advanced its nonce {before} -> {after}; a signer pinned "
         "to a constant would now mint vouchers that revert on-chain"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wallet page: the ERC-20 balance read, checked against the REAL deployed token
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+def test_token_balance_matches_an_independent_erc20_call(chain_settings):
+    import asyncio
+
+    sc = _scenario(chain_settings, "locked_match")
+    client = _client(chain_settings)
+    token = chain_settings["token_address"]
+    # 0x70a08231 is the standard ERC-20 balanceOf(address) selector, written out here
+    # on purpose so this test does not share the production code's own encoding.
+    for who in (sc["customer_address"], chain_settings["settlement_address"]):
+        raw = _rpc(chain_settings, "eth_call", [{"to": token, "data": "0x70a08231" + who.lower()[2:].rjust(64, "0")}, "latest"])
+        got = asyncio.get_event_loop().run_until_complete(client.token_balance(token, who))
+        assert got == int(raw, 16), f"{who}: client {got} != independent {int(raw, 16)}"
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+def test_token_balance_of_a_fresh_address_is_zero_and_escrowed_tokens_are_visible(chain_settings):
+    import asyncio
+
+    client = _client(chain_settings)
+    token = chain_settings["token_address"]
+    nobody = "0x" + "ab" * 20
+    assert asyncio.get_event_loop().run_until_complete(client.token_balance(token, nobody)) == 0
+    # The settlement contract holds the locked budgets, so its balance is positive.
+    held = asyncio.get_event_loop().run_until_complete(client.token_balance(token, chain_settings["settlement_address"]))
+    assert held > 0
+
+
+@pytest.mark.skipif(not _opted_in(), reason=_SKIP_REASON)
+def test_token_balance_where_no_token_is_deployed_is_an_explicit_error(chain_settings):
+    import asyncio
+
+    from app.services.chain_reconciler import ChainClientError
+
+    client = _client(chain_settings)
+    with pytest.raises(ChainClientError, match="token_not_deployed"):
+        asyncio.get_event_loop().run_until_complete(client.token_balance("0x" + "cd" * 20, "0x" + "ab" * 20))

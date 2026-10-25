@@ -45,7 +45,10 @@ async function main() {
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
   const net = await provider.getNetwork();
-  const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  // NonceManager: two deployments back to back must not reuse a cached nonce. Without it
+  // the second deploy failed with "nonce has already been used" on fast-mining chains,
+  // and slow public testnets are exposed to the same race.
+  const wallet = new ethers.NonceManager(new ethers.Wallet(PRIVATE_KEY, provider));
   const deployer = await wallet.getAddress();
 
   // Guard: don't accidentally run against Ethereum/BSC/Polygon mainnet.

@@ -1032,12 +1032,51 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return payload as T;
 }
 
+export interface WalletView {
+  credits: { currency: string; available: string; reserved: string; balance: string; simulated: boolean };
+  chain: {
+    chain_id: number;
+    chain_name: string | null;
+    token_address: string;
+    symbol: string;
+    decimals: number;
+    explorer_base: string | null;
+    configured: boolean;
+  };
+  wallet: { address: string; chain_id: number; linked_at: string } | null;
+  token_balance: string | null;
+  token_balance_error: string | null;
+}
+
 export const api = {
   register(credentials: AuthCredentials): Promise<RegisteredUser> {
     return request<RegisteredUser>("/auth/register", {
       method: "POST",
       body: credentials,
     });
+  },
+
+  /** GET /v1/wallet — credits, the linked wallet and its on-chain COMPUTE balance. */
+  getWallet(accessToken: string): Promise<WalletView> {
+    return request<WalletView>("/v1/wallet", { method: "GET", token: accessToken });
+  },
+
+  /** POST /v1/wallet/link-challenge — the message the wallet must sign. */
+  walletLinkChallenge(accessToken: string, address: string): Promise<{ message: string; chain_id: number }> {
+    return request("/v1/wallet/link-challenge", { method: "POST", token: accessToken, body: { address } });
+  },
+
+  /** POST /v1/wallet/link — prove control of the address with the signature. */
+  walletLink(
+    accessToken: string,
+    input: { address: string; chain_id: number; message: string; signature: string },
+  ): Promise<{ address: string; chain_id: number }> {
+    return request("/v1/wallet/link", { method: "POST", token: accessToken, body: input });
+  },
+
+  /** DELETE /v1/wallet/link */
+  walletUnlink(accessToken: string): Promise<void> {
+    return request<void>("/v1/wallet/link", { method: "DELETE", token: accessToken });
   },
 
   /** PATCH /auth/me — update the display name. */

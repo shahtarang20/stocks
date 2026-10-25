@@ -39,6 +39,7 @@ from app.api.routers import (
     reputation,
     reservations,
     settlement,
+    wallet,
     spend_limits,
     sso,
     telemetry,
@@ -178,6 +179,7 @@ def create_app() -> FastAPI:
     application.include_router(inference.router)
     application.include_router(telemetry.router)
     application.include_router(settlement.router)
+    application.include_router(wallet.router)
     application.include_router(providers.billing_router)
     application.include_router(admin.money_router)
 

@@ -13,6 +13,7 @@ import {
   Settings,
   Server,
   Scale,
+  Wallet,
 } from "lucide-react";
 import { AuthGuard } from "@/components/console/auth-guard";
 import { ConsoleShell, type NavSection } from "@/components/console/console-shell";
@@ -37,6 +38,7 @@ const BASE_SECTIONS: NavSection[] = [
     title: "Account",
     items: [
       { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
+      { href: "/dashboard/wallet", label: "Wallet", icon: Wallet },
       { href: "/dashboard/invoices", label: "Invoices", icon: FileText },
       { href: "/dashboard/disputes", label: "Disputes", icon: ShieldAlert },
       { href: "/dashboard/api-keys", label: "API keys", icon: KeyRound },

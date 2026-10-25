@@ -262,6 +262,23 @@ class JsonRpcChainClient:
         self._closure_cache[contract_address] = out
         return out
 
+    #: ``balanceOf(address) -> uint256`` on the ERC-20 token.
+    BALANCE_OF_SELECTOR = _selector("balanceOf(address)")
+
+    async def token_balance(self, token_address: str, owner_address: str) -> int:
+        """The owner's ERC-20 balance in the token's smallest unit (18 decimals for COMPUTE)."""
+        owner = owner_address.lower().removeprefix("0x")
+        if len(owner) != 40:
+            raise ChainClientError("invalid_owner_address")
+        result = await self._rpc(
+            "eth_call",
+            [{"to": token_address, "data": self.BALANCE_OF_SELECTOR + owner.rjust(64, "0")}, "latest"],
+        )
+        if not isinstance(result, str) or not result.startswith("0x") or len(result) < 3:
+            # An address with no contract code returns "0x": the token is not deployed there.
+            raise ChainClientError("token_not_deployed_at_address")
+        return int(result, 16)
+
     async def _latest_block(self) -> int:
         result = await self._rpc("eth_blockNumber", [])
         try:

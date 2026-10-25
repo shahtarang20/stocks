@@ -97,6 +97,17 @@ hostnames, NUL characters, projects and region.
 
 Also done after a live-site test: **sign-up now asks "Use GPUs" or "Host my GPU"** (hosts are registered as providers and sent to onboarding), and **provider pages show a friendly "You are not a host yet / Become a host" prompt** instead of a red error for accounts that have not become hosts. An account can be both.
 
+### Round 4: wallet and token balance (phase 1 of the token work)
+
+| What | Outcome |
+|---|---|
+| Wallet linking | `POST /v1/wallet/link`: a user proves control of an address by signing a server-issued message (EIP-191). The message names the account, address, chain and time and carries an HMAC tag, so a signature made for one account, one address, an edited message, an expired message or a different key is refused. One address belongs to one account per chain; one account has one wallet per chain. Migration 0016. |
+| Token balance | `GET /v1/wallet` returns credits and the linked wallet's on-chain COMPUTE balance, read by a JSON-RPC `balanceOf` call. Verified against the real deployed token (matches an independently encoded call; fresh address 0; no contract is an explicit error). A chain outage shows "unavailable" and never breaks the page. |
+| Wallet page | `/dashboard/wallet` (also in the host navigation): credits (simulated) and the on-chain wallet side by side, connect and link with a browser wallet (no wallet library bundled), unlink, explorer link, and an explicit "test network, no monetary value" notice. |
+| Found while doing it | `scripts/deploy-testnet.mjs` failed on the second contract with "nonce has already been used" (fixed with a NonceManager; public testnets are exposed to the same race). A testnet key in `contracts/.env` silently broke local-chain deployments, so testnet settings now live in a separate `contracts/testnet.env` loaded only on request (runbook updated). |
+| Not built, on purpose | Moving value between credits and tokens. [ADR-0004](docs/architecture/ADR-0004-token-and-ledger.md) lays out the options, the invariant a bridge must keep, and the five owner decisions needed first (rate, direction, limits, gas, legal). |
+| Public testnet | BNB testnet RPC is reachable and a throwaway deployer wallet exists, but **it needs test BNB from the faucet before the real deploy can run**; `scripts/testnet-balance.mjs` reports when it is ready. |
+
 Still open (not bugs, decide before launch): the admin audit log shows actors as truncated ids;
 the admin Providers page lists only machines that are online; the ledger shows only recent
 entries without pagination controls; the admin Configuration and Security pages are static
@@ -117,8 +128,8 @@ The two concurrency tests need real Postgres (SQLite cannot show this race). I c
 
 ## Test results
 
-- API: 483 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. With the opt-in live Postgres and S3 suites switched on against local services: 9 of 9 pass.
-- Browser QA (`tests/qa/`): 381 of 381 control-level checks pass on the production build from a fresh seed (customer 134, provider 60, admin 71, public 73, mobile 43). Per-control results are in `docs/QA_CHECKLIST.md`; `tests/qa/stack.sh` rebuilds the whole local stack and reruns everything.
+- API: 492 passed, 37 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. The opt-in live suites pass when switched on: Postgres/S3 9 of 9, local-chain 15 of 15 (including the real ERC-20 balance read).
+- Browser QA (`tests/qa/`): 402 of 402 control-level checks pass on the production build from a fresh seed (customer 134, provider 60, admin 71, public 73, mobile 44, wallet 20). Per-control results are in `docs/QA_CHECKLIST.md`; `tests/qa/stack.sh` rebuilds the whole local stack (optionally with a real local chain) and reruns everything.
 - Fuzzing: about 15,200 hostile requests (POST/PUT/PATCH bodies and GET path/query parameters) across every endpoint, including the new profile, password and deletion endpoints; zero 5xx apart from the intentional 503 for an unconfigured chain.
 - Provider agent: 66 passed, 1 skipped (needs a GPU).
 - Web: `tsc` clean, `next lint` clean, production build passes.

@@ -12,6 +12,7 @@ fuzzers that hit every API endpoint with hostile input.
 | `a1.mjs` | Admin: every admin page, suspend/reinstate, refunds, payout authorisation, dispute resolution |
 | `pub.mjs` | Public pages, link integrity, auth forms, rate limiting, open-redirect guard |
 | `mobile.mjs` | No horizontal scroll at 390px on every page |
+| `w1.mjs` | Wallet page end to end: real local chain + real token + a mock browser wallet signing with a real key (needs `./stack.sh chain` before `up`) |
 | `fuzz.py` / `fuzz_get.py` | ~15,000 hostile requests across every endpoint; any 5xx is a bug |
 | `gen_checklist.py` | Builds `docs/QA_CHECKLIST.md` from the crawl and the results |
 
@@ -28,6 +29,7 @@ a Chrome, `curl`, `make`/`gcc` (Redis is built from source), the API venv
 cd tests/qa
 ./stack.sh setup            # once: builds Redis, installs moto/aiosmtpd/playwright-core into $QA_HOME
 (cd ../../apps/web && npm run build)      # the suites run against the production build
+./stack.sh chain            # optional: local chain with the real contracts, so the API shows real token balances (needed for w1)
 ./stack.sh up fresh         # fresh database + migrations, then starts everything
 ./stack.sh seed             # users in every role, machines, jobs in every status, disputes, payouts
 ./stack.sh suites           # warms every route, then runs every suite (output in $QA_DIR/<suite>.out)

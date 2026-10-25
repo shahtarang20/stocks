@@ -156,6 +156,12 @@ class Settings(BaseSettings):
     SETTLEMENT_CHAIN_ID: int = 31337
     SETTLEMENT_CONTRACT_ADDRESS: str = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
     COMPUTE_TOKEN_ADDRESS: str = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+    # Wallet linking / token balance view. The chain the app tells users to connect to,
+    # and an optional block-explorer base URL for links (e.g. https://testnet.bscscan.com).
+    WALLET_CHAIN_ID: int = 0  # 0 -> use SETTLEMENT_CHAIN_ID
+    WALLET_CHAIN_NAME: str = ""
+    WALLET_EXPLORER_BASE: str = ""
+    WALLET_LINK_MESSAGE_TTL_SECONDS: int = 600
     # Dev/test platform signer private key (matches account #3 on standard dev nodes).
     # In a non-dev ENVIRONMENT this default is rejected at startup when settlement
     # is enabled (the private half is public).
@@ -236,6 +242,10 @@ class Settings(BaseSettings):
                 "Set strong values via environment variables."
             )
         return self
+
+    @property
+    def wallet_chain_id(self) -> int:
+        return self.WALLET_CHAIN_ID or self.SETTLEMENT_CHAIN_ID
 
     @property
     def artifact_content_types(self) -> set[str]:

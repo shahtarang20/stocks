@@ -5,6 +5,7 @@
 #
 #   ./stack.sh setup        one-off: build Redis, install moto/aiosmtpd/playwright into $QA_HOME
 #   ./stack.sh up [fresh]   start everything (fresh = recreate the database + migrate + flush Redis)
+#   ./stack.sh chain        local test chain with the real contracts deployed (run before `up`, then the API talks to it)
 #   ./stack.sh seed         seed users, machines, jobs, disputes, payouts (needs a fresh DB)
 #   ./stack.sh run <suite>  run a browser suite (c1 c2 c3 p1 a1 pub mobile crawl)
 #   ./stack.sh suites       warm routes, then run every browser suite (output in $QA_DIR/<suite>.out)
@@ -20,7 +21,25 @@ mkdir -p "$QA_HOME" "$QA_DIR"
 listening() { ss -ltn | grep -q ":$1 "; }
 kill_port() { ss -ltnp | grep ":$1 " | sed 's/.*pid=\([0-9]*\).*/\1/' | xargs -r kill; }
 
-setup() {
+set# The hardhat dev key #0 is public and only ever holds worthless local-chain coins.
+HH_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+chain() {
+  kill_port 8545; sleep 1
+  (cd "$REPO/contracts" && setsid npx hardhat node --hostname 127.0.0.1 --port 8545 >"$QA_HOME/hardhat.log" 2>&1 </dev/null &)
+  for i in $(seq 1 30); do sleep 1; curl -s -m 2 -X POST localhost:8545 -H 'content-type: application/json' -d '{"jsonrpc":"2.0","method":"eth_chainId","id":1}' | grep -q result && break; done
+  (cd "$REPO/contracts" && npx hardhat compile -q >/dev/null 2>&1; RPC_URL=http://127.0.0.1:8545 PRIVATE_KEY=$HH_KEY node scripts/deploy-testnet.mjs >"$QA_HOME/chain-deploy.log" 2>&1)
+  mv "$REPO/contracts/deployments.31337.json" "$QA_DIR/chain.json"
+  python3 - "$QA_DIR" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1] + "/chain.json"))
+open(sys.argv[1] + "/chain.env", "w").write(
+    "export CHAIN_RPC_URL=http://127.0.0.1:8545 COMPUTE_TOKEN_ADDRESS=%s SETTLEMENT_CONTRACT_ADDRESS=%s "
+    "SETTLEMENT_CHAIN_ID=%s WALLET_CHAIN_NAME='Local test chain'\n" % (d["ComputeCoinToken"], d["ComputeSettlement"], d["chainId"]))
+PY
+  cat "$QA_DIR/chain.json"
+}
+
+up() {
   mkdir -p "$INFRA"
   if [ ! -x "$INFRA/redis-src/src/redis-server" ]; then
     mkdir -p "$INFRA/redis-src"
@@ -57,6 +76,7 @@ up() {
        REDIS_URL="redis://127.0.0.1:$REDISPORT/0" RATE_LIMIT_REQUIRE_REDIS=true LEASE_TTL_SECONDS=3600 ONLINE_WINDOW_SECONDS=86400 \
        OBJECT_STORAGE_ENDPOINT="http://127.0.0.1:$S3PORT" OBJECT_STORAGE_BUCKET=computecoin-artifacts OBJECT_STORAGE_ACCESS_KEY=test OBJECT_STORAGE_SECRET_KEY=test \
        EMAIL_PROVIDER=smtp SMTP_HOST=127.0.0.1 SMTP_PORT=$SMTPPORT SMTP_TLS=false
+     [ -f "$QA_DIR/chain.env" ] && . "$QA_DIR/chain.env"
      setsid .venv/bin/python -m uvicorn app.main:app --port $APIPORT >"$QA_HOME/api.log" 2>&1 </dev/null &)
   fi
   if ! listening $WEBPORT; then
@@ -69,11 +89,11 @@ up() {
 
 seed() { (cd "$REPO" && QA_API="http://localhost:$APIPORT" QA_OUT="$QA_DIR/seed.json" provider-agent/.venv/bin/python "$HERE/seed.py"); }
 run()  { (cd "$HERE" && QA_WEB="http://localhost:$WEBPORT" QA_API="http://localhost:$APIPORT" node "$1.mjs"); }
-suites() { for s in crawl c1 c2 c3 p1 a1 pub mobile; do run $s > "$QA_DIR/$s.out" 2>&1; done; echo done > "$QA_DIR/suites.done"; }
+suites() { for s in crawl c1 c2 c3 p1 a1 pub mobile $([ -f "$QA_DIR/chain.json" ] && echo w1); do run $s > "$QA_DIR/$s.out" 2>&1; done; echo done > "$QA_DIR/suites.done"; }
 down() {
-  for p in $WEBPORT $APIPORT $REDISPORT $S3PORT $SMTPPORT; do kill_port $p; done
+  for p in $WEBPORT $APIPORT $REDISPORT $S3PORT $SMTPPORT 8545; do kill_port $p; done
   "$PGBIN/pg_ctl" -D "$QA_HOME/pg" stop -m fast 2>&1 | tail -1
 }
 
 cmd="${1:-}"; shift || true
-case "$cmd" in setup) setup;; up) up "$@";; seed) seed;; suites) rm -f "$QA_DIR/suites.done"; suites;; run) run "$@";; down) down;; *) sed -n 2,11p "$0";; esac
+case "$cmd" in setup) setup;; chain) chain;; up) up "$@";; seed) seed;; suites) rm -f "$QA_DIR/suites.done"; suites;; run) run "$@";; down) down;; *) sed -n 2,11p "$0";; esac

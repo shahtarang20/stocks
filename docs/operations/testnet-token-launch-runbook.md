@@ -177,3 +177,32 @@ npm run deploy:token -- --network sepolia
 # 3. Create liquidity pool
 npm run create:pool -- --network sepolia
 ```
+
+---
+
+## Quick path used by the project's QA (BNB testnet, two contracts in one command)
+
+Keep testnet settings in a **separate** file, `contracts/testnet.env` (git-ignored). Do not put a
+testnet key in `contracts/.env`: the local-chain scripts and tests read `.env` too, and a funded-nothing
+testnet key there makes local deployments fail.
+
+```bash
+cd contracts
+# testnet.env holds RPC_URL, PRIVATE_KEY (testnet only), PLATFORM_SIGNER_ADDRESS, EXPLORER_BASE
+DOTENV_CONFIG_PATH=testnet.env node scripts/testnet-balance.mjs      # shows the address to fund and whether it is READY
+# fund that address from https://www.bnbchain.org/en/testnet-faucet, then:
+npx hardhat compile
+DOTENV_CONFIG_PATH=testnet.env node scripts/deploy-testnet.mjs        # deploys ComputeCoinToken + ComputeSettlement
+```
+
+The script writes `contracts/deployments.97.json` with both addresses. To make the website show real balances,
+set these on the API (and keep `WALLET_*` in sync with the chain):
+
+```
+CHAIN_RPC_URL=<same RPC>            COMPUTE_TOKEN_ADDRESS=<token>
+SETTLEMENT_CONTRACT_ADDRESS=<settlement>   SETTLEMENT_CHAIN_ID=97
+WALLET_CHAIN_NAME="BNB Smart Chain Testnet"  WALLET_EXPLORER_BASE=https://testnet.bscscan.com
+PLATFORM_SIGNER_PRIVATE_KEY=<the signer key matching PLATFORM_SIGNER_ADDRESS>
+```
+
+Testnet keys are throwaway. Never reuse them on mainnet.

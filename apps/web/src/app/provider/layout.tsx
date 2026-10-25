@@ -5,6 +5,7 @@ import {
   Rocket,
   Cpu,
   Wallet,
+  WalletCards,
   Banknote,
   ArrowLeft,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const SECTIONS: NavSection[] = [
       { href: "/provider/hardware", label: "Hardware", icon: Cpu },
       { href: "/provider/earnings", label: "Earnings", icon: Wallet },
       { href: "/provider/payouts", label: "Payouts", icon: Banknote },
+      { href: "/dashboard/wallet", label: "Wallet", icon: WalletCards },
     ],
   },
   {

@@ -96,7 +96,7 @@ function StepHeader({
 }
 
 export default function ProviderOnboardingPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, refreshUser } = useAuth();
   const queryClient = useQueryClient();
   const token = accessToken as string;
 
@@ -120,6 +120,7 @@ export default function ProviderOnboardingPage() {
     mutationFn: () => api.providerRegister(token),
     onSuccess: () => {
       setRegistered(true);
+      void refreshUser(); // so the provider pages stop showing the "not a host yet" prompt
       queryClient.invalidateQueries({
         queryKey: ["provider", "enrollment-tokens"],
       });

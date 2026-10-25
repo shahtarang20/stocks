@@ -95,6 +95,8 @@ hostnames, NUL characters, projects and region.
 | Customer dashboard and provider dashboard charts, and the public `/marketplace`, showed demo data | **Replaced with real data.** Customer dashboard: credits, job count, spend and compute hours from the API, an empty state for new users; provider dashboard: recent earnings from the ledger; `/marketplace` forwards to the live listing; the status page is now a live API/database/cache health check. The fake "utilization" tile was removed because nothing measures it. |
 | A rejected job submission still appeared as a failed job in the customer's list | **Fixed.** Kept for the audit trail and visible to admins, hidden from the customer's own list. |
 
+Also done after a live-site test: **sign-up now asks "Use GPUs" or "Host my GPU"** (hosts are registered as providers and sent to onboarding), and **provider pages show a friendly "You are not a host yet / Become a host" prompt** instead of a red error for accounts that have not become hosts. An account can be both.
+
 Still open (not bugs, decide before launch): the admin audit log shows actors as truncated ids;
 the admin Providers page lists only machines that are online; the ledger shows only recent
 entries without pagination controls; the admin Configuration and Security pages are static
@@ -116,7 +118,7 @@ The two concurrency tests need real Postgres (SQLite cannot show this race). I c
 ## Test results
 
 - API: 483 passed, 34 skipped (opt-in: chain, GPU, live Postgres, live S3), 0 failed. With the opt-in live Postgres and S3 suites switched on against local services: 9 of 9 pass.
-- Browser QA (`tests/qa/`): 372 of 372 control-level checks pass on the production build from a fresh seed (customer 134, provider 55, admin 71, public 69, mobile 43). Per-control results are in `docs/QA_CHECKLIST.md`; `tests/qa/stack.sh` rebuilds the whole local stack and reruns everything.
+- Browser QA (`tests/qa/`): 381 of 381 control-level checks pass on the production build from a fresh seed (customer 134, provider 60, admin 71, public 73, mobile 43). Per-control results are in `docs/QA_CHECKLIST.md`; `tests/qa/stack.sh` rebuilds the whole local stack and reruns everything.
 - Fuzzing: about 15,200 hostile requests (POST/PUT/PATCH bodies and GET path/query parameters) across every endpoint, including the new profile, password and deletion endpoints; zero 5xx apart from the intentional 503 for an unconfigured chain.
 - Provider agent: 66 passed, 1 skipped (needs a GPU).
 - Web: `tsc` clean, `next lint` clean, production build passes.

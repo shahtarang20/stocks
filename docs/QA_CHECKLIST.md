@@ -2,7 +2,7 @@
 
 Generated 2026-10-25 from a live crawl of the running web app plus the browser test suites in `tests/qa/`.
 
-**372 of 372 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
+**381 of 381 control-level checks pass.** Each check drives a real browser (or the API directly for permission and race checks) against a stack with seeded customers, providers, machines, jobs in every status, disputes, payouts and refunds.
 
 ## 1. Control inventory (what exists on each page)
 
@@ -15,11 +15,11 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | cust1 | `/dashboard/api-keys` | 3 | 1 | 12 | Refresh, Create key, Revoke · proj-select |
 | cust1 | `/dashboard/jobs` | 1 | 0 | 18 | Refresh |
 | cust1 | `/dashboard/jobs/new` | 1 | 11 | 12 | Submit job · workload_type, isolation_tier, model, prompt, max_tokens, machine_id, gpu_count, |
-| cust1 | `/dashboard/jobs/83a1a044-a1c8-4a3e-82b7-fbe5e0` | 2 | 0 | 12 | Refresh, Download |
+| cust1 | `/dashboard/jobs/41185384-8eb9-4948-b70f-1c78cd` | 2 | 0 | 12 | Refresh, Download |
 | cust1 | `/dashboard/reservations` | 6 | 0 | 12 | Refresh, Release |
 | cust1 | `/dashboard/billing` | 2 | 0 | 12 | Buy credits, Refresh |
 | cust1 | `/dashboard/invoices` | 1 | 0 | 18 | Refresh |
-| cust1 | `/dashboard/invoices/148029c0-950e-4467-b6e8-4a` | 1 | 0 | 13 | Download |
+| cust1 | `/dashboard/invoices/c85daf68-56a9-4545-8e72-8c` | 1 | 0 | 13 | Download |
 | cust1 | `/dashboard/usage` | 1 | 0 | 15 | Refresh |
 | cust1 | `/dashboard/disputes` | 1 | 0 | 14 | Refresh |
 | cust1 | `/dashboard/settings` | 4 | 5 | 12 | Save changes, Change password, Log out, Delete account · s-email, s-name, s-cur-pw, s-new-pw, s-new-pw2 |
@@ -53,10 +53,10 @@ Counts are visible interactive elements found by crawling the live DOM as the ri
 | public | `/legal/terms` | 0 | 0 | 15 | — |
 | public | `/legal/privacy` | 0 | 0 | 15 | — |
 | public | `/login` | 1 | 2 | 3 | Log in · email, password |
-| public | `/register` | 1 | 2 | 2 | Create account · email, password |
+| public | `/register` | 1 | 4 | 2 | Create account · intent-customer, intent-host, email, password |
 | public | `/forgot-password` | 1 | 1 | 2 | Send reset link · email |
 
-Totals across 45 pages: 77 buttons, 47 form fields, 586 link slots.
+Totals across 45 pages: 77 buttons, 49 form fields, 586 link slots.
 
 ## 2. Test results by area
 
@@ -65,9 +65,9 @@ Totals across 45 pages: 77 buttons, 47 form fields, 586 link slots.
 | Customer: dashboard, navigation, projects, API keys | 37 | 37 | 0 |
 | Customer: job form, job list, job detail | 38 | 38 | 0 |
 | Customer: marketplace, quotes, reservations, billing, invoices, usage, disputes, settings | 59 | 59 | 0 |
-| Provider: onboarding, dashboard, hardware, earnings, payouts | 55 | 55 | 0 |
+| Provider: onboarding, dashboard, hardware, earnings, payouts | 60 | 60 | 0 |
 | Admin: every admin page | 71 | 71 | 0 |
-| Public pages and authentication | 69 | 69 | 0 |
+| Public pages and authentication | 73 | 73 | 0 |
 | Mobile layout (390px) on every page | 43 | 43 | 0 |
 
 ### Failing checks
@@ -222,6 +222,7 @@ None.
 
 **Provider: onboarding, dashboard, hardware, earnings, payouts**
 
+- [x] onboarding: states clearly that only NVIDIA GPUs are supported
 - [x] onboarding: registered provider sees step 1 complete and can mint tokens
 - [x] onboarding: existing tokens are listed with status
 - [x] onboarding: install commands show the server URL
@@ -274,6 +275,10 @@ None.
 - [x] payouts: balance drops by the requested amount (no double-spend)
 - [x] payouts: Refresh works
 - [x] payouts: another provider cannot see my payouts
+- [x] not a host yet: provider pages show a friendly prompt, not a red error
+- [x] not a host yet: 'Become a host' makes the account a provider and opens onboarding
+- [x] not a host yet: the onboarding page itself is always reachable
+- [x] not a host yet: becoming a host in onboarding also unlocks the other provider pages
 - [x] gates: a plain customer is refused provider data by the API
 - [x] gates: a provider is refused admin data by the API
 - [x] gates: provider console pages never show another provider's data
@@ -413,6 +418,10 @@ None.
 - [x] login: 'Sign up' and 'Forgot password?' links work
 - [x] register: short password is refused client-side
 - [x] register: invalid email refused
+- [x] register: asks whether you want to use or host GPUs, defaulting to using
+- [x] register: the choice is not shown on the login form
+- [x] register as host: becomes a provider and lands on onboarding with step 1 already done
+- [x] register as customer: lands on the dashboard and is not a provider
 - [x] register: already-registered email gets a generic conflict (no enumeration)
 - [x] register: valid details create an account and land on the dashboard
 - [x] register: email is stored lower-cased and trimmed (no duplicate by case)
@@ -444,7 +453,7 @@ None.
 - [x] cust1 /dashboard/api-keys: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/jobs/new: no horizontal page scroll at 390px
-- [x] cust1 /dashboard/jobs/83a1a044-a1c8-4a3e-82b7-…: no horizontal page scroll at 390px
+- [x] cust1 /dashboard/jobs/41185384-8eb9-4948-b70f-…: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/reservations: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/billing: no horizontal page scroll at 390px
 - [x] cust1 /dashboard/invoices: no horizontal page scroll at 390px

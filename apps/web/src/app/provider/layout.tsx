@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { AuthGuard } from "@/components/console/auth-guard";
 import { ConsoleShell, type NavSection } from "@/components/console/console-shell";
+import { ProviderGate } from "@/components/provider/provider-gate";
 
 const SECTIONS: NavSection[] = [
   {
@@ -37,7 +38,9 @@ export default function ProviderLayout({
 }) {
   return (
     <AuthGuard>
-      <ConsoleShell sections={SECTIONS}>{children}</ConsoleShell>
+      <ConsoleShell sections={SECTIONS}>
+        <ProviderGate>{children}</ProviderGate>
+      </ConsoleShell>
     </AuthGuard>
   );
 }

@@ -19,7 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth-context";
-import { ApiError } from "@/lib/api";
+import { api, ApiError, getStoredAccessToken } from "@/lib/api";
 
 const schema = z.object({
   email: z.string().min(1, "Email is required").email("Enter a valid email"),
@@ -43,7 +43,10 @@ function safeNextPath(next: string | null): string {
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const router = useRouter();
-  const { login, register: registerUser } = useAuth();
+  const { login, register: registerUser, refreshUser } = useAuth();
+  // Who is signing up. Everyone gets a customer account; choosing "host" also makes
+  // them a provider straight away and sends them to onboarding.
+  const [intent, setIntent] = useState<"customer" | "host">("customer");
   const [serverError, setServerError] = useState<string | null>(null);
   const [changedNotice, setChangedNotice] = useState(false);
 
@@ -88,6 +91,16 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         await login(email, values.password);
       } else {
         await registerUser(email, values.password);
+        if (intent === "host") {
+          try {
+            await api.providerRegister(getStoredAccessToken() || "cookie-session");
+            await refreshUser();
+          } catch {
+            // Not fatal: the onboarding page offers "Become a provider" as step 1.
+          }
+          router.push("/provider/onboarding");
+          return;
+        }
       }
       router.push(safeNextPath(new URL(window.location.href).searchParams.get("next")));
     } catch (err) {
@@ -137,6 +150,41 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{serverError}</span>
             </div>
+          ) : null}
+
+          {!isLogin ? (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">I want to</legend>
+              {[
+                ["customer", "Use GPUs", "Run jobs on machines from the network."],
+                ["host", "Host my GPU", "Share my NVIDIA GPU and earn credits."],
+              ].map(([value, title, hint]) => (
+                <label
+                  key={value}
+                  htmlFor={`intent-${value}`}
+                  className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 text-sm ${
+                    intent === value ? "border-primary bg-primary/5" : "border-border"
+                  }`}
+                >
+                  <input
+                    id={`intent-${value}`}
+                    type="radio"
+                    name="intent"
+                    value={value}
+                    checked={intent === value}
+                    onChange={() => setIntent(value as "customer" | "host")}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block font-medium">{title}</span>
+                    <span className="text-xs text-muted-foreground">{hint}</span>
+                  </span>
+                </label>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                You can do both later from the same account.
+              </p>
+            </fieldset>
           ) : null}
 
           <div className="space-y-1.5">

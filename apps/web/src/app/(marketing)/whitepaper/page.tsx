@@ -87,9 +87,11 @@ export default function WhitepaperPage() {
             <ul>
               <li>
                 <strong>Autonomous Provider Daemon:</strong> The lightweight, proprietary{" "}
-                <code>computecoin-agent</code> inspects bare-metal hardware directly via NVML
-                and ROCm, registers authentic hardware capabilities, and streams cryptographically
-                signed heartbeats every 30 seconds.
+                <code>computecoin-agent</code> inspects the host&apos;s NVIDIA GPUs through NVML,
+                registers the hardware it detects (self-reported and labelled &quot;Detected&quot;, not
+                independently verified), and streams cryptographically signed heartbeats every 30
+                seconds. Only NVIDIA GPUs are supported in this release; AMD (ROCm), Intel and
+                Apple GPUs are not.
               </li>
               <li>
                 <strong>Atomic Capacity Leases:</strong> Prevents double-booking across

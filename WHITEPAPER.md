@@ -57,7 +57,7 @@ ComputeCoin operates a four-tier architecture designed for sub-second quote nego
 
 ### 3.1 The Provider Agent (`computecoin-agent`)
 The provider node daemon is a lightweight, auditable agent installed directly on bare-metal GPU hosts:
-* **Hardware Detection:** Queries system NVML, ROCm, and PCIe buses to detect real model names, physical VRAM, and thermal headroom.
+* **Hardware Detection:** Queries NVIDIA's NVML library to detect GPU model names, VRAM and temperature. **Only NVIDIA GPUs are supported in this release**; AMD (ROCm), Intel and Apple GPUs are not detected and cannot host jobs yet. Detected hardware is self-reported by the host's agent and labelled "Detected": it is not independently verified.
 * **HMAC / Ed25519 Heartbeat Protocol:** Sends periodic (30s) cryptographically signed telemetry heartbeats containing system load, GPU temperature, and active lease statuses. If a node fails to heartbeat within 90 seconds, the coordinator flags the machine offline and redistributes active reservations.
 * **Workload Isolation:** AI workloads run within hardened container boundaries with strict limits on memory, filesystem access, and host namespace isolation.
 

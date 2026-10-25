@@ -159,6 +159,21 @@ export default function ProviderOnboardingPage() {
       />
 
       <div className="space-y-6">
+        <div
+          role="note"
+          className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div>
+            <p className="font-medium">NVIDIA GPUs only</p>
+            <p className="text-muted-foreground">
+              To host real GPU jobs your machine needs an NVIDIA GPU, Docker and the NVIDIA
+              container toolkit. AMD, Intel and Apple GPUs are not detected, so a machine
+              without an NVIDIA GPU shows 0 GPUs and cannot be matched to jobs.
+            </p>
+          </div>
+        </div>
+
         {/* ---------------------------------------------------------------- */}
         {/* Step 1 — Become a provider                                        */}
         {/* ---------------------------------------------------------------- */}

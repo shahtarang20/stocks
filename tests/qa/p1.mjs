@@ -9,6 +9,7 @@ const earn=async()=>{ const t=await apiLogin("prov1@example.com"); return (await
 
 // ---------- ONBOARDING ----------
 await go("/provider/onboarding");
+await T(G,"onboarding: states clearly that only NVIDIA GPUs are supported",async()=>{ const t=await body(p); return /NVIDIA GPUs only/.test(t) && /AMD, Intel and Apple/.test(t); });
 await T(G,"onboarding: registered provider sees step 1 complete and can mint tokens",async()=>{ const t=await body(p); return await p.locator('button:has-text("Generate enrollment token")').isEnabled(); });
 await T(G,"onboarding: existing tokens are listed with status",async()=>{ return /used|active|revoked/.test(await body(p)); });
 await T(G,"onboarding: install commands show the server URL",async()=>{ const t=await body(p); return t.includes("computecoin-agent enroll") && t.includes(API); });

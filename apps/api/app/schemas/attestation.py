@@ -20,11 +20,18 @@ class AttestationChallengeResponse(BaseModel):
 
 class AttestationSubmitRequest(BaseModel):
     nonce: str = Field(min_length=16, max_length=128)
-    isolation_tier: str = Field(default="confidential", pattern="^(confidential|gvisor|microvm)$")
+    isolation_tier: str = Field(
+        default="confidential", pattern="^(confidential|gvisor|microvm|sealed|sealed_pro)$"
+    )
     timestamp: str
     pcr_measurements: dict[str, str] = Field(default_factory=dict)
     platform_quote: str = Field(min_length=16, max_length=1024)
     signature: str = Field(min_length=32, max_length=512)
+    # ADR-0005 privacy tiers: keys generated in the host's RAM (X25519 for receiving Data Key
+    # shares, Ed25519 for signing its wipe receipt) and the security locks it reports.
+    ephemeral_public_key: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+    receipt_signing_public_key: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+    security_state: dict[str, bool] | None = None
 
 
 class AttestationVerifyResponse(BaseModel):
@@ -35,6 +42,7 @@ class AttestationVerifyResponse(BaseModel):
     verified_at: dt.datetime
     attestation_id: uuid.UUID
     details: dict | None = None
+    verdict: dict | None = None
 
 
 class AttestationReportOut(BaseModel):

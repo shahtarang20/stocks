@@ -18,6 +18,7 @@ import {
   Loader2,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Terminal,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
@@ -43,6 +44,7 @@ import {
   type Job,
   type JobArtifact,
   type JobEvent,
+  privacyApi,
   type JobLogs,
   type LogLine,
 } from "@/lib/api";
@@ -145,6 +147,14 @@ export default function JobDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["job", jobId] });
       queryClient.invalidateQueries({ queryKey: ["disputes"] });
     },
+  });
+
+  const receiptQuery = useQuery({
+    queryKey: ["privacy-receipt", jobId],
+    queryFn: () => privacyApi.getReceiptByJob(token, jobId),
+    // Only private jobs have receipts, and only once one has been issued.
+    enabled: Boolean(token && jobId && job?.privacy_receipt_id),
+    retry: false,
   });
 
   const simulated = job ? isSimulated(job.execution_mode) : false;
@@ -557,6 +567,93 @@ export default function JobDetailPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* ---- Proof-of-Privacy receipt (private tiers only) ---- */}
+        {job.isolation_tier && ["sealed", "sealed_pro", "confidential"].includes(job.isolation_tier) ? (
+          <Card>
+            <CardContent className="p-6">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-5 w-5" />
+                  <h2 className="text-sm font-semibold">Privacy receipt</h2>
+                </div>
+                {receiptQuery.data ? (
+                  <Badge variant="outline" className="font-mono text-xs">
+                    {receiptQuery.data.verified ? "Receipt issued · checked by the platform" : "Receipt issued · platform check FAILED"}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="font-mono text-xs">
+                    No receipt yet
+                  </Badge>
+                )}
+              </div>
+
+              {receiptQuery.isLoading ? (
+                <Skeleton className="h-16 w-full" />
+              ) : receiptQuery.data ? (
+                <div className="space-y-4">
+                  <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <dt className="text-muted-foreground">Tier</dt>
+                      <dd className="mt-0.5 font-mono text-xs">{receiptQuery.data.isolation_tier}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">OS image</dt>
+                      <dd className="mt-0.5 truncate font-mono text-[11px]" title={receiptQuery.data.image_hash}>
+                        {receiptQuery.data.image_hash}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Log root</dt>
+                      <dd className="mt-0.5 truncate font-mono text-[11px]" title={receiptQuery.data.merkle_root}>
+                        {receiptQuery.data.merkle_root}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Wipe receipt</dt>
+                      <dd className="mt-0.5 font-mono text-xs">
+                        {receiptQuery.data.wipe_receipt
+                          ? String((receiptQuery.data.wipe_receipt as { wiped_items?: string[] }).wiped_items?.join(", ") ?? "present")
+                          : "none"}
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className="flex flex-wrap items-center gap-3 pt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const blob = new Blob([JSON.stringify(receiptQuery.data, null, 2)], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `privacy-receipt-${id}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      <Download className="mr-1.5 h-3.5 w-3.5" /> Download receipt JSON
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      Check it yourself, without trusting us:{" "}
+                      <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs">
+                        python -m computecoin.ccverify privacy-receipt-{id}.json --verifier-key &lt;key from /v1/privacy/verifier-key&gt;
+                      </code>
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The receipt proves which signed attestation, key releases and wipe were logged. It does not
+                    prove the host&apos;s hardware: Sealed attestation currently runs only in development.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  A receipt is created after a private job finishes on an attested host. Until then there is nothing to verify.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
 
       {/* ---- Cancel confirmation ---- */}

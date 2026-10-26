@@ -38,6 +38,7 @@ from app.api.routers import (
     quotes,
     reputation,
     reservations,
+    privacy,
     settlement,
     wallet,
     spend_limits,
@@ -204,6 +205,7 @@ def create_app() -> FastAPI:
     application.include_router(connect.router)
     application.include_router(chain_recon.router)
     application.include_router(vendors.router)
+    application.include_router(privacy.router)
 
     @application.get("/")
     async def root() -> dict:

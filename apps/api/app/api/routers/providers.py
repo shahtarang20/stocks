@@ -38,6 +38,7 @@ from app.schemas.provider import (
 from app.models.billing import LedgerEntry, LedgerTransaction, ProviderPayout
 from app.schemas.billing import AmountIn, EarningsOut, LedgerEntryOut, PayoutOut
 from app.services import ledger
+from app.services.attestation_verifier import AttestationVerifierError, verify_machine_evidence
 from app.services.audit import record_audit
 from app.services.provider import (
     get_owned_machine,
@@ -533,6 +534,29 @@ async def verify_machine_attestation(
         )
 
     now = utcnow()
+    tier = body.isolation_tier
+
+    # ADR-0005: the Sealed tiers are granted ONLY by the evidence check (trusted image, security
+    # locks, stake, in-RAM keys). Confidential keeps its Phase-8 behaviour for capability, but a
+    # key-release verdict is issued only when the evidence check passes. Failure here leaves the
+    # nonce unconsumed and nothing recorded (the transaction rolls back).
+    verdict = None
+    if tier in ("sealed", "sealed_pro") or (tier == "confidential" and settings.PRIVACY_SOFTWARE_ATTESTATION):
+        try:
+            verdict, _ = await verify_machine_evidence(
+                db,
+                machine=machine,
+                requested_tier=tier,
+                nonce=body.nonce,
+                pcr_measurements=body.pcr_measurements,
+                ephemeral_public_key=body.ephemeral_public_key,
+                receipt_signing_public_key=body.receipt_signing_public_key,
+                security_state=body.security_state,
+                now=now,
+            )
+        except AttestationVerifierError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.code) from exc
+
     # Consume nonce
     health.pop("latest_attestation_nonce", None)
     machine.last_health = health
@@ -540,22 +564,22 @@ async def verify_machine_attestation(
     # Record attestation in DB
     attestation = MachineAttestation(
         machine_id=machine.id,
-        isolation_tier=body.isolation_tier,
+        isolation_tier=tier,
         nonce=body.nonce,
         pcr_measurements=body.pcr_measurements,
         platform_quote=body.platform_quote,
         signature=body.signature,
         verification_status="verified",
         verified_at=now,
-        details={"ip": client_ip(request)},
+        details={"ip": client_ip(request), **({"verdict": verdict} if verdict else {})},
     )
     db.add(attestation)
 
     # Promote machine capability
     if machine.capability:
         existing_tiers = list(machine.capability.supported_isolation_tiers or ["container"])
-        if body.isolation_tier not in existing_tiers:
-            existing_tiers.append(body.isolation_tier)
+        if tier not in existing_tiers:
+            existing_tiers.append(tier)
         machine.capability.supported_isolation_tiers = existing_tiers
         machine.capability.verification_status = "VERIFIED"
     if machine.hardware:
@@ -569,7 +593,7 @@ async def verify_machine_attestation(
         ip=client_ip(request),
         resource_type="machine",
         resource_id=str(machine.id),
-        reason=body.isolation_tier,
+        reason=tier,
     )
     await db.flush()
 
@@ -581,6 +605,7 @@ async def verify_machine_attestation(
         verified_at=now,
         attestation_id=attestation.id,
         details={"pcr_count": len(body.pcr_measurements)},
+        verdict=verdict,
     )
 
 

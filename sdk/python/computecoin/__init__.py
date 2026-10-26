@@ -8,6 +8,15 @@ raises :class:`EndpointNotAvailableError` -- it never fabricates a result.
 """
 
 from .client import ComputeCoinClient
+from .ccverify import verify_receipt
+from .crypto import (
+    decrypt_job_output,
+    encrypt_job_input,
+    generate_customer_keypair,
+    prepare_private_job,
+    seal_shares_for_guardians,
+    split_data_key,
+)
 from .errors import (
     ApiError,
     AuthenticationError,
@@ -85,4 +94,11 @@ __all__ = [
     "Dispute",
     "ProviderEarnings",
     "Payout",
+    "verify_receipt",
+    "encrypt_job_input",
+    "decrypt_job_output",
+    "split_data_key",
+    "generate_customer_keypair",
+    "prepare_private_job",
+    "seal_shares_for_guardians",
 ]

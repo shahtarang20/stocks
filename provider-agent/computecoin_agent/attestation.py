@@ -20,7 +20,27 @@ import hashlib
 import hmac
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+from .privacy_crypto import generate_ed25519_keypair, generate_x25519_keypair
+
+
+def generate_ephemeral_keypair() -> tuple[str, str]:
+    """In-RAM X25519 key pair (private_hex, public_hex) for receiving Data Key shares (ADR-0005).
+
+    Only the PUBLIC half leaves the machine (in the attestation request). Guardians seal shares to
+    it, and nothing but this private key can open them. Never write the private key to disk.
+    """
+    return generate_x25519_keypair()
+
+
+def generate_receipt_signing_keypair() -> tuple[str, str]:
+    """In-RAM Ed25519 key pair (private_hex, public_hex) for signing this session's wipe receipts.
+
+    The public half is bound into the signed attestation verdict, so a customer can verify the
+    wipe receipt offline without any secret.
+    """
+    return generate_ed25519_keypair()
 
 
 @dataclass
@@ -34,6 +54,7 @@ class AttestationReport:
     pcr_measurements: dict[str, str] = field(default_factory=dict)
     platform_quote: str = ""
     signature: str = ""
+    ephemeral_public_key: str = ""
 
     def canonical_bytes(self) -> bytes:
         """Deterministic bytes representation for signing and verification."""

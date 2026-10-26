@@ -33,7 +33,15 @@ const schema = z
   .object({
     workload_type: z.enum(["text-generation", "batch-inference"]),
     isolation_tier: z
-      .enum(["container", "gvisor", "microvm", "confidential"])
+      .enum([
+        "open",
+        "sealed",
+        "sealed_pro",
+        "confidential",
+        "container",
+        "gvisor",
+        "microvm",
+      ])
       .default("container"),
     model: z.string().trim().min(1, "Model is required"),
     prompt: z.string().optional(),
@@ -142,6 +150,7 @@ export default function NewJobPage() {
   });
 
   const workloadType = watch("workload_type");
+  const isolationTier = watch("isolation_tier");
 
   const createMut = useMutation({
     mutationFn: (input: CreateJobInput) =>
@@ -234,17 +243,30 @@ export default function NewJobPage() {
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="isolation_tier">Isolation Tier</Label>
+                <Label htmlFor="isolation_tier">Isolation & Privacy Tier</Label>
                 <select
                   id="isolation_tier"
                   className={selectClass}
                   {...register("isolation_tier")}
                 >
-                  <option value="container">Standard Container (Shared Kernel)</option>
-                  <option value="gvisor">gVisor Sandbox (runsc)</option>
+                  <option value="container">Container (shared kernel)</option>
+                  <option value="gvisor">gVisor sandbox (runsc)</option>
                   <option value="microvm">microVM (Kata / Firecracker)</option>
-                  <option value="confidential">Confidential Computing (AMD SEV-SNP)</option>
+                  <option value="sealed" disabled>Sealed (private): Python SDK only</option>
+                  <option value="sealed_pro" disabled>Sealed Pro (private): Python SDK only</option>
+                  <option value="confidential" disabled>Confidential (private): Python SDK only</option>
                 </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {isolationTier === "gvisor" || isolationTier === "microvm" ? (
+                    <span>Stronger sandboxing against the job escaping. The host can still see the job.</span>
+                  ) : (
+                    <span className="text-amber-400">
+                      The host can see this job&apos;s input and output. Do not send private data.
+                    </span>
+                  )}{" "}
+                  Private tiers encrypt your input before it leaves your computer, so they are
+                  submitted with the Python SDK (<code>prepare_private_job</code>), not from this form.
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="model">Model</Label>

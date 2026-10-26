@@ -10,7 +10,9 @@ import datetime as dt
 import decimal
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+PRIVACY_TIERS = ("sealed", "sealed_pro", "confidential")
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +20,18 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 class RetryPolicy(BaseModel):
     max_retries: int = Field(default=0, ge=0, le=10)
+
+
+class DataPolicy(BaseModel):
+    """Customer rules for where a private job may run (ADR-0005 section 4). Unknown keys are refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    classification: str | None = Field(default=None, max_length=64)
+    allowed_regions: list[str] | None = Field(default=None, max_length=32)
+    min_stake: decimal.Decimal | None = Field(default=None, ge=0, le=decimal.Decimal("1000000000"))
+    # X25519 public key (hex) the sealed host encrypts the result to. Required for privacy tiers.
+    result_public_key: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
 
 
 class JobCreate(BaseModel):
@@ -38,8 +52,29 @@ class JobCreate(BaseModel):
     retry_policy: RetryPolicy | None = None
     priority: int = Field(default=0, ge=0)
     isolation_tier: str = Field(
-        default="container", pattern="^(container|gvisor|microvm|confidential)$"
+        default="container", pattern="^(container|open|gvisor|microvm|sealed|sealed_pro|confidential)$"
     )
+    data_policy: DataPolicy | None = None
+    # ccpp-v1 data envelope (see app/services/privacy_crypto.py); the platform never sees plaintext.
+    encrypted_input: dict | None = None
+    # {guardian_name: {"x": int, "envelope": sealed ccpp-v1 envelope}}; shape checked at submit.
+    dk_shares: dict | None = None
+    value_at_risk: decimal.Decimal | None = Field(
+        default=None, ge=0, le=decimal.Decimal("1000000000"), max_digits=12, decimal_places=2
+    )
+
+    @model_validator(mode="after")
+    def _privacy_fields_match_tier(self) -> "JobCreate":
+        if self.isolation_tier in PRIVACY_TIERS:
+            if self.input:
+                raise ValueError("privacy tiers take encrypted_input only; send an empty input")
+            if not self.encrypted_input or not self.dk_shares:
+                raise ValueError("privacy tiers need encrypted_input and dk_shares")
+            if not self.data_policy or not self.data_policy.result_public_key:
+                raise ValueError("privacy tiers need data_policy.result_public_key")
+        elif self.encrypted_input is not None or self.dk_shares is not None:
+            raise ValueError("encrypted_input and dk_shares are only for sealed, sealed_pro or confidential jobs")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +106,10 @@ class JobOut(BaseModel):
     match_explanation: dict | None = None
     verification: dict | None = None
     output: dict | None = None
+    encrypted_output: dict | None = None
+    data_policy: dict | None = None
+    value_at_risk: str | None = None
+    privacy_receipt_id: uuid.UUID | None = None
     metrics: dict | None = None
     final_cost: str | None = None
     error_code: str | None = None

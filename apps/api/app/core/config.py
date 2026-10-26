@@ -7,6 +7,7 @@ boots without any env configured (local/test).
 from __future__ import annotations
 
 import decimal
+import json
 import re
 from functools import lru_cache
 
@@ -18,6 +19,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _DEV_AUTH_SECRET = "dev-auth-secret-change-me"
 _DEV_SESSION_SECRET = "dev-session-secret-change-me"
 _DEV_SIGNER_KEY = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d"
+# Proof-of-Privacy (ADR-0005) development keys. Public knowledge, so a non-dev deployment that
+# still uses them is refused at boot (see the validator).
+_DEV_PRIVACY_VERIFIER_KEY = "7c1f0e9a3b5d2c4e6f8a0b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6"
+_DEV_PRIVACY_GUARDIAN_PRIVATE_KEYS = (
+    '{"computecoin":"28c9a4d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b4c",'
+    '"partner":"409c8d7e6f5a4b3c2d1e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d65"}'
+)
 _DEV_ENVS = {"development", "dev", "test", "testing", "local"}
 # Local-chain contract addresses shipped as defaults. On a real network these point at nothing (or at a
 # stranger's contract), so a non-dev deployment with settlement on must set its own.
@@ -228,6 +236,27 @@ class Settings(BaseSettings):
 
     # Phase D — chain reconciliation
     CHAIN_RPC_URL: str = ""
+
+    # --- Proof-of-Privacy (ADR-0005) ---
+    # Off by default outside development: privacy tiers are then refused, never silently served.
+    # When on in a non-dev environment, the keys below must be real (enforced at boot).
+    PRIVACY_ENABLED: bool = False
+    # Ed25519 seed (hex) that signs attestation verdicts. Its public key is published at
+    # GET /v1/privacy/verifier-key so receipts can be checked offline.
+    PRIVACY_VERIFIER_SIGNING_KEY: str = _DEV_PRIVACY_VERIFIER_KEY
+    # JSON {guardian_name: x25519_private_hex} for guardians whose key lives in THIS process.
+    # In a non-dev deployment fewer than PRIVACY_GUARDIAN_THRESHOLD may be held here, so the
+    # platform alone can never rebuild a customer's Data Key.
+    PRIVACY_GUARDIAN_PRIVATE_KEYS: str = _DEV_PRIVACY_GUARDIAN_PRIVATE_KEYS
+    # JSON {guardian_name: x25519_public_hex} for EVERY guardian, including external ones.
+    # Empty = derived from PRIVACY_GUARDIAN_PRIVATE_KEYS.
+    PRIVACY_GUARDIAN_PUBLIC_KEYS: str = ""
+    PRIVACY_GUARDIAN_THRESHOLD: int = 2
+    # The Sealed tiers need a real TPM quote checked against the TPM vendor's certificate chain,
+    # and Confidential needs TDX/SEV-SNP plus NVIDIA reports. Neither verifier exists yet, so
+    # verdicts can only be issued on the software attestation path, which is for development
+    # and tests ONLY (the host holds the key that "signs" its own quote). Refused in production.
+    PRIVACY_SOFTWARE_ATTESTATION: bool = False
     CHAIN_RECONCILE_ENABLED: bool = False
     CHAIN_RECONCILE_INTERVAL_SECONDS: int = 900
     #: Max block span per ``eth_getLogs`` call. Hosted RPC providers cap this
@@ -253,6 +282,19 @@ class Settings(BaseSettings):
             insecure.append("AUTH_SECRET")
         if self.SESSION_SECRET == _DEV_SESSION_SECRET:
             insecure.append("SESSION_SECRET")
+        if self.PRIVACY_ENABLED:
+            if self.PRIVACY_VERIFIER_SIGNING_KEY == _DEV_PRIVACY_VERIFIER_KEY:
+                insecure.append("PRIVACY_VERIFIER_SIGNING_KEY")
+            if self.PRIVACY_GUARDIAN_PRIVATE_KEYS == _DEV_PRIVACY_GUARDIAN_PRIVATE_KEYS:
+                insecure.append("PRIVACY_GUARDIAN_PRIVATE_KEYS")
+            if self.PRIVACY_SOFTWARE_ATTESTATION:
+                insecure.append("PRIVACY_SOFTWARE_ATTESTATION")
+            try:
+                local_guardians = len(json.loads(self.PRIVACY_GUARDIAN_PRIVATE_KEYS or "{}"))
+            except ValueError:
+                local_guardians = -1
+            if local_guardians < 0 or local_guardians >= self.PRIVACY_GUARDIAN_THRESHOLD:
+                insecure.append("PRIVACY_GUARDIAN_PRIVATE_KEYS (must hold fewer keys than the threshold)")
         if self.SETTLEMENT_ENABLED and self.PLATFORM_SIGNER_PRIVATE_KEY == _DEV_SIGNER_KEY:
             insecure.append("PLATFORM_SIGNER_PRIVATE_KEY")
         if self.SETTLEMENT_ENABLED:
@@ -284,6 +326,11 @@ class Settings(BaseSettings):
         a = self.TOKEN_DEPOSIT_ADDRESS.strip()
         valid_address = len(a) == 42 and a.startswith("0x")
         return rate > 0 and 0 < lo <= hi and valid_address and self.TOKEN_DEPOSIT_CONFIRMATIONS >= 0
+
+    @property
+    def privacy_active(self) -> bool:
+        """Proof-of-Privacy tiers are served only when enabled, or in a dev/test environment."""
+        return self.PRIVACY_ENABLED or self.ENVIRONMENT.lower() in _DEV_ENVS
 
     @property
     def wallet_chain_id(self) -> int:

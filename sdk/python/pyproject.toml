@@ -12,6 +12,8 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "httpx==0.28.1",
     "pydantic==2.11.7",
+    # Proof-of-Privacy (ADR-0005): X25519, Ed25519, ChaCha20-Poly1305, HKDF.
+    "cryptography>=43.0.0",
 ]
 
 [project.optional-dependencies]

@@ -189,7 +189,12 @@ async def enroll(
         ProviderCapability(
             machine_id=machine.id,
             supported_workloads=report.supported_workloads,
-            supported_isolation_tiers=getattr(report, "isolation_tiers", None) or ["container"],
+            # Privacy tiers are never taken from the host's own word: they are added only by a
+            # successful attestation (ADR-0005). Sandboxing tiers stay self-reported, as before.
+            supported_isolation_tiers=[
+                t for t in (getattr(report, "isolation_tiers", None) or ["container"])
+                if t not in ("sealed", "sealed_pro", "confidential")
+            ] or ["container"],
             verification_status="detected",
         )
     )

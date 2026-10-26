@@ -120,6 +120,81 @@ async def _reference_price(
     return min(prices) if prices else None
 
 
+def _machine_supports_tier_and_policy(m: ProviderMachine, job: Job) -> tuple[bool, str | None]:
+    if getattr(m, "is_banned", False):
+        return False, "machine_is_banned"
+
+    req_tier = (getattr(job, "isolation_tier", None) or "container").lower()
+    machine_tiers = [
+        t.lower()
+        for t in (
+            m.capability.supported_isolation_tiers
+            if m.capability and getattr(m.capability, "supported_isolation_tiers", None)
+            else ["container"]
+        )
+    ]
+    if "open" in machine_tiers and "container" not in machine_tiers:
+        machine_tiers.append("container")
+    if "container" in machine_tiers and "open" not in machine_tiers:
+        machine_tiers.append("open")
+
+    # Data policy checks
+    # Data policy. Validated at submit (schemas.jobs.DataPolicy); a machine with no region set
+    # cannot prove it is in an allowed one, so it is refused rather than let through.
+    data_policy = getattr(job, "data_policy", None) or {}
+    allowed_regions = data_policy.get("allowed_regions")
+    if allowed_regions and (not m.region or m.region not in allowed_regions):
+        return False, "region_policy_mismatch"
+
+    job_var = getattr(job, "value_at_risk", None) or decimal.Decimal("0")
+    bonded_stake = getattr(m, "stake_bonded", None) or decimal.Decimal("0.00")
+
+    min_policy_stake = data_policy.get("min_stake")
+    if min_policy_stake is not None and bonded_stake < decimal.Decimal(str(min_policy_stake)):
+        return False, "insufficient_stake_for_policy"
+
+    if req_tier in ("container", "open"):
+        return True, None
+
+    if req_tier == "sealed":
+        if "sealed" not in machine_tiers and "sealed_pro" not in machine_tiers:
+            return False, "isolation_tier_not_supported_by_machine"
+        if not m.capability or m.capability.verification_status != "VERIFIED":
+            return False, "isolation_tier_not_supported_by_machine"
+        if bonded_stake < decimal.Decimal("1000.00"):
+            return False, "insufficient_stake_for_sealed"
+        if job_var > bonded_stake:
+            return False, "value_at_risk_exceeds_stake"
+        return True, None
+
+    if req_tier == "sealed_pro":
+        if "sealed_pro" not in machine_tiers:
+            return False, "isolation_tier_not_supported_by_machine"
+        if not m.capability or m.capability.verification_status != "VERIFIED":
+            return False, "isolation_tier_not_supported_by_machine"
+        if not getattr(m, "memory_encryption_active", False):
+            return False, "memory_encryption_not_active"
+        if not getattr(m, "kyc_verified", False):
+            return False, "kyc_verification_required"
+        if bonded_stake < decimal.Decimal("5000.00"):
+            return False, "insufficient_stake_for_sealed_pro"
+        if job_var > bonded_stake:
+            return False, "value_at_risk_exceeds_stake"
+        return True, None
+
+    if req_tier == "confidential":
+        if "confidential" not in machine_tiers:
+            return False, "isolation_tier_not_supported_by_machine"
+        if not m.capability or m.capability.verification_status != "VERIFIED":
+            return False, "isolation_tier_not_supported_by_machine"
+        return True, None
+
+    if req_tier not in machine_tiers:
+        return False, "isolation_tier_not_supported_by_machine"
+
+    return True, None
+
+
 async def validate_job(db: AsyncSession, job: Job) -> None:
     """Run all VALIDATING checks. Raises JobValidationError on the first failure."""
     # 1) Model approved + supports the workload.
@@ -135,7 +210,13 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
     job.execution_mode = "simulated" if mv.runtime == "simulated" else "hardware"
 
     # 2) Input schema for the workload.
-    _validate_input(job.workload_type, job.input)
+    if (getattr(job, "isolation_tier", None) or "container") in ("sealed", "sealed_pro", "confidential"):
+        # The platform cannot read a private job's input; the sealed host validates it after
+        # decrypting. Here we only require that it is there.
+        if not getattr(job, "encrypted_input", None) or not getattr(job, "dk_shares", None):
+            raise JobValidationError("invalid_input")
+    else:
+        _validate_input(job.workload_type, job.input)
 
     # 3) GPU fit against a targeted machine (if specified).
     target: ProviderMachine | None = None
@@ -146,14 +227,9 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
         machine_gpus = target.hardware.gpu_count if target.hardware else 0
         if job.gpu_count > machine_gpus:
             raise JobValidationError("gpu_count_exceeds_machine")
-        target_tiers = (
-            target.capability.supported_isolation_tiers
-            if target.capability and getattr(target.capability, "supported_isolation_tiers", None)
-            else ["container"]
-        )
-        tier = getattr(job, "isolation_tier", "container") or "container"
-        if tier != "container" and tier not in (target_tiers or []):
-            raise JobValidationError("isolation_tier_not_supported_by_machine", status.HTTP_409_CONFLICT)
+        tier_ok, reason = _machine_supports_tier_and_policy(target, job)
+        if not tier_ok:
+            raise JobValidationError(reason or "isolation_tier_not_supported_by_machine", status.HTTP_409_CONFLICT)
 
     # 4) Estimated cost <= budget cap.
     if job.max_cost is not None:
@@ -204,18 +280,11 @@ async def _eligible_machines(
         if machine_gpus < job.gpu_count:
             logger.debug("scheduler skip (gpus): machine=%s gpus=%s", m.id, machine_gpus)
             continue
-        # Phase 8: Isolation tier matching (ADR-0003: No silent downgrade)
-        req_tier = (getattr(job, "isolation_tier", None) or "container").lower()
-        machine_tiers = (
-            m.capability.supported_isolation_tiers
-            if m.capability and getattr(m.capability, "supported_isolation_tiers", None)
-            else ["container"]
-        )
-        if req_tier != "container" and req_tier not in (machine_tiers or []):
+        # Phase 8 & ADR-0005: Proof-of-Privacy tier & policy matching (never downgrade)
+        tier_ok, reason = _machine_supports_tier_and_policy(m, job)
+        if not tier_ok:
+            logger.debug("scheduler skip (%s): machine=%s", reason, m.id)
             continue
-        if req_tier == "confidential":
-            if not m.capability or m.capability.verification_status != "VERIFIED":
-                continue
         # Operator policy layer (floor price, availability schedule, model
         # allowlist). Checked after the hardware/workload fit so the debug log
         # names the real reason a machine was passed over.

@@ -91,6 +91,14 @@ from app.models.workloads import Batch, Dataset, TrainingCheckpoint
 from app.models.vendors import VendorAlert, VendorService  # noqa: F401
 from app.models.reconciliation import ChainReconciliationRun
 
+# ADR-0005: Proof-of-Privacy
+from app.models.privacy import (
+    CanaryJob,
+    PrivacyReceipt,
+    TransparencyLogLeaf,
+    TrustedImage,
+)
+
 __all__ = [
     "LinkedWallet",
     "TokenDeposit",
@@ -164,4 +172,9 @@ __all__ = [
     # Platform operations
     "VendorService",
     "VendorAlert",
+    # ADR-0005: Proof-of-Privacy
+    "TransparencyLogLeaf",
+    "PrivacyReceipt",
+    "CanaryJob",
+    "TrustedImage",
 ]

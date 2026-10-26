@@ -15,6 +15,7 @@ import decimal
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -94,6 +95,15 @@ class ProviderMachine(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     last_health: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # --- ADR-0005: Proof-of-Privacy ---
+    stake_bonded: Mapped[decimal.Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=decimal.Decimal("0")
+    )
+    memory_encryption_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    kyc_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tpm_ek_pub: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    is_banned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     provider: Mapped["Provider"] = relationship(back_populates="machines")
     hardware: Mapped["HardwareInventory | None"] = relationship(

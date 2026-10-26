@@ -22,6 +22,7 @@ from app.models.provider import ProviderMachine
 from app.models.jobs import Artifact, Job, JobEvent, JobLogMetadata
 from app.models.org import OrganizationMember, Project
 from app.schemas.auth import CurrentUser
+from app.schemas.jobs import PRIVACY_TIERS
 from app.schemas.jobs import (
     ArtifactDownloadOut,
     ArtifactOut,
@@ -35,6 +36,8 @@ from app.schemas.marketplace import money_str
 from app.services import billing
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
+from app.services.key_guardians import validate_sealed_shares
+from app.services.privacy_crypto import is_data_envelope
 from app.services.ledger import InsufficientFunds, lock_customer, to_minor
 from app.services.leases import recover_expired_leases, release_job_reservation
 from app.services.scheduler import JobValidationError, schedule_job, validate_job
@@ -89,6 +92,10 @@ def shape_job(job: Job) -> JobOut:
         match_explanation=job.match_explanation,
         verification=job.verification,
         output=job.output,
+        encrypted_output=job.encrypted_output,
+        data_policy=job.data_policy,
+        value_at_risk=money_str(job.value_at_risk),
+        privacy_receipt_id=job.privacy_receipt_id,
         metrics=job.metrics,
         final_cost=money_str(job.final_cost),
         error_code=job.error_code,
@@ -183,6 +190,16 @@ async def create_job(
         if known is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="machine_not_found")
 
+    if body.isolation_tier in PRIVACY_TIERS:
+        if not settings.privacy_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="privacy_tiers_not_enabled")
+        if not is_data_envelope(body.encrypted_input):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="encrypted_input is not a ccpp-v1 data envelope")
+        try:
+            validate_sealed_shares(body.dk_shares)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     retry_policy = body.retry_policy.model_dump() if body.retry_policy else {"max_retries": 0}
     job = Job(
         customer_id=current.id,
@@ -201,6 +218,10 @@ async def create_job(
         isolation_tier=body.isolation_tier or "container",
         idempotency_key=idempotency_key,
         machine_id=body.machine_id,
+        data_policy=body.data_policy.model_dump(mode="json", exclude_none=True) if body.data_policy else None,
+        encrypted_input=body.encrypted_input,
+        dk_shares=body.dk_shares,
+        value_at_risk=body.value_at_risk,
     )
     db.add(job)
     await db.flush()

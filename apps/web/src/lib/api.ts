@@ -309,8 +309,20 @@ export interface Job {
   max_runtime_seconds?: number;
   /** "simulated" | "hardware" — MUST be surfaced wherever output is shown. */
   execution_mode: JobExecutionMode;
-  /** Workload isolation tier ("container" | "gvisor" | "microvm" | "confidential"). */
-  isolation_tier?: "container" | "gvisor" | "microvm" | "confidential" | string;
+  /** Workload isolation tier ("open" | "sealed" | "sealed_pro" | "confidential" | legacy "container" | "gvisor" | "microvm"). */
+  isolation_tier?:
+    | "open"
+    | "sealed"
+    | "sealed_pro"
+    | "confidential"
+    | "container"
+    | "gvisor"
+    | "microvm"
+    | string;
+  privacy_receipt_id?: string | null;
+  data_policy?: Record<string, unknown> | null;
+  encrypted_output?: Record<string, unknown> | null;
+  value_at_risk?: string | null;
   match_explanation?: JobMatchExplanation | null;
   verification?: Record<string, unknown> | null;
   /** Decimal string; null in Phase 4 (nothing is charged yet). */
@@ -390,7 +402,26 @@ export interface CreateJobInput {
   max_cost: string;
   max_runtime_seconds: number;
   retry_policy?: { max_retries: number };
-  isolation_tier?: "container" | "gvisor" | "microvm" | "confidential";
+  isolation_tier?:
+    | "open"
+    | "sealed"
+    | "sealed_pro"
+    | "confidential"
+    | "container"
+    | "gvisor"
+    | "microvm";
+  data_policy?: {
+    classification?: string;
+    allowed_regions?: string[];
+    min_stake?: string;
+    /** X25519 public key (hex) the result is sealed to. Required for privacy tiers. */
+    result_public_key?: string;
+  };
+  /** ccpp-v1 data envelope; produced client-side (Python SDK), never plaintext. */
+  encrypted_input?: Record<string, string>;
+  /** {guardian: {x, envelope}} — each share sealed to one guardian's key. */
+  dk_shares?: Record<string, { x: number; envelope: Record<string, string> }>;
+  value_at_risk?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -2047,3 +2078,82 @@ export function enrollmentTokenStatus(
   }
   return "active";
 }
+
+// ---------------------------------------------------------------------------
+// Proof-of-Privacy (ADR-0005)
+// ---------------------------------------------------------------------------
+
+/** RFC 6962 inclusion proof. The payload is included so the leaf hash can be recomputed. */
+export interface InclusionProof {
+  leaf_index: number;
+  tree_size: number;
+  leaf_hash: string;
+  root_hash: string;
+  audit_path: string[];
+  event_type: string;
+  payload: Record<string, unknown>;
+}
+
+/** Shape of GET /v1/privacy/receipts/{job_id} (PrivacyReceiptOut). */
+export interface PrivacyReceipt {
+  id: string;
+  job_id: string;
+  machine_id: string | null;
+  isolation_tier: string;
+  image_hash: string;
+  attestation_verdict: Record<string, unknown>;
+  guardian_releases: Array<Record<string, unknown>>;
+  wipe_receipt: Record<string, unknown> | null;
+  merkle_root: string;
+  inclusion_proofs: Record<string, InclusionProof>;
+  /** The server's own check at creation; customers should re-check offline with ccverify. */
+  verified: boolean;
+  created_at: string;
+}
+
+export interface TransparencyLogLeaf {
+  leaf_index: number;
+  event_type: string;
+  leaf_hash: string;
+  payload: Record<string, unknown>;
+  merkle_root: string;
+  anchored_tx_hash: string | null;
+  anchored_block_number: number | null;
+  created_at: string;
+}
+
+export interface VerifierKeys {
+  verifier_public_key: string;
+  guardians: Record<string, string>;
+  threshold: number;
+}
+
+export const privacyApi = {
+  /** GET /v1/privacy/receipts/{job_id} — 404 until the receipt exists. */
+  async getReceiptByJob(accessToken: string, jobId: string): Promise<PrivacyReceipt> {
+    return request<PrivacyReceipt>(`/v1/privacy/receipts/${jobId}`, { token: accessToken });
+  },
+
+  /** GET /v1/privacy/verifier-key — public; needed to verify a receipt offline. */
+  async getVerifierKeys(): Promise<VerifierKeys> {
+    return request<VerifierKeys>("/v1/privacy/verifier-key");
+  },
+
+  /** POST /v1/privacy/receipts/verify — the same checks ccverify runs. */
+  async verifyReceipt(
+    receipt: PrivacyReceipt,
+  ): Promise<{ valid: boolean; isolation_tier: string; checks: Record<string, unknown> }> {
+    return request("/v1/privacy/receipts/verify", { method: "POST", body: receipt });
+  },
+
+  async getTransparencyLog(params?: { limit?: number; offset?: number }): Promise<TransparencyLogLeaf[]> {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.offset) q.set("offset", String(params.offset));
+    return request<TransparencyLogLeaf[]>(`/v1/privacy/transparency-log${q.toString() ? `?${q.toString()}` : ""}`);
+  },
+
+  async getLeafProof(leafIndex: number): Promise<InclusionProof> {
+    return request<InclusionProof>(`/v1/privacy/transparency-log/proof/${leafIndex}`);
+  },
+};

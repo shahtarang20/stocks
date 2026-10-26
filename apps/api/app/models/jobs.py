@@ -102,6 +102,14 @@ class Job(Base, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # --- ADR-0005: Proof-of-Privacy ---
+    data_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    encrypted_input: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    encrypted_output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    dk_shares: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    value_at_risk: Mapped[decimal.Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    privacy_receipt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -20,12 +20,15 @@ Typical use::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
-from typing import Any
+import warnings
+from typing import Any, Optional
 
 from .privacy_crypto import (
     INPUT_AAD,
+    canonical_json,
     encrypt_data,
     generate_x25519_keypair,
     open_sealed,
@@ -34,6 +37,52 @@ from .privacy_crypto import (
     share_aad,
     split_secret,
 )
+
+
+# --------------------------------------------------------------------------- guardian key pinning
+#
+# The guardian keys come from the platform (GET /v1/privacy/verifier-key). A platform that served
+# keys it controls could open every Data Key, so ComputeCoin publishes the FINGERPRINT of the
+# guardian set somewhere it cannot quietly change (docs, release notes, a DNS record, partners'
+# own sites). Pinning that fingerprint makes the client refuse any other guardian set.
+
+GUARDIAN_MANIFEST_VERSION = "ccpp-guardians-v1"
+
+
+class GuardianPinError(ValueError):
+    """The guardian keys served do not match the pinned fingerprint (or none is pinned in strict mode)."""
+
+
+class UnpinnedGuardianWarning(UserWarning):
+    """Guardian keys were taken from the platform without a pinned fingerprint to check them against."""
+
+
+def guardian_manifest(guardians: dict[str, str], threshold: int) -> dict[str, Any]:
+    return {"v": GUARDIAN_MANIFEST_VERSION, "threshold": int(threshold),
+            "guardians": {str(n): str(k).lower() for n, k in guardians.items()}}
+
+
+def guardian_manifest_fingerprint(guardians: dict[str, str], threshold: int) -> str:
+    """SHA-256 of the canonical guardian manifest: what ComputeCoin publishes and customers pin."""
+    return hashlib.sha256(canonical_json(guardian_manifest(guardians, threshold))).hexdigest()
+
+
+def check_guardian_pin(
+    guardians: dict[str, str], threshold: int, pinned_fingerprint: Optional[str], *, require_pin: bool = False
+) -> None:
+    """Refuse a guardian set that does not match the pin. Without a pin: warn, or refuse when strict."""
+    if not pinned_fingerprint:
+        if require_pin:
+            raise GuardianPinError("no guardian fingerprint is pinned (require_guardian_pin is set)")
+        warnings.warn(
+            "guardian keys were not checked against a pinned fingerprint; you are trusting the platform "
+            "to serve the right ones (set guardian_pin / COMPUTECOIN_GUARDIAN_PIN)",
+            UnpinnedGuardianWarning, stacklevel=3,
+        )
+        return
+    actual = guardian_manifest_fingerprint(guardians, threshold)
+    if actual != pinned_fingerprint.strip().lower():
+        raise GuardianPinError(f"guardian keys do not match the pinned fingerprint (got {actual})")
 
 
 def generate_customer_keypair() -> tuple[str, str]:

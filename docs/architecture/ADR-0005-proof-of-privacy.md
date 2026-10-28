@@ -1,14 +1,21 @@
 # ADR-0005: Proof-of-Privacy, protecting customer work from the host
 
-Status: **partly built (2026-10-26).** Built and tested: ccpp-v1 crypto (X25519 / Ed25519 /
-ChaCha20-Poly1305), customer-side encryption in the Python SDK, guardian-sealed Data Key shares
-with log-before-release, Ed25519 verdicts, RFC 6962 transparency log, Privacy Receipts and
-`ccverify`, canary jobs, the ComputeStakeVault contract (unaudited), tier routing.
-**Not built:** real TPM / TDX / SEV-SNP / NVIDIA attestation (verdicts are issued only in dev/test),
-the external guardian service, the Sealed OS image, wiring key release and receipts into the job
-runner, on-chain anchoring, and syncing DB stake with the vault. Owner approval is still needed
-for the decisions in section 12.
-Date: 2026-10-26. Supersedes the "Residual risk: provider-side confidentiality" note in
+Status: **software path built and tested; hardware attestation NOT live (2026-10-28).**
+Built and tested: ccpp-v1 crypto (Python and TypeScript, shared vectors), customer-side encryption
+in the SDK and the website, one-job host keys with verdict v2 (`job_id`), log-before-release key
+release through local and external guardians, RFC 6962 log with signed checkpoints, on-chain
+anchoring (worker + `ccverify --rpc`, live-tested on a local chain), log witnesses (service,
+worker cosigning, guardian and `ccverify` thresholds), Privacy Receipts, canaries.
+**Not live:** hardware attestation. Verdicts are issued only on the software path, which the boot
+guard refuses outside dev/test. The TPM 2.0 and SEV-SNP verifiers parse and check the real signed
+formats; TPM AK enrolment (MakeCredential / ActivateCredential) is built, and the whole TPM path
+(enrolment, quote, hardware verdict) is tested on a software TPM (swtpm), not yet on physical TPMs
+(checklist F5). SEV-SNP, Intel TDX (DCAP + Intel collateral) and NVIDIA CC (SPDM) verifiers, and the
+Confidential CPU+GPU pairing, are built from the published formats and tested on synthetic evidence
+only; revocation (CRL/OCSP), the TDX-module identity and NVIDIA RIM parsing are not built. Guardian
+key sets can be pinned by a published fingerprint (SDK and website). Also not built: the Sealed OS image, DB-stake sync with the vault, an audit of
+ComputeStakeVault. Owner approval is still needed for the decisions in section 12.
+Date: 2026-10-28. Supersedes the "Residual risk: provider-side confidentiality" note in
 [ADR-0003](ADR-0003-isolation.md).
 
 ## 1. The problem, stated plainly

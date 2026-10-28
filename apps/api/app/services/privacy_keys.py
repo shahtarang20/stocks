@@ -47,6 +47,17 @@ def guardian_public_keys() -> dict[str, str]:
     return dict(sorted(merged.items()))
 
 
+def external_guardians() -> dict[str, str]:
+    """External guardians mapping guardian name to service URL."""
+    try:
+        data = json.loads(settings.PRIVACY_EXTERNAL_GUARDIANS or "{}")
+    except ValueError as exc:
+        raise PrivacyConfigError("PRIVACY_EXTERNAL_GUARDIANS is not valid JSON") from exc
+    if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+        raise PrivacyConfigError("PRIVACY_EXTERNAL_GUARDIANS must map guardian names to URLs")
+    return {k: v.rstrip("/") for k, v in data.items()}
+
+
 def guardian_threshold() -> int:
     k = settings.PRIVACY_GUARDIAN_THRESHOLD
     if k < 2:
@@ -61,5 +72,29 @@ def verifier_signing_key() -> str:
     return key
 
 
+def log_signing_key() -> str:
+    key = settings.PRIVACY_LOG_SIGNING_KEY
+    if not is_hex32(key):
+        raise PrivacyConfigError("PRIVACY_LOG_SIGNING_KEY must be a 32-byte hex Ed25519 seed")
+    return key
+
+
+def log_public_key() -> str:
+    return ed25519_public_from_private(log_signing_key())
+
+
 def verifier_public_key() -> str:
     return ed25519_public_from_private(verifier_signing_key())
+
+
+def guardian_manifest_fingerprint(guardians: dict[str, str], threshold: int) -> str:
+    """SHA-256 of the canonical guardian manifest ("ccpp-guardians-v1"); must match the SDK and
+    apps/web/src/lib/ccpp.ts. ComputeCoin publishes it out of band and clients pin it, so a
+    platform that served other guardian keys would be refused (docs/specs/ccpp-v1.md 6e)."""
+    import hashlib
+
+    from app.services.privacy_crypto import canonical_json
+
+    manifest = {"v": "ccpp-guardians-v1", "threshold": int(threshold), "guardians": {str(n): str(k).lower() for n, k in guardians.items()}}
+    return hashlib.sha256(canonical_json(manifest)).hexdigest()
+

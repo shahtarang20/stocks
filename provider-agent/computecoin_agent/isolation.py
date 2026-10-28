@@ -156,6 +156,25 @@ def probe_bare_metal(*, cpuinfo: Optional[str] = None, dmi_values: Optional[list
     return not any(name in joined for name in _VM_NAMES)
 
 
+def probe_iommu(*, iommu_dir: str = "/sys/class/iommu") -> bool:
+    """True if the kernel has at least one active IOMMU (DMA remapping) unit."""
+    try:
+        return len(os.listdir(iommu_dir)) > 0
+    except OSError:
+        return False
+
+
+def probe_kernel_lockdown(*, lockdown_file: str = "/sys/kernel/security/lockdown") -> bool:
+    """True if kernel lockdown is in 'integrity' or 'confidentiality' mode (the bracketed one is active)."""
+    content = _read(lockdown_file)
+    return "[integrity]" in content or "[confidentiality]" in content
+
+
+def measure_security_state() -> dict[str, bool]:
+    """The locks the attestation verifier requires, as this host measures them right now."""
+    return {"bare_metal": probe_bare_metal(), "iommu_enabled": probe_iommu(), "kernel_lockdown": probe_kernel_lockdown()}
+
+
 def detect_supported_isolation_tiers(
     *,
     probe_gvisor_fn: Optional[Callable[[], bool]] = None,

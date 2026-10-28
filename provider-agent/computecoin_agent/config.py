@@ -78,6 +78,25 @@ class AgentConfig(BaseSettings):
     machine_secret: Optional[str] = None
     heartbeat_interval_seconds: int = 30
     online_window_seconds: int = 90
+    # ---- TPM 2.0 (hardware attestation, WP-F). Unset = no TPM evidence is sent.
+    # tpm2-tools TCTI, e.g. "device:/dev/tpmrm0" (real host) or "swtpm:host=127.0.0.1,port=2321".
+    tpm_tcti: Optional[str] = None
+    # PEM file of the EK certificate when the TPM has none in NV (and its issuing CA chain).
+    tpm_ek_cert_path: Optional[str] = None
+    tpm_ek_intermediate_paths: list[str] = []
+    # PCRs the quote covers (SHA-256 bank); must include every PCR the trusted image pins.
+    tpm_pcrs: list[int] = [0, 1, 2, 3, 4, 5, 6, 7]
+    # Optional unpacked tpm2-tools tree (<root>/usr/bin, <root>/usr/lib/...) instead of the system one.
+    tpm_tools_root: Optional[str] = None
+
+    def tpm(self):
+        """A ``Tpm2`` for the configured TPM, or None when no TPM is configured."""
+        if not self.tpm_tcti:
+            return None
+        from .tpm import Tpm2
+
+        return Tpm2(self.tpm_tcti, tools_root=self.tpm_tools_root, ek_cert_path=self.tpm_ek_cert_path,
+                    ek_intermediate_paths=self.tpm_ek_intermediate_paths, pcrs=self.tpm_pcrs)
 
     # ---- persistence -------------------------------------------------------- #
     @classmethod

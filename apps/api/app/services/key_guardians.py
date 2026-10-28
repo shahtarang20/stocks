@@ -40,8 +40,11 @@ from app.services.privacy_crypto import (
     share_aad,
     split_secret,
 )
+import httpx
+
 from app.services.privacy_keys import (
     PrivacyConfigError,
+    external_guardians,
     guardian_private_keys,
     guardian_public_keys,
     guardian_threshold,
@@ -52,6 +55,8 @@ from app.services.transparency_log import append_transparency_log_entry
 __all__ = [
     "GuardianReleaseError",
     "release_guardian_shares",
+    "prepare_guardian_release",
+    "execute_guardian_release",
     "validate_sealed_shares",
     "split_secret",
     "reconstruct_secret",
@@ -89,7 +94,7 @@ def validate_sealed_shares(dk_shares: Any) -> None:
         raise ValueError(f"dk_shares must contain at least {k} guardians")
 
 
-async def release_guardian_shares(
+async def prepare_guardian_release(
     db: AsyncSession,
     *,
     job: Job,
@@ -97,11 +102,14 @@ async def release_guardian_shares(
     attestation_verdict: dict[str, Any],
     now: dt.datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Release ``k`` shares re-sealed to the verdict's host key. Raises GuardianReleaseError."""
+    """Phase 1: check everything and write one KEY_RELEASE log entry per chosen guardian.
+
+    Returns the release plan. Raises GuardianReleaseError. Releases nothing."""
     ts = now or utcnow()
     try:
         require_privacy_active()
         private_keys = guardian_private_keys()
+        ext_guardians = external_guardians()
         k = guardian_threshold()
     except PrivacyConfigError as exc:
         raise GuardianReleaseError("privacy_not_configured", str(exc)) from exc
@@ -113,6 +121,11 @@ async def release_guardian_shares(
         raise GuardianReleaseError("verdict_expired", "Attestation verdict has expired")
     if v["machine_id"] != str(machine.id):
         raise GuardianReleaseError("machine_mismatch", "Verdict machine does not match target machine")
+    if v.get("job_id") != str(job.id):
+        # R5: only a verdict attested for this very job (fresh host keys) can release its keys.
+        raise GuardianReleaseError("verdict_not_for_this_job", "The verdict is not bound to this job")
+    if job.guardian_releases:
+        raise GuardianReleaseError("keys_already_released", "This job's keys were already released")
     if machine.is_banned:
         raise GuardianReleaseError("machine_is_banned", "Machine is banned")
     if job.machine_id != machine.id:
@@ -139,20 +152,21 @@ async def release_guardian_shares(
         raise GuardianReleaseError("region_policy_violation", f"machine region {machine.region!r} is not allowed")
 
     shares = job.dk_shares or {}
-    available = [g for g in guardian_public_keys() if g in private_keys and g in shares]
-    if len(available) < k:
+    local_available = [g for g in guardian_public_keys() if g in private_keys and g in shares]
+    ext_available = [g for g in guardian_public_keys() if g in ext_guardians and g in shares and g not in private_keys]
+    chosen = (local_available + ext_available)[:k]
+    if len(chosen) < k:
         raise GuardianReleaseError(
             "insufficient_guardians_available",
-            f"{len(available)} of {k} required guardians can release here; the rest must come from external guardians",
+            f"{len(chosen)} of {k} required guardians can release; the rest must come from external guardians",
         )
 
-    released: list[dict[str, Any]] = []
-    for name in available[:k]:
+    # LOG BEFORE RELEASE. The caller must COMMIT these entries before calling
+    # execute_guardian_release: a release must never exist without a durable log entry, and the
+    # log's append lock must not be held while we wait on external guardians.
+    plan: list[dict[str, Any]] = []
+    for name in chosen:
         entry = shares[name]
-        try:
-            share = open_sealed(private_keys[name], entry["envelope"], share_aad(name))
-        except (PrivacyCryptoError, KeyError, TypeError) as exc:
-            raise GuardianReleaseError("share_unreadable", f"guardian {name}: sealed share does not open") from exc
         log = await append_transparency_log_entry(
             db,
             "KEY_RELEASE",
@@ -165,13 +179,141 @@ async def release_guardian_shares(
                 "released_at": ts.isoformat(),
             },
         )
-        released.append(
-            {
-                "guardian": name,
-                "share_index": entry["x"],
-                "wrapped_share": seal(v["ephemeral_public_key"], share, release_aad(str(job.id), name)),
-                "log_leaf_index": log.leaf_index,
-                "log_leaf_hash": log.leaf_hash,
-            }
-        )
+        plan.append({
+            "guardian": name,
+            "external": name not in private_keys,
+            "share_index": entry["x"],
+            "log_leaf_index": log.leaf_index,
+            "log_leaf_hash": log.leaf_hash,
+            "log_payload": log.payload,
+        })
+    return plan
+
+
+async def execute_guardian_release(
+    db: AsyncSession,
+    *,
+    job: Job,
+    machine: ProviderMachine,
+    attestation_verdict: dict[str, Any],
+    plan: list[dict[str, Any]],
+    http_client_factory: Any = None,
+) -> list[dict[str, Any]]:
+    """Phase 2: release the shares named in a COMMITTED plan. Raises GuardianReleaseError."""
+    try:
+        private_keys = guardian_private_keys()
+        ext_guardians = external_guardians()
+    except PrivacyConfigError as exc:
+        raise GuardianReleaseError("privacy_not_configured", str(exc)) from exc
+    v = attestation_verdict
+    shares = job.dk_shares or {}
+    factory = http_client_factory or (lambda: httpx.AsyncClient(timeout=10.0))
+    released: list[dict[str, Any]] = []
+    for item in plan:
+        name = item["guardian"]
+        entry = shares[name]
+        if not item["external"]:
+            try:
+                share = open_sealed(private_keys[name], entry["envelope"], share_aad(name))
+            except (PrivacyCryptoError, KeyError, TypeError) as exc:
+                raise GuardianReleaseError("share_unreadable", f"guardian {name}: sealed share does not open") from exc
+            wrapped = seal(v["ephemeral_public_key"], share, release_aad(str(job.id), name))
+        else:
+            wrapped = await _release_external(db, factory, ext_guardians[name], name, job, machine, v, entry, item)
+        released.append({
+            "guardian": name,
+            "share_index": item["share_index"],
+            "wrapped_share": wrapped,
+            "log_leaf_index": item["log_leaf_index"],
+            "log_leaf_hash": item["log_leaf_hash"],
+            "verdict_id": v["verdict_id"],
+        })
     return released
+
+
+# A guardian (or witness) that already saw a LARGER log than the bundle we built refuses it as a
+# rollback. That happens honestly when two releases run at once and the later one arrives first,
+# so it is retried with fresh state; a real inconsistency (log_inconsistent) is never retried.
+_RETRYABLE_REFUSALS = ("log_rolled_back",)
+_EXTERNAL_ATTEMPTS = 3
+
+
+async def _release_external(db, factory, base_url, name, job, machine, verdict, entry, item) -> dict[str, Any]:
+    """Ask an external guardian for its share. It checks our log itself: we send a SIGNED
+    checkpoint, a consistency proof from the largest log it has already seen, and an inclusion
+    proof of the KEY_RELEASE entry, all for one pinned tree size."""
+    last: GuardianReleaseError | None = None
+    for _ in range(_EXTERNAL_ATTEMPTS):
+        try:
+            return await _release_external_once(db, factory, base_url, name, job, machine, verdict, entry, item)
+        except GuardianReleaseError as exc:
+            last = exc
+            if not (exc.code.endswith(_RETRYABLE_REFUSALS) or exc.code in ("external_guardian_log_ahead", "witness_threshold_not_met")):
+                raise
+    assert last is not None
+    raise last
+
+
+async def _release_external_once(db, factory, base_url, name, job, machine, verdict, entry, item) -> dict[str, Any]:
+    from app.services.log_witness import WitnessError
+    from app.services.transparency_log import get_log_size, get_proofs_at_size
+
+    try:
+        async with factory() as client:
+            state_resp = await client.get(f"{base_url}/state")
+            if state_resp.status_code != 200:
+                raise GuardianReleaseError("external_guardian_unavailable", f"guardian {name}: state HTTP {state_resp.status_code}")
+            seen = int(state_resp.json().get("tree_size") or 0)
+            size = await get_log_size(db)
+            if seen > size:
+                raise GuardianReleaseError("external_guardian_log_ahead", f"guardian {name} has seen a larger log than ours")
+            bundle = await get_proofs_at_size(db, item["log_leaf_index"], size, from_size=seen)
+            resp = await client.post(
+                f"{base_url}/release",
+                json={
+                    "job_id": str(job.id),
+                    "machine_id": str(machine.id),
+                    "attestation_verdict": verdict,
+                    "sealed_share": entry,
+                    "log_entry": item["log_payload"],
+                    "inclusion_proof": bundle["inclusion_proof"],
+                    "checkpoint": bundle["checkpoint"],
+                    "consistency_proof": bundle["consistency_proof"],
+                    "witness_cosignatures": bundle.get("witness_cosignatures", []),
+                },
+            )
+    except GuardianReleaseError:
+        raise
+    except WitnessError as exc:
+        # Too few witnesses cosigned the checkpoint: the guardian would refuse it anyway.
+        raise GuardianReleaseError("witness_threshold_not_met", str(exc)) from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        raise GuardianReleaseError("external_guardian_unavailable", f"guardian {name} could not be reached") from exc
+    if resp.status_code != 200:
+        code = "external_guardian_refused"
+        try:
+            code = f"external_guardian_refused:{resp.json().get('detail', '')}"[:120]
+        except ValueError:
+            pass
+        raise GuardianReleaseError(code, f"guardian {name} refused (HTTP {resp.status_code})")
+    try:
+        return resp.json()["wrapped_share"]
+    except (ValueError, KeyError) as exc:
+        raise GuardianReleaseError("external_guardian_bad_response", f"guardian {name} returned no share") from exc
+
+
+async def release_guardian_shares(
+    db: AsyncSession,
+    *,
+    job: Job,
+    machine: ProviderMachine,
+    attestation_verdict: dict[str, Any],
+    now: dt.datetime | None = None,
+    http_client_factory: Any = None,
+) -> list[dict[str, Any]]:
+    """Both phases without a commit in between. For callers that commit around it themselves
+    (the claim route uses the two phases separately)."""
+    plan = await prepare_guardian_release(db, job=job, machine=machine, attestation_verdict=attestation_verdict, now=now)
+    return await execute_guardian_release(
+        db, job=job, machine=machine, attestation_verdict=attestation_verdict, plan=plan, http_client_factory=http_client_factory
+    )

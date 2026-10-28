@@ -10,6 +10,10 @@ raises :class:`EndpointNotAvailableError` -- it never fabricates a result.
 from .client import ComputeCoinClient
 from .ccverify import verify_receipt
 from .crypto import (
+    GuardianPinError,
+    UnpinnedGuardianWarning,
+    check_guardian_pin,
+    guardian_manifest_fingerprint,
     decrypt_job_output,
     encrypt_job_input,
     generate_customer_keypair,
@@ -95,6 +99,10 @@ __all__ = [
     "ProviderEarnings",
     "Payout",
     "verify_receipt",
+    "GuardianPinError",
+    "UnpinnedGuardianWarning",
+    "check_guardian_pin",
+    "guardian_manifest_fingerprint",
     "encrypt_job_input",
     "decrypt_job_output",
     "split_data_key",

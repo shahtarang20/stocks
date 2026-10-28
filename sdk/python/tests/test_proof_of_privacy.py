@@ -27,7 +27,7 @@ from computecoin.privacy_crypto import (
 )
 
 VERDICT_FIELDS = (
-    "verdict_id", "machine_id", "image_hash", "tier_reached", "ephemeral_public_key",
+    "verdict_id", "job_id", "machine_id", "image_hash", "tier_reached", "ephemeral_public_key",
     "receipt_signing_public_key", "nonce", "issued_at", "expires_at", "verifier_public_key",
 )
 
@@ -87,13 +87,13 @@ def _path(m, leaves):
     return _path(m, leaves[:k]) + [_mth(leaves[k:])] if m < k else _path(m - k, leaves[k:]) + [_mth(leaves[:k])]
 
 
-def _receipt():
+def _receipt(verdict_job="j1"):
     vpriv, vpub = generate_ed25519_keypair()
     rpriv, rpub = generate_ed25519_keypair()
     verdict = {
-        "verdict_id": "v1", "machine_id": "m1", "image_hash": "ab" * 32, "tier_reached": "sealed",
+        "verdict_id": "v1", "job_id": verdict_job, "machine_id": "m1", "image_hash": "ab" * 32, "tier_reached": "sealed",
         "ephemeral_public_key": generate_x25519_keypair()[1], "receipt_signing_public_key": rpub,
-        "nonce": "n" * 16, "issued_at": "2026-10-26T10:00:00+00:00", "expires_at": "2026-10-26T10:30:00+00:00",
+        "nonce": "n" * 16, "issued_at": "2026-10-26T10:00:00+00:00", "expires_at": "2026-10-26T10:10:00+00:00",
         "verifier_public_key": vpub,
     }
     verdict["signature"] = sign(vpriv, canonical_json({f: verdict[f] for f in VERDICT_FIELDS}))
@@ -163,6 +163,16 @@ def test_tampered_receipts_fail(attack):
     assert verify_receipt(r, vpub)["verified"] is False
 
 
+def test_receipt_whose_verdict_was_attested_for_another_job_fails():
+    """B9: everything else in this receipt is genuine, signed and logged; only the verdict names
+    another job. That verdict's host keys were never meant for this job, so the receipt fails."""
+    receipt, vpub = _receipt(verdict_job="j2")
+    result = verify_receipt(receipt, vpub, expected_image_hash="ab" * 32)
+    assert result["checks"]["verdict_for_this_job"] is False
+    assert result["checks"]["verdict_signature"] is True and result["checks"]["verdict_logged"] is True
+    assert result["verified"] is False
+
+
 def test_cli_requires_verifier_key_and_reports(tmp_path, capsys):
     receipt, vpub = _receipt()
     path = tmp_path / "r.json"
@@ -171,3 +181,115 @@ def test_cli_requires_verifier_key_and_reports(tmp_path, capsys):
     assert "VERIFIED" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         main([str(path)])
+
+
+def test_sdk_client_private_job_methods():
+    """Verify submit_private_job, get_private_result, and receipt verification in SDK."""
+    from computecoin import ComputeCoinClient
+    import httpx
+    from computecoin.crypto import generate_customer_keypair, seal, output_aad
+
+    cust_priv, cust_pub = generate_customer_keypair()
+    g_priv, g_pub = generate_x25519_keypair()
+    receipt, vpub = _receipt()
+
+    def handler(request: httpx.Request):
+        if request.url.path == "/v1/privacy/verifier-key":
+            return httpx.Response(
+                200,
+                json={
+                    "verifier_public_key": vpub,
+                    "guardians": {"guardian-1": g_pub},
+                    "threshold": 2,
+                },
+            )
+        elif request.url.path == "/v1/jobs" and request.method == "POST":
+            body = json.loads(request.content)
+            assert body["input"] == {}  # Plaintext input never sent!
+            assert "encrypted_input" in body
+            assert "dk_shares" in body
+            assert body["data_policy"]["result_public_key"] == cust_pub
+            return httpx.Response(
+                201,
+                json={
+                    "id": "job-test-priv-1",
+                    "workload_type": body["workload_type"],
+                    "model": body["model"],
+                    "status": "created",
+                    "isolation_tier": body["isolation_tier"],
+                    "input": {},
+                    "encrypted_input": body["encrypted_input"],
+                    "dk_shares": body["dk_shares"],
+                    "data_policy": body["data_policy"],
+                },
+            )
+        elif request.url.path == "/v1/jobs/job-test-priv-1":
+            # Simulate completed job with encrypted output
+            raw_out = json.dumps({"prediction": "confidential_result"})
+            enc_out = seal(cust_pub, raw_out.encode(), output_aad("job-test-priv-1"))
+            return httpx.Response(
+                200,
+                json={
+                    "id": "job-test-priv-1",
+                    "workload_type": "text-generation",
+                    "model": "meta/llama-3",
+                    "status": "completed",
+                    "isolation_tier": "sealed",
+                    "input": {},
+                    "encrypted_output": enc_out,
+                },
+            )
+        elif request.url.path == "/v1/privacy/receipts/job-test-priv-1":
+            return httpx.Response(200, json=receipt)
+        return httpx.Response(404)
+
+    client = ComputeCoinClient(
+        base_url="http://testserver",
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    # 1. submit_private_job
+    job = client.submit_private_job(
+        workload_type="text-generation",
+        model="meta/llama-3",
+        input_data={"prompt": "classified question"},
+        isolation_tier="sealed",
+        result_public_key=cust_pub,
+        guardians={"guardian-1": g_pub, "guardian-2": g_pub},
+        threshold=2,
+    )
+    assert job.id == "job-test-priv-1"
+    assert job.input == {}
+    assert job.encrypted_input is not None
+
+    # 2. get_private_result
+    decrypted = client.get_private_result("job-test-priv-1", cust_priv)
+    assert decrypted == {"prediction": "confidential_result"}
+
+    # 3. get_privacy_receipt & verify_privacy_receipt
+    rec = client.get_privacy_receipt("job-test-priv-1")
+    v_res = client.verify_privacy_receipt(rec, verifier_public_key=vpub)
+    assert v_res["verified"] is True
+
+
+
+def test_submit_private_job_sends_idempotency_key_as_header():
+    """The API ignores an idempotency key in the body; a retried submit must not create a second job."""
+    from computecoin import ComputeCoinClient
+    import httpx
+
+    _, cust_pub = generate_customer_keypair()
+    guardians = {"computecoin": generate_x25519_keypair()[1], "partner": generate_x25519_keypair()[1]}
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["header"] = request.headers.get("Idempotency-Key")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "j1", "workload_type": "text-generation", "model": "m", "status": "queued"})
+
+    client = ComputeCoinClient(base_url="http://api", api_key="k", transport=httpx.MockTransport(handler))
+    client.submit_private_job(workload_type="text-generation", model="m", input_data={"prompt": "x"},
+                              result_public_key=cust_pub, guardians=guardians, threshold=2, idempotency_key="abc-123")
+    assert seen["header"] == "abc-123"
+    assert "idempotency_key" not in seen["body"]

@@ -16,6 +16,8 @@ All binary values travel as lowercase hex.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -188,6 +190,22 @@ def share_aad(guardian: str) -> bytes:
 def release_aad(job_id: str, guardian: str) -> bytes:
     """AAD for a share re-sealed by a guardian to the host's in-RAM key, bound to one job."""
     return f"{VERSION}|host-release|{job_id}|{guardian}".encode()
+
+
+# --------------------------------------------------------------------------- output commitments (L4)
+
+def derive_output_commitment_key(data_key: bytes) -> bytes:
+    """Derive commitment key from DK using HKDF-SHA256 (Locked Decision L4)."""
+    if len(data_key) != 32:
+        raise PrivacyCryptoError("data key must be 32 bytes")
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=f"{VERSION}|output-commit".encode()).derive(data_key)
+
+
+def compute_output_commitment(data_key: bytes, output: Any) -> str:
+    """Compute HMAC-SHA256 over canonical JSON of the job output using HKDF-derived key."""
+    key = derive_output_commitment_key(data_key)
+    msg = canonical_json(output) if not isinstance(output, (bytes, bytearray)) else bytes(output)
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
 # --------------------------------------------------------------------------- Shamir over GF(2^8)

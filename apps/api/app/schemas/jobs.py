@@ -197,6 +197,15 @@ class ClaimResponse(BaseModel):
     image_digest: str | None = None
     artifact_upload: ArtifactUploadGrant
     lease_expires_at: dt.datetime
+    encrypted_input: dict | None = None
+    result_public_key: str | None = None
+    # Kept for older agents (R10); always null since WP-B: keys come from /jobs/{id}/keys.
+    wrapped_shares: list[dict] | None = None
+    verdict_id: str | None = None
+    # WP-B: a private claim carries no keys. The agent attests with this nonce (fresh keys for
+    # this job), then calls POST /v1/agents/jobs/{job_id}/keys with the job-bound verdict.
+    key_attestation_required: bool = False
+    key_attestation_nonce: str | None = None
 
 
 class JobHeartbeatRequest(BaseModel):
@@ -240,6 +249,9 @@ class JobResultRequest(BaseModel):
     # Compared against the registry's pinned digest (model identity audit); a
     # provider that reports nothing is simply not audited on this dimension.
     model_weight_hash: str | None = Field(default=None, max_length=128)
+    encrypted_output: dict | None = None
+    output_commitment: str | None = None
+    wipe_receipt: dict | None = None
 
 
 class JobResultResponse(BaseModel):

@@ -1,25 +1,46 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Info, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, Download, Info, Key, Loader2, Lock } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   api,
   CREDITS_LABEL,
   type CreateJobInput,
   type Job,
+  privacyApi,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { createJobErrorMessage } from "@/lib/jobs";
+import { checkGuardianPin, preparePrivateJob } from "@/lib/ccpp";
+
+// The guardian-set fingerprint ComputeCoin publishes outside this website (spec 6e). Set at build time.
+const GUARDIAN_PIN = process.env.NEXT_PUBLIC_PRIVACY_GUARDIAN_PIN;
+const REQUIRE_GUARDIAN_PIN = process.env.NEXT_PUBLIC_PRIVACY_REQUIRE_GUARDIAN_PIN === "1";
+import {
+  getOrGenerateCustomerKey,
+  markCustomerKeyBackedUp,
+  exportCustomerKeyBackupJson,
+  type StoredCustomerKey,
+} from "@/lib/customer-keys";
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
@@ -126,6 +147,12 @@ export default function NewJobPage() {
   const { accessToken } = useAuth();
   const router = useRouter();
 
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [pendingValues, setPendingValues] = useState<FormValues | null>(null);
+  const [customerKey, setCustomerKey] = useState<StoredCustomerKey | null>(null);
+  const [prepError, setPrepError] = useState<string | null>(null);
+  const [isPreparing, setIsPreparing] = useState(false);
+
   const {
     register,
     handleSubmit,
@@ -151,6 +178,9 @@ export default function NewJobPage() {
 
   const workloadType = watch("workload_type");
   const isolationTier = watch("isolation_tier");
+  const isPrivateTier = Boolean(
+    isolationTier && ["sealed", "sealed_pro", "confidential"].includes(isolationTier)
+  );
 
   const createMut = useMutation({
     mutationFn: (input: CreateJobInput) =>
@@ -162,14 +192,13 @@ export default function NewJobPage() {
     },
   });
 
-  function onSubmit(values: FormValues) {
+  async function executeJobSubmission(values: FormValues, key: StoredCustomerKey | null) {
     let input: Record<string, unknown>;
     if (values.workload_type === "text-generation") {
       input = { prompt: (values.prompt ?? "").trim() };
       const mt = (values.max_tokens ?? "").trim();
       if (mt) input.max_tokens = Number(mt);
     } else {
-      // Already validated as {items:[...]} in the schema.
       input = JSON.parse((values.items_json ?? "").trim());
     }
 
@@ -187,7 +216,92 @@ export default function NewJobPage() {
     const machine = (values.machine_id ?? "").trim();
     if (machine) payload.machine_id = machine;
 
+    if (
+      values.isolation_tier &&
+      ["sealed", "sealed_pro", "confidential"].includes(values.isolation_tier)
+    ) {
+      if (!key) {
+        setPrepError("No customer encryption key available");
+        return;
+      }
+      setIsPreparing(true);
+      setPrepError(null);
+      try {
+        const verifier = await privacyApi.getVerifierKeys();
+        // Refuse a guardian set that does not match the fingerprint published out of band.
+        checkGuardianPin(
+          verifier.guardians,
+          verifier.threshold,
+          GUARDIAN_PIN,
+          REQUIRE_GUARDIAN_PIN
+        );
+        const prep = preparePrivateJob(
+          input,
+          verifier.guardians,
+          verifier.threshold,
+          key.publicKeyHex
+        );
+        payload.input = {}; // Cleaned: plaintext is never sent to the API
+        payload.encrypted_input = prep.encrypted_input as any;
+        payload.dk_shares = prep.dk_shares as any;
+        payload.data_policy = {
+          ...(payload.data_policy || {}),
+          result_public_key: key.publicKeyHex,
+        };
+      } catch (err: any) {
+        setIsPreparing(false);
+        setPrepError("Failed to prepare private job encryption: " + (err?.message || String(err)));
+        return;
+      }
+      setIsPreparing(false);
+    }
+
     createMut.mutate(payload);
+  }
+
+  async function onSubmit(values: FormValues) {
+    setPrepError(null);
+    if (
+      values.isolation_tier &&
+      ["sealed", "sealed_pro", "confidential"].includes(values.isolation_tier)
+    ) {
+      const key = await getOrGenerateCustomerKey();
+      setCustomerKey(key);
+      if (!key.backedUp) {
+        setPendingValues(values);
+        setBackupModalOpen(true);
+        return;
+      }
+      await executeJobSubmission(values, key);
+    } else {
+      await executeJobSubmission(values, null);
+    }
+  }
+
+  async function handleDownloadKeyBackup() {
+    try {
+      const jsonStr = await exportCustomerKeyBackupJson();
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "computecoin-private-key-backup.json";
+      a.click();
+      URL.revokeObjectURL(url);
+
+      await markCustomerKeyBackedUp();
+      const updatedKey = customerKey ? { ...customerKey, backedUp: true } : null;
+      setCustomerKey(updatedKey);
+      setBackupModalOpen(false);
+
+      if (pendingValues && updatedKey) {
+        const toSubmit = pendingValues;
+        setPendingValues(null);
+        await executeJobSubmission(toSubmit, updatedKey);
+      }
+    } catch (err: any) {
+      setPrepError("Key backup failed: " + (err?.message || String(err)));
+    }
   }
 
   return (
@@ -220,13 +334,13 @@ export default function NewJobPage() {
       <Card>
         <CardContent className="p-6">
           <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-5">
-            {createMut.isError ? (
+            {createMut.isError || prepError ? (
               <div
                 role="alert"
                 className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
               >
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{createJobErrorMessage(createMut.error)}</span>
+                <span>{prepError || createJobErrorMessage(createMut.error)}</span>
               </div>
             ) : null}
 
@@ -252,20 +366,32 @@ export default function NewJobPage() {
                   <option value="container">Container (shared kernel)</option>
                   <option value="gvisor">gVisor sandbox (runsc)</option>
                   <option value="microvm">microVM (Kata / Firecracker)</option>
-                  <option value="sealed" disabled>Sealed (private): Python SDK only</option>
-                  <option value="sealed_pro" disabled>Sealed Pro (private): Python SDK only</option>
-                  <option value="confidential" disabled>Confidential (private): Python SDK only</option>
+                  <option value="sealed">Sealed (private)</option>
+                  <option value="sealed_pro">Sealed Pro (private)</option>
+                  <option value="confidential">Confidential (private)</option>
                 </select>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {isolationTier === "gvisor" || isolationTier === "microvm" ? (
+                  {isPrivateTier ? (
+                    <span className="text-emerald-400">
+                      Your input is encrypted in this browser and only your browser can decrypt the
+                      result; ComputeCoin&apos;s servers never see either. The host that runs the job
+                      decrypts the input in memory to compute on it. Hardware attestation (TPM / TEE)
+                      is not live yet, so today this relies on the host running the published sealed
+                      image and on its bonded stake, not on a hardware proof.
+                      {GUARDIAN_PIN ? null : (
+                        <>
+                          {" "}This build does not pin the guardian keys, so you are trusting ComputeCoin
+                          to serve the right ones.
+                        </>
+                      )}
+                    </span>
+                  ) : isolationTier === "gvisor" || isolationTier === "microvm" ? (
                     <span>Stronger sandboxing against the job escaping. The host can still see the job.</span>
                   ) : (
                     <span className="text-amber-400">
                       The host can see this job&apos;s input and output. Do not send private data.
                     </span>
-                  )}{" "}
-                  Private tiers encrypt your input before it leaves your computer, so they are
-                  submitted with the Python SDK (<code>prepare_private_job</code>), not from this form.
+                  )}
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -449,8 +575,12 @@ export default function NewJobPage() {
               <Button asChild type="button" variant="outline">
                 <Link href="/dashboard/jobs">Cancel</Link>
               </Button>
-              <Button type="submit" disabled={createMut.isPending}>
-                {createMut.isPending ? (
+              <Button type="submit" disabled={createMut.isPending || isPreparing}>
+                {isPreparing ? (
+                  <>
+                    <Loader2 className="animate-spin" /> Encrypting payload…
+                  </>
+                ) : createMut.isPending ? (
                   <>
                     <Loader2 className="animate-spin" /> Submitting…
                   </>
@@ -462,6 +592,73 @@ export default function NewJobPage() {
           </form>
         </CardContent>
       </Card>
+
+      {/* ---- Mandatory Customer Key Backup Dialog ---- */}
+      <Dialog
+        open={backupModalOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBackupModalOpen(false);
+            setPendingValues(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <div className="flex items-center gap-2 text-warning">
+              <Key className="h-5 w-5" />
+              <DialogTitle>Backup Your Private Key (Required)</DialogTitle>
+            </div>
+            <DialogDescription className="text-left text-sm pt-2">
+              You are submitting a private job with end-to-end encryption.
+              Your encryption key is generated and stored{" "}
+              <strong className="text-foreground">exclusively in this browser</strong> (IndexedDB).
+              ComputeCoin servers <strong className="text-foreground">never receive or store</strong> your private key.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 rounded-md border border-border bg-surface-2/40 p-4 text-xs">
+            <div className="flex items-start gap-2 text-warning">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold text-foreground">Critical Warning:</p>
+                <p className="text-muted-foreground">
+                  If you clear your browser cache, use an incognito window, or switch devices without a backup,
+                  <strong className="text-foreground"> you will permanently lose access</strong> to your decrypted job results.
+                </p>
+              </div>
+            </div>
+
+            {customerKey ? (
+              <div className="pt-1">
+                <span className="text-muted-foreground">Public Key:</span>
+                <p className="font-mono text-[11px] break-all select-all text-foreground mt-0.5">
+                  {customerKey.publicKeyHex}
+                </p>
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setBackupModalOpen(false);
+                setPendingValues(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              onClick={handleDownloadKeyBackup}
+              className="gap-2"
+            >
+              <Download className="h-4 w-4" /> Download Key Backup &amp; Submit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

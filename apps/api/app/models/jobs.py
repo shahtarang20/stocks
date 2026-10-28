@@ -109,6 +109,8 @@ class Job(Base, TimestampMixin):
     dk_shares: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     value_at_risk: Mapped[decimal.Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     privacy_receipt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    output_commitment: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    guardian_releases: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
 
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

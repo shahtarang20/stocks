@@ -56,3 +56,6 @@ htmlcov/
 contracts/launch.31337.json
 contracts/pool.31337.json
 contracts/verification/31337/
+
+# Project-local test tools (software TPM, tpm2-tools) unpacked from Ubuntu packages; never committed.
+/.tools/

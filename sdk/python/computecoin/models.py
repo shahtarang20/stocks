@@ -159,6 +159,13 @@ class Job(BaseModel):
     final_cost: Optional[str] = None  # money -> string; null in Phase 4
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    isolation_tier: Optional[str] = "container"
+    encrypted_input: Optional[dict[str, Any]] = None
+    encrypted_output: Optional[dict[str, Any]] = None
+    dk_shares: Optional[dict[str, Any]] = None
+    data_policy: Optional[dict[str, Any]] = None
+    output_commitment: Optional[str] = None
+    privacy_receipt_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     started_at: Optional[str] = None

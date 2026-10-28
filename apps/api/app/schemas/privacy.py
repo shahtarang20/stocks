@@ -38,8 +38,12 @@ class InclusionProofOut(BaseModel):
 
 class VerifierKeysOut(BaseModel):
     verifier_public_key: str
+    log_public_key: str
     guardians: dict[str, str]
     threshold: int
+    # For operators to publish out of band. Clients recompute it from the keys above and compare it
+    # with the value they pinned; they never trust this field.
+    guardian_fingerprint: str
 
 
 class PrivacyReceiptOut(BaseModel):
@@ -56,6 +60,9 @@ class PrivacyReceiptOut(BaseModel):
     merkle_root: str
     inclusion_proofs: dict[str, Any]
     verified: bool
+    # Added at read time (never stored on the receipt): see docs/specs/ccpp-v1.md sections 6b and 6c.
+    anchor: dict[str, Any] | None = None
+    witness: dict[str, Any] | None = None
     created_at: dt.datetime
 
 

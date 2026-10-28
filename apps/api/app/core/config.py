@@ -22,6 +22,7 @@ _DEV_SIGNER_KEY = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b
 # Proof-of-Privacy (ADR-0005) development keys. Public knowledge, so a non-dev deployment that
 # still uses them is refused at boot (see the validator).
 _DEV_PRIVACY_VERIFIER_KEY = "7c1f0e9a3b5d2c4e6f8a0b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6"
+_DEV_PRIVACY_LOG_SIGNING_KEY = "5a0c3e7b9d1f2a4c6e8b0d2f4a6c8e0b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c"
 _DEV_PRIVACY_GUARDIAN_PRIVATE_KEYS = (
     '{"computecoin":"28c9a4d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b4c",'
     '"partner":"409c8d7e6f5a4b3c2d1e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d65"}'
@@ -252,11 +253,35 @@ class Settings(BaseSettings):
     # Empty = derived from PRIVACY_GUARDIAN_PRIVATE_KEYS.
     PRIVACY_GUARDIAN_PUBLIC_KEYS: str = ""
     PRIVACY_GUARDIAN_THRESHOLD: int = 2
+    # JSON {guardian_name: url} for external guardian services (WP4).
+    PRIVACY_EXTERNAL_GUARDIANS: str = "{}"
+    # Ed25519 seed (hex) that signs transparency-log checkpoints. External guardians pin its
+    # public key, so they verify the log themselves instead of trusting a root we hand them.
+    PRIVACY_LOG_SIGNING_KEY: str = _DEV_PRIVACY_LOG_SIGNING_KEY
     # The Sealed tiers need a real TPM quote checked against the TPM vendor's certificate chain,
     # and Confidential needs TDX/SEV-SNP plus NVIDIA reports. Neither verifier exists yet, so
     # verdicts can only be issued on the software attestation path, which is for development
-    # and tests ONLY (the host holds the key that "signs" its own quote). Refused in production.
     PRIVACY_SOFTWARE_ATTESTATION: bool = False
+    # Genuine hardware attestation verifiers (TPM 2.0 / TDX / SEV-SNP / NVIDIA CC - WP-F).
+    # Cannot be enabled without trusted vendor root certificates configured.
+    PRIVACY_HARDWARE_ATTESTATION: bool = False
+    PRIVACY_HARDWARE_ROOT_CERTS: str = ""
+
+    # Transparency log on-chain anchoring (WP-C / WP9)
+    PRIVACY_ANCHOR_ENABLED: bool = False
+    PRIVACY_ANCHOR_RPC_URL: str = ""
+    PRIVACY_ANCHOR_CHAIN_ID: int = _LOCAL_CHAIN_ID
+    PRIVACY_ANCHOR_VAULT_ADDRESS: str = ""
+    PRIVACY_ANCHOR_PRIVATE_KEY: str = ""
+    PRIVACY_ANCHOR_INTERVAL_SECONDS: int = 600
+
+    # Transparency log witnesses (WP-E / WP21)
+    # JSON {name: {"url": str, "public_key": str}} for independent log witnesses.
+    PRIVACY_WITNESSES: str = "{}"
+    PRIVACY_WITNESS_THRESHOLD: int = 0
+    # How often the worker has the latest checkpoint cosigned (receipts carry the result).
+    PRIVACY_WITNESS_INTERVAL_SECONDS: int = 300
+
     CHAIN_RECONCILE_ENABLED: bool = False
     CHAIN_RECONCILE_INTERVAL_SECONDS: int = 900
     #: Max block span per ``eth_getLogs`` call. Hosted RPC providers cap this
@@ -275,8 +300,19 @@ class Settings(BaseSettings):
 
         A publicly-known AUTH_SECRET lets anyone forge admin JWTs and artifact
         grants; the dev signer key lets anyone forge settlement vouchers."""
+        if self.PRIVACY_HARDWARE_ATTESTATION:
+            from app.services.hardware_attestation import parse_root_certs
+
+            try:
+                # JSON {flavor: [PEM, ...]}; every entry must be a valid, self-signed CA certificate.
+                parse_root_certs(self.PRIVACY_HARDWARE_ROOT_CERTS)
+            except ValueError as exc:
+                raise ValueError(
+                    f"PRIVACY_HARDWARE_ATTESTATION cannot be enabled without valid PRIVACY_HARDWARE_ROOT_CERTS: {exc}"
+                ) from exc
         if self.ENVIRONMENT.lower() in _DEV_ENVS:
             return self
+
         insecure = []
         if self.AUTH_SECRET == _DEV_AUTH_SECRET:
             insecure.append("AUTH_SECRET")
@@ -285,6 +321,8 @@ class Settings(BaseSettings):
         if self.PRIVACY_ENABLED:
             if self.PRIVACY_VERIFIER_SIGNING_KEY == _DEV_PRIVACY_VERIFIER_KEY:
                 insecure.append("PRIVACY_VERIFIER_SIGNING_KEY")
+            if self.PRIVACY_LOG_SIGNING_KEY == _DEV_PRIVACY_LOG_SIGNING_KEY:
+                insecure.append("PRIVACY_LOG_SIGNING_KEY")
             if self.PRIVACY_GUARDIAN_PRIVATE_KEYS == _DEV_PRIVACY_GUARDIAN_PRIVATE_KEYS:
                 insecure.append("PRIVACY_GUARDIAN_PRIVATE_KEYS")
             if self.PRIVACY_SOFTWARE_ATTESTATION:
@@ -295,6 +333,47 @@ class Settings(BaseSettings):
                 local_guardians = -1
             if local_guardians < 0 or local_guardians >= self.PRIVACY_GUARDIAN_THRESHOLD:
                 insecure.append("PRIVACY_GUARDIAN_PRIVATE_KEYS (must hold fewer keys than the threshold)")
+        if self.PRIVACY_ANCHOR_ENABLED:
+            # The anchor client speaks JSON-RPC over HTTP(S) only.
+            if not self.PRIVACY_ANCHOR_RPC_URL.startswith(("http://", "https://")):
+                insecure.append("PRIVACY_ANCHOR_RPC_URL")
+            if not self.PRIVACY_ANCHOR_VAULT_ADDRESS or not _ADDRESS_RE.fullmatch(self.PRIVACY_ANCHOR_VAULT_ADDRESS):
+                insecure.append("PRIVACY_ANCHOR_VAULT_ADDRESS")
+            clean_anchor_key = self.PRIVACY_ANCHOR_PRIVATE_KEY.removeprefix("0x").lower()
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", clean_anchor_key)
+                or clean_anchor_key == _DEV_SIGNER_KEY.removeprefix("0x").lower()
+                # Keys stay where they belong (R8): the anchor key only commits roots; it must not
+                # also be the key that signs settlement vouchers.
+                or clean_anchor_key == self.PLATFORM_SIGNER_PRIVATE_KEY.removeprefix("0x").lower()
+            ):
+                insecure.append("PRIVACY_ANCHOR_PRIVATE_KEY")
+            if self.PRIVACY_ANCHOR_CHAIN_ID <= 0 or self.PRIVACY_ANCHOR_CHAIN_ID == _LOCAL_CHAIN_ID:
+                insecure.append("PRIVACY_ANCHOR_CHAIN_ID")
+        if self.PRIVACY_ENABLED and self.PRIVACY_WITNESS_THRESHOLD > 0:
+            try:
+                w_dict = json.loads(self.PRIVACY_WITNESSES or "{}")
+                distinct_keys = {
+                    str(w.get("public_key", "")).removeprefix("0x").lower() for w in w_dict.values() if isinstance(w, dict)
+                } if isinstance(w_dict, dict) else set()
+                # The threshold counts independent witnesses: one key under two names is one witness.
+                if not isinstance(w_dict, dict) or len(distinct_keys) < self.PRIVACY_WITNESS_THRESHOLD:
+                    insecure.append("PRIVACY_WITNESSES")
+                else:
+                    for w_name, w_info in w_dict.items():
+                        if not isinstance(w_info, dict):
+                            insecure.append(f"PRIVACY_WITNESSES({w_name})")
+                            break
+                        url = str(w_info.get("url", ""))
+                        pk = str(w_info.get("public_key", "")).removeprefix("0x")
+                        if not (url.startswith("http://") or url.startswith("https://")):
+                            insecure.append(f"PRIVACY_WITNESSES({w_name}.url)")
+                            break
+                        if len(pk) != 64 or not re.fullmatch(r"[0-9a-fA-F]{64}", pk):
+                            insecure.append(f"PRIVACY_WITNESSES({w_name}.public_key)")
+                            break
+            except Exception:
+                insecure.append("PRIVACY_WITNESSES")
         if self.SETTLEMENT_ENABLED and self.PLATFORM_SIGNER_PRIVATE_KEY == _DEV_SIGNER_KEY:
             insecure.append("PLATFORM_SIGNER_PRIVATE_KEY")
         if self.SETTLEMENT_ENABLED:

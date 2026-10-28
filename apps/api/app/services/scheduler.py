@@ -159,7 +159,7 @@ def _machine_supports_tier_and_policy(m: ProviderMachine, job: Job) -> tuple[boo
     if req_tier == "sealed":
         if "sealed" not in machine_tiers and "sealed_pro" not in machine_tiers:
             return False, "isolation_tier_not_supported_by_machine"
-        if not m.capability or m.capability.verification_status != "VERIFIED":
+        if not m.capability or (getattr(m.capability, "verification_status", "") or "").upper() != "VERIFIED":
             return False, "isolation_tier_not_supported_by_machine"
         if bonded_stake < decimal.Decimal("1000.00"):
             return False, "insufficient_stake_for_sealed"
@@ -170,7 +170,7 @@ def _machine_supports_tier_and_policy(m: ProviderMachine, job: Job) -> tuple[boo
     if req_tier == "sealed_pro":
         if "sealed_pro" not in machine_tiers:
             return False, "isolation_tier_not_supported_by_machine"
-        if not m.capability or m.capability.verification_status != "VERIFIED":
+        if not m.capability or (getattr(m.capability, "verification_status", "") or "").upper() != "VERIFIED":
             return False, "isolation_tier_not_supported_by_machine"
         if not getattr(m, "memory_encryption_active", False):
             return False, "memory_encryption_not_active"
@@ -185,7 +185,7 @@ def _machine_supports_tier_and_policy(m: ProviderMachine, job: Job) -> tuple[boo
     if req_tier == "confidential":
         if "confidential" not in machine_tiers:
             return False, "isolation_tier_not_supported_by_machine"
-        if not m.capability or m.capability.verification_status != "VERIFIED":
+        if not m.capability or (getattr(m.capability, "verification_status", "") or "").upper() != "VERIFIED":
             return False, "isolation_tier_not_supported_by_machine"
         return True, None
 

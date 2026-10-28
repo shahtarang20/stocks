@@ -55,6 +55,8 @@ async def create_privacy_receipt_for_job(
         raise ValueError("attestation verdict signature is invalid")
     if attestation_verdict.get("machine_id") != str(machine.id) or job.machine_id != machine.id:
         raise ValueError("verdict, job and machine do not belong together")
+    if attestation_verdict.get("job_id") != str(job.id):
+        raise ValueError("the verdict was not attested for this job")
 
     leaf_indices = [verdict_leaf_index] + [int(r["log_leaf_index"]) for r in guardian_releases]
     if wipe_receipt is not None:
@@ -112,6 +114,7 @@ def verify_privacy_receipt_offline(receipt: dict[str, Any], verifier_public_hex:
     checks["attestation_verdict_signature"] = verify_verdict_signature(verdict, verifier_public_hex) if verdict else False
     checks["tier_matches"] = TIER_RANK.get(str(verdict.get("tier_reached")), -1) >= TIER_RANK.get(str(receipt.get("isolation_tier")), 99)
     checks["image_matches"] = bool(verdict) and receipt.get("image_hash") == verdict.get("image_hash")
+    checks["verdict_for_this_job"] = bool(job_id) and verdict.get("job_id") == job_id
 
     root = receipt.get("merkle_root", "")
     proofs = receipt.get("inclusion_proofs") or {}
@@ -146,6 +149,7 @@ def verify_privacy_receipt_offline(receipt: dict[str, Any], verifier_public_hex:
         checks["attestation_verdict_signature"] is True
         and checks["tier_matches"]
         and checks["image_matches"]
+        and checks["verdict_for_this_job"]
         and checks["verdict_logged"]
         and all(proof_results.values())
         and checks["wipe_receipt_signature"] in (True, "absent")

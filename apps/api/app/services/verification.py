@@ -318,6 +318,12 @@ async def create_shadow_job(
         execution_mode=primary.execution_mode,
         isolation_tier=primary.isolation_tier,
         shadow_of_job_id=primary.id,
+        encrypted_input=primary.encrypted_input,
+        dk_shares=primary.dk_shares,
+        data_policy=primary.data_policy,
+        # The stake gate (scheduler + guardian release) reads this; without it a shadow
+        # of a private job would hand the Data Key to an under-staked machine.
+        value_at_risk=primary.value_at_risk,
     )
     machine = await _pick_shadow_machine(db, primary, shadow, now)
     if machine is None:
@@ -378,7 +384,53 @@ async def resolve_redundancy(
         return check
 
     primary = await db.get(Job, shadow.shadow_of_job_id)
-    if primary is None or primary.output is None:
+    if primary is None:
+        check.status = "inconclusive"
+        check.resolved_at = utcnow()
+        check.detail = {**(check.detail or {}), "reason": "primary_missing"}
+        await db.flush()
+        return check
+
+    # ADR-0005 & WP5: Output commitment integrity check for private jobs
+    is_private = (primary.isolation_tier or "open").lower() in ("sealed", "sealed_pro", "confidential")
+    if is_private:
+        if not primary.output_commitment or not shadow.output_commitment:
+            check.status = "inconclusive"
+            check.resolved_at = utcnow()
+            check.detail = {**(check.detail or {}), "reason": "output_commitment_missing"}
+            await db.flush()
+            return check
+
+        matched = secrets.compare_digest(primary.output_commitment, shadow.output_commitment)
+        similarity = decimal.Decimal("1.0000") if matched else decimal.Decimal("0.0000")
+        check.matched = matched
+        check.similarity = similarity
+        check.status = "matched" if matched else "mismatched"
+        check.resolved_at = utcnow()
+        check.detail = {
+            **(check.detail or {}),
+            "deterministic": True,
+            "private": True,
+            "commitment_matched": matched,
+        }
+        await _record_result(
+            db,
+            job_id=primary.id,
+            kind="redundant",
+            passed=matched,
+            expected_hash=primary.output_commitment,
+            actual_hash=shadow.output_commitment,
+            detail={
+                "shadow_job_id": str(shadow.id),
+                "similarity": str(similarity),
+                "deterministic": True,
+                "private": True,
+            },
+        )
+        await db.flush()
+        return check
+
+    if primary.output is None:
         check.status = "inconclusive"
         check.resolved_at = utcnow()
         check.detail = {**(check.detail or {}), "reason": "primary_output_missing"}

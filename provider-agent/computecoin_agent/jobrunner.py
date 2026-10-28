@@ -9,6 +9,8 @@ This module owns the agent side of the Phase 4 job protocol
   (simulated in-process, or a hardened container -- never arbitrary shell);
 * streams log chunks (``POST /v1/agents/jobs/{id}/logs``);
 * extends the lease with a heartbeat (``POST /v1/agents/jobs/{id}/heartbeat``);
+* for a private job, attests fresh in-RAM keys for THAT job and fetches its key shares once
+  (``POST /v1/agents/jobs/{id}/keys``);
 * uploads produced artifacts via the short-lived signed upload grant;
 * submits the idempotent receipt (``POST /v1/agents/jobs/{id}/result``).
 
@@ -30,9 +32,11 @@ The httpx transport is injectable, so the whole loop runs offline in tests.
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from typing import Any, Callable, Optional
 
+from .attestation import AttestationSession, perform_attestation
 from .executor import (
     Artifact,
     ExecutionResult,
@@ -48,6 +52,7 @@ from .heartbeat import (
     canonical_bytes,
     sign_contract,
 )
+from .privacy import execute_sealed_job
 
 # Header carrying the short-lived, job-scoped artifact upload grant token.
 UPLOAD_TOKEN_HEADER = "X-ComputeCoin-Upload-Token"
@@ -58,6 +63,18 @@ _MAX_ERROR_MESSAGE = 500
 
 class JobRunnerError(RuntimeError):
     """A job-protocol transport/HTTP error (non-2xx where 2xx was required)."""
+
+
+class KeyReleaseError(JobRunnerError):
+    """The backend refused to release a private job's keys.
+
+    ``job_closed`` is True when the backend already ended the job itself (it fails the job when
+    the guardians refuse, and a 404 means the job is no longer ours), so no result is posted."""
+
+    def __init__(self, message: str, *, code: str, job_closed: bool):
+        super().__init__(message)
+        self.code = code
+        self.job_closed = job_closed
 
 
 # --------------------------------------------------------------------------- #
@@ -117,8 +134,12 @@ def claim_job(
     transport: Any = None,
     timestamp: Optional[int] = None,
     timeout: float = 30.0,
+    accept_private: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Claim the next job reserved for this machine.
+
+    ``accept_private`` says this agent holds a current attestation session; without it the
+    backend never hands out a private job (no keys are released to a host that cannot use them).
 
     Returns the job-spec dict (RESERVED -> RUNNING, lease started) on 200, or
     ``None`` when the backend returns 204 (no job available). A non-{200,204}
@@ -133,7 +154,7 @@ def claim_job(
         url,
         machine_id,
         machine_secret,
-        {"machine_id": machine_id},
+        {"machine_id": machine_id, "accept_private": bool(accept_private)},
         transport=transport,
         timeout=timeout,
         timestamp=timestamp,
@@ -144,6 +165,48 @@ def claim_job(
         raise JobRunnerError(f"claim failed: HTTP {resp.status_code}")
     return resp.json()
 
+
+def fetch_job_keys(
+    base_url: str,
+    machine_id: str,
+    machine_secret: str,
+    job_id: str,
+    verdict_id: str,
+    *,
+    transport: Any = None,
+    timestamp: Optional[int] = None,
+    timeout: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Fetch a private job's key shares, wrapped to the host key of the job-bound verdict.
+
+    The backend releases them once per job; any refusal raises :class:`KeyReleaseError`.
+    """
+    url = base_url.rstrip("/") + f"/v1/agents/jobs/{job_id}/keys"
+    resp = _signed_post(
+        url,
+        machine_id,
+        machine_secret,
+        {"verdict_id": verdict_id},
+        transport=transport,
+        timeout=timeout,
+        timestamp=timestamp,
+    )
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:
+            detail = None
+        code = detail if isinstance(detail, str) else "key_release_refused"
+        raise KeyReleaseError(
+            f"key release refused: HTTP {resp.status_code} {code}",
+            code=code,
+            job_closed=resp.status_code == 404 or code == "key_release_failed",
+        )
+    data = resp.json()
+    shares = data.get("wrapped_shares")
+    if data.get("job_id") != job_id or data.get("verdict_id") != verdict_id or not isinstance(shares, list) or not shares:
+        raise KeyReleaseError("key release answered for another job or verdict", code="key_release_mismatch", job_closed=False)
+    return shares
 
 def post_logs(
     base_url: str,
@@ -297,55 +360,171 @@ def build_result_body(
         "evidence": {"output_schema_valid": bool(result.output_schema_valid)},
     }
     if result.status == "success":
-        body["output"] = result.output
+        if result.encrypted_output is not None:
+            body["encrypted_output"] = result.encrypted_output
+            if result.output_commitment is not None:
+                body["output_commitment"] = result.output_commitment
+            if result.wipe_receipt is not None:
+                body["wipe_receipt"] = result.wipe_receipt
+        else:
+            body["output"] = result.output
     else:
         err = result.error or {"code": "executor_error", "message": "execution failed"}
         body["error"] = {
             "code": _sanitize_message(err.get("code", "executor_error")),
             "message": _sanitize_message(err.get("message", "execution failed")),
         }
+        if result.wipe_receipt is not None:
+            body["wipe_receipt"] = result.wipe_receipt
     return body
 
 
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
-def run_one(
+def _run_private(
+    spec: JobSpec,
+    session: AttestationSession,
+    machine_id: str,
+    capabilities: Any,
+    executor_selector: Callable[..., Executor],
+) -> ExecutionResult:
+    """Unwrap the Data Key in RAM, run the workload on the decrypted input, seal the output."""
+    captured_metrics: dict[str, Any] = {}
+
+    def workload_runner(decrypted_input: dict[str, Any]) -> dict[str, Any]:
+        sub_spec = JobSpec(
+            job_id=spec.job_id,
+            workload_type=spec.workload_type,
+            model=spec.model,
+            input=decrypted_input,
+            execution_mode=spec.execution_mode,
+            image_digest=spec.image_digest,
+            limits=spec.limits,
+            isolation_tier=spec.isolation_tier,
+        )
+        sub_executor = executor_selector(sub_spec, capabilities)
+        exec_res = sub_executor.run(sub_spec)
+        if exec_res.status != "success":
+            raise RuntimeError(
+                exec_res.error.get("message", "workload failed")
+                if exec_res.error
+                else "workload failed"
+            )
+        if exec_res.metrics:
+            captured_metrics.update(exec_res.metrics)
+        return exec_res.output
+
+    started = time.monotonic()
+    try:
+        sealed_res = execute_sealed_job(
+            job_id=spec.job_id,
+            machine_id=machine_id,
+            ephemeral_private_key=session.ephemeral_private_key,
+            receipt_signing_private_key=session.receipt_signing_private_key,
+            result_public_key=spec.result_public_key,
+            encrypted_input=spec.encrypted_input,
+            wrapped_shares=spec.wrapped_shares,
+            workload_runner_fn=workload_runner,
+        )
+        result = ExecutionResult(
+            status="success",
+            execution_mode=spec.execution_mode,
+            # Billing reads duration_seconds: measure it here if the workload did not report it.
+            metrics={"duration_seconds": round(time.monotonic() - started, 3), **captured_metrics},
+            logs=[],
+            output_schema_valid=True,
+            encrypted_output=sealed_res.encrypted_output,
+            output_commitment=sealed_res.output_commitment,
+            wipe_receipt=sealed_res.wipe_receipt,
+        )
+    except Exception as exc:
+        result = ExecutionResult(
+            status="failed",
+            execution_mode=spec.execution_mode,
+            metrics={"duration_seconds": round(time.monotonic() - started, 3)},
+            logs=[],
+            output_schema_valid=False,
+            # Generic on purpose: an exception text could quote the decrypted input.
+            error={"code": "sealed_execution_error", "message": f"sealed execution failed ({type(exc).__name__})"},
+        )
+    return result
+
+
+def _failed_private(spec: JobSpec, code: str, message: str) -> ExecutionResult:
+    return ExecutionResult(
+        status="failed",
+        execution_mode=spec.execution_mode,
+        metrics={"duration_seconds": 0.0},
+        logs=[],
+        output_schema_valid=False,
+        error={"code": code, "message": message},
+    )
+
+
+def _run_private_claim(
     base_url: str,
     machine_id: str,
     machine_secret: str,
+    spec: JobSpec,
+    claim: dict[str, Any],
+    capabilities: Any,
+    executor_selector: Callable[..., Executor],
     *,
-    transport: Any = None,
-    capabilities: Optional[dict[str, Any]] = None,
-    executor_selector: Callable[..., Executor] = select_executor,
-    timestamp: Optional[int] = None,
-    timeout: float = 60.0,
-) -> dict[str, Any]:
-    """Claim at most ONE job, execute it, and submit the receipt.
+    transport: Any,
+    timestamp: Optional[int],
+    timeout: float,
+    attest_fn: Callable[..., AttestationSession],
+    hardware: Optional[Callable[[str], tuple[str, dict[str, Any]]]] = None,
+) -> ExecutionResult:
+    """One job, one key set (R5): fresh in-RAM keys are attested for THIS job with the claim's
+    job-bound challenge, the shares are fetched once with that verdict, and the keys are wiped
+    when the job ends, so nothing this host holds afterwards can open the job's data.
 
-    Returns a small summary dict::
+    Raises :class:`KeyReleaseError` when the backend refuses the shares."""
+    nonce = claim.get("key_attestation_nonce")
+    missing = [
+        name
+        for name, value in (
+            ("key_attestation_nonce", nonce),
+            ("encrypted_input", spec.encrypted_input),
+            ("result_public_key", spec.result_public_key),
+        )
+        if not value
+    ]
+    if missing:
+        return _failed_private(spec, "private_claim_incomplete", f"private claim is missing {', '.join(missing)}")
 
-        {"claimed": False}                               # 204, nothing to do
-        {"claimed": True, "job_id": ..., "status": ...}  # a job was processed
+    session: Optional[AttestationSession] = None
+    try:
+        try:
+            session = attest_fn(
+                base_url, machine_id, machine_secret,
+                tier=spec.isolation_tier, transport=transport, timeout=timeout, nonce=nonce,
+                **({"hardware": hardware} if hardware is not None else {}),
+            )
+        except Exception as exc:
+            return _failed_private(spec, "job_attestation_failed", f"attestation for this job failed ({type(exc).__name__})")
+        verdict = session.verdict or {}
+        if verdict.get("job_id") != spec.job_id or not verdict.get("verdict_id"):
+            return _failed_private(spec, "job_attestation_failed", "the verdict is not bound to this job")
+        shares = fetch_job_keys(
+            base_url, machine_id, machine_secret, spec.job_id, verdict["verdict_id"],
+            transport=transport, timestamp=timestamp, timeout=timeout,
+        )
+        job_spec = dataclasses.replace(spec, wrapped_shares=shares, verdict_id=verdict["verdict_id"])
+        return _run_private(job_spec, session, machine_id, capabilities, executor_selector)
+    finally:
+        if session is not None:
+            session.wipe()
 
-    On executor failure (including a hardware job with no usable Docker, which
-    raises :class:`HardwareUnavailableError` rather than silently simulating) the
-    receipt is submitted with ``status="failed"`` and a sanitized error.
-    """
-    claim = claim_job(
-        base_url,
-        machine_id,
-        machine_secret,
-        transport=transport,
-        timestamp=timestamp,
-        timeout=timeout,
-    )
-    if claim is None:
-        return {"claimed": False}
 
-    spec = JobSpec.from_claim(claim)
-    grant = claim.get("artifact_upload") or {}
-
+def _run_open(
+    spec: JobSpec,
+    capabilities: Any,
+    executor_selector: Callable[..., Executor],
+) -> ExecutionResult:
+    """Run a non-private job on its plaintext input; executor errors become a failed result."""
     executor = executor_selector(spec, capabilities)
     try:
         result = executor.run(spec)
@@ -378,9 +557,70 @@ def run_one(
             output_schema_valid=False,
             error={"code": "executor_error", "message": str(exc)},
         )
+    return result
+
+
+def run_one(
+    base_url: str,
+    machine_id: str,
+    machine_secret: str,
+    *,
+    transport: Any = None,
+    capabilities: Optional[dict[str, Any]] = None,
+    executor_selector: Callable[..., Executor] = select_executor,
+    timestamp: Optional[int] = None,
+    timeout: float = 60.0,
+    attestation_session: Optional[AttestationSession] = None,
+    attest_fn: Callable[..., AttestationSession] = perform_attestation,
+    hardware: Optional[Callable[[str], tuple[str, dict[str, Any]]]] = None,
+) -> dict[str, Any]:
+    """Claim at most ONE job, execute it, and submit the receipt.
+
+    ``attestation_session`` is the machine-level session: it only tells the backend this agent
+    may take private work. A private job never uses it for keys (R5, one job, one key set).
+
+    Returns a small summary dict::
+
+        {"claimed": False}                               # 204, nothing to do
+        {"claimed": True, "job_id": ..., "status": ...}  # a job was processed
+
+    On executor failure (including a hardware job with no usable Docker, which
+    raises :class:`HardwareUnavailableError` rather than silently simulating) the
+    receipt is submitted with ``status="failed"`` and a sanitized error.
+    """
+    claim = claim_job(
+        base_url,
+        machine_id,
+        machine_secret,
+        transport=transport,
+        timestamp=timestamp,
+        timeout=timeout,
+        accept_private=attestation_session is not None and not attestation_session.is_expired(),
+    )
+    if claim is None:
+        return {"claimed": False}
+
+    spec = JobSpec.from_claim(claim)
+    grant = claim.get("artifact_upload") or {}
+    is_private = spec.isolation_tier in ("sealed", "sealed_pro", "confidential")
+
+    if is_private:
+        try:
+            result = _run_private_claim(
+                base_url, machine_id, machine_secret, spec, claim, capabilities, executor_selector,
+                transport=transport, timestamp=timestamp, timeout=timeout, attest_fn=attest_fn, hardware=hardware,
+            )
+        except KeyReleaseError as exc:
+            if exc.job_closed:
+                # The backend already failed (and refunded) the job; there is nothing to report.
+                return {"claimed": True, "job_id": spec.job_id, "status": "failed", "error": exc.code}
+            result = _failed_private(spec, exc.code, "the job's keys were not released to this host")
+    else:
+        result = _run_open(spec, capabilities, executor_selector)
 
     # Stream logs (best-effort; a logging failure must not sink the receipt).
-    if result.logs:
+    # ADR-0005 & WP3 Checkpoint 3.2: Plaintext logs are dropped for private jobs.
+    if result.logs and not is_private:
         try:
             post_logs(
                 base_url,
@@ -445,6 +685,8 @@ def poll_loop(
     sleeper: Callable[[float], None] = time.sleep,
     emit: Optional[Callable[[int, dict[str, Any]], None]] = None,
     timeout: float = 60.0,
+    attestation_session: Optional[AttestationSession] = None,
+    attestation_manager: Any = None,
 ) -> list[dict[str, Any]]:
     """Run the claim->execute->result loop a bounded number of times.
 
@@ -464,6 +706,8 @@ def poll_loop(
                 transport=transport,
                 capabilities=capabilities,
                 timeout=timeout,
+                attestation_session=attestation_manager.current() if attestation_manager is not None else attestation_session,
+                hardware=getattr(attestation_manager, "hardware", None),
             )
         except Exception as exc:  # transient: record and keep polling
             summary = {"claimed": False, "error": str(exc)}

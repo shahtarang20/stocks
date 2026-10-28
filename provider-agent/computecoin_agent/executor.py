@@ -117,6 +117,9 @@ class ExecutionResult:
     execution_mode: str = "simulated"
     output_schema_valid: bool = False
     error: Optional[dict[str, str]] = None
+    encrypted_output: Optional[dict[str, Any]] = None
+    output_commitment: Optional[str] = None
+    wipe_receipt: Optional[dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -134,6 +137,11 @@ class JobSpec:
     image_digest: Optional[str] = None
     limits: dict[str, Any] = field(default_factory=dict)
     isolation_tier: str = "container"
+    encrypted_input: Optional[dict[str, Any]] = None
+    result_public_key: Optional[str] = None
+    # Set by the private-job flow after the keys are fetched for a job-bound verdict (never from the claim).
+    wrapped_shares: Optional[list[dict[str, Any]]] = None
+    verdict_id: Optional[str] = None
 
     @classmethod
     def from_claim(cls, data: dict[str, Any]) -> "JobSpec":
@@ -146,6 +154,8 @@ class JobSpec:
             image_digest=data.get("image_digest"),
             limits=data.get("limits") or {},
             isolation_tier=data.get("isolation_tier") or "container",
+            encrypted_input=data.get("encrypted_input"),
+            result_public_key=data.get("result_public_key"),
         )
 
 

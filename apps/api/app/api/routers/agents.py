@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import secrets
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,9 +28,44 @@ from app.models.jobs import Job, JobAttempt, JobLogMetadata
 from app.models.provider import (
     EnrollmentToken,
     HardwareInventory,
+    MachineAttestation,
     ProviderCapability,
     ProviderMachine,
 )
+import logging
+
+logger = logging.getLogger(__name__)
+
+from app.schemas.attestation import (
+    AttestationChallengeResponse,
+    AttestationSubmitRequest,
+    AttestationVerifyResponse,
+    TpmEnrolmentActivateRequest,
+    TpmEnrolmentActivateResponse,
+    TpmEnrolmentStartRequest,
+    TpmEnrolmentStartResponse,
+)
+from app.services.attestation_nonce import (
+    consume_attestation_nonce,
+    issue_attestation_nonce,
+    nonce_job_id,
+    require_fresh_attestation_nonce,
+)
+from app.services.attestation_verifier import (
+    AttestationVerifierError,
+    PRIVACY_TIERS,
+    TIER_RANK,
+    verdict_is_current,
+    verify_machine_evidence,
+    verify_verdict_signature,
+)
+from app.services.key_guardians import (
+    GuardianReleaseError,
+    execute_guardian_release,
+    prepare_guardian_release,
+)
+from app.services.privacy_crypto import is_sealed_envelope
+from app.services.privacy_receipt import create_privacy_receipt_for_job
 from app.schemas.jobs import (
     ArtifactUploadGrant,
     ClaimLimits,
@@ -265,7 +303,10 @@ async def heartbeat(
     if payload.availability in {"online", "maintenance", "offline"}:
         machine.availability = payload.availability
     machine.last_heartbeat_at = utcnow()
-    machine.last_health = payload.health.model_dump()
+    # Keep attestation state (the pending challenge nonce) across heartbeats: they arrive every
+    # 30 s and would otherwise erase a nonce between challenge and verify.
+    kept = {k: v for k, v in (machine.last_health or {}).items() if k.startswith("latest_attestation_nonce")}
+    machine.last_health = {**payload.health.model_dump(), **kept}
     await db.flush()
 
     return HeartbeatResponse(ok=True, directives={})
@@ -314,6 +355,8 @@ async def claim_job(
     try:
         parsed = json.loads(raw_body or b"{}")
         claim_machine = parsed.get("machine_id")
+        # Only an agent that says it holds a current attestation session gets private jobs.
+        accept_private = parsed.get("accept_private") is True
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_body")
     if claim_machine is not None and str(claim_machine) != str(machine.id):
@@ -330,9 +373,39 @@ async def claim_job(
         .order_by(Job.priority.desc(), Job.created_at)
         .with_for_update()
     )
-    job = result.scalars().first()
+    candidates = list(result.scalars().all())
+    if not candidates:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # The machine's latest attestation verdict (fail closed: L1). Private jobs are claimable only
+    # with a current, correctly signed verdict of a high enough tier; without one they are skipped
+    # (not failed) so ordinary work queued for this machine is not blocked.
+    res_att = await db.execute(
+        select(MachineAttestation)
+        .where(MachineAttestation.machine_id == machine.id)
+        .order_by(MachineAttestation.created_at.desc())
+    )
+    attestation = res_att.scalars().first()
+    verdict = (attestation.details or {}).get("verdict") if attestation else None
+    if verdict and not (verdict_is_current(verdict, now) and verify_verdict_signature(verdict)):
+        verdict = None
+
+    def _private(j: Job) -> bool:
+        return (getattr(j, "isolation_tier", None) or "open").lower() in PRIVACY_TIERS
+
+    def _claimable(j: Job) -> bool:
+        if not _private(j):
+            return True
+        return accept_private and verdict is not None and TIER_RANK.get(str(verdict.get("tier_reached", "")).lower(), -1) >= TIER_RANK.get(str(j.isolation_tier).lower(), 99)
+
+    job = next((j for j in candidates if _claimable(j)), None)
     if job is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    is_private = _private(job)
+    encrypted_input = None
+    result_public_key = None
+    job_input = job.input
 
     # Claim atomically: RESERVED -> RUNNING + lease. A second claim finds no
     # RESERVED job (claim-once).
@@ -348,6 +421,19 @@ async def claim_job(
             status="running",
         )
     )
+
+    key_attestation_nonce = None
+    if is_private:
+        # R5 (one job, one key set): the claim hands out NO keys. It returns a challenge bound to
+        # this job; the agent attests with fresh in-RAM keys for this job and then fetches the
+        # shares from POST /v1/agents/jobs/{job_id}/keys with the resulting job-bound verdict.
+        key_attestation_nonce = secrets.token_hex(24)
+        machine.last_health = issue_attestation_nonce(
+            machine.last_health or {}, key_attestation_nonce, now=now, job_id=str(job.id)
+        )
+        encrypted_input = job.encrypted_input
+        result_public_key = (job.data_policy or {}).get("result_public_key")
+        job_input = {}  # the platform never hands out plaintext input for a private job
 
     mv = await get_model_version(db, job.model)
     image_digest = mv.image_digest if mv else None
@@ -365,7 +451,7 @@ async def claim_job(
         job_id=job.id,
         workload_type=job.workload_type,
         model=job.model,
-        input=job.input,
+        input=job_input,
         execution_mode=job.execution_mode,
         isolation_tier=getattr(job, "isolation_tier", "container") or "container",
         limits=ClaimLimits(
@@ -381,7 +467,27 @@ async def claim_job(
             expires_at=grant_exp,
         ),
         lease_expires_at=lease_expires_at,
+        encrypted_input=encrypted_input,
+        result_public_key=result_public_key,
+        key_attestation_required=key_attestation_nonce is not None,
+        key_attestation_nonce=key_attestation_nonce,
     ).model_dump(mode="json")
+
+
+async def _fail_claimed_job(db: AsyncSession, request: Request, job: Job, now: dt.datetime, code: str) -> None:
+    """A claimed (RUNNING) job that cannot proceed: fail it, refund the hold, free the machine."""
+    job.error_code = code
+    job.error_message = "the job could not be started on this machine"
+    await fsm.transition(db, job, fsm.FAILED, reason=code, actor="system")
+    await close_running_attempt(db, job, now, outcome="failed", error_code=code)
+    await billing.release_hold(db, job)
+    await record_audit(
+        db, action="job.fail", outcome="failure", actor_user_id=None,
+        ip=client_ip(request), resource_type="job", resource_id=str(job.id), reason=code,
+    )
+    await _post_terminal_hooks(db, job)
+    await release_job_reservation(db, job, now)
+    await db.flush()
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=JobHeartbeatResponse)
@@ -422,6 +528,10 @@ async def job_logs(
     machine, raw_body = await authenticate_machine(request, db)
     body: JobLogsAppendRequest = _parse_body(raw_body, JobLogsAppendRequest)
     job = await _owned_running_job(db, machine, job_id)
+
+    # ADR-0005 & WP3 Checkpoint 3.2: Log lines are dropped for private jobs
+    if (getattr(job, "isolation_tier", None) or "open").lower() in ("sealed", "sealed_pro", "confidential"):
+        return JobLogsAppendResponse(ok=True, stored_lines=0)
 
     result = await db.execute(
         select(JobLogMetadata).where(JobLogMetadata.job_id == job.id)
@@ -511,7 +621,9 @@ async def job_result(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="job_not_running")
 
     now = utcnow()
-    job.output = body.output
+    is_private = (getattr(job, "isolation_tier", None) or "open").lower() in PRIVACY_TIERS
+    # Private jobs: the platform never stores plaintext output, even if an agent sends it.
+    job.output = None if is_private else body.output
     if body.metrics is not None:
         merged = dict(job.metrics or {})
         merged.update(body.metrics)
@@ -519,23 +631,92 @@ async def job_result(
 
     if body.status == "success":
         await fsm.transition(db, job, fsm.VERIFYING, reason="result_received", actor="agent")
-        # Audit hooks run BEFORE job.verification is overwritten: the challenge
-        # link lives there. Both are advisory evidence — a failure must not cost
-        # the provider a settled job, so each runs in its own savepoint.
-        async with safe_hook(db, "challenge.evaluate"):
-            await challenge_service.evaluate_challenge_job(db, job, body.output or {})
-        async with safe_hook(db, "verification.model_identity"):
-            await verification_service.check_model_identity(
-                db, job, getattr(body, "model_weight_hash", None)
+
+        if is_private:
+            commitment_ok = body.output_commitment is None or (
+                len(body.output_commitment) == 64 and all(c in "0123456789abcdef" for c in body.output_commitment)
             )
-        verification = verify_output(job.workload_type, job.input, body.output or {})
-        job.verification = verification
-        if verification["valid"]:
+            if not is_sealed_envelope(body.encrypted_output) or not commitment_ok:
+                job.error_code = "encrypted_output_invalid"
+                job.error_message = "private job result needs a sealed encrypted_output and a 64-hex output_commitment"
+                job.verification = {"valid": False, "reason": job.error_code}
+                await fsm.transition(db, job, fsm.FAILED, reason="encrypted_output_invalid", actor="system")
+                await close_running_attempt(db, job, now, outcome="failed", error_code=job.error_code)
+                await billing.release_hold(db, job)
+                await record_audit(
+                    db, action="job.fail", outcome="failure", actor_user_id=None,
+                    ip=client_ip(request), resource_type="job", resource_id=str(job.id),
+                    reason=job.error_code,
+                )
+                await _post_terminal_hooks(db, job)
+                await release_job_reservation(db, job, now)
+                await db.flush()
+                return JobResultResponse(job_id=job.id, status=job.status)
+
+            job.encrypted_output = body.encrypted_output
+            if body.output_commitment:
+                job.output_commitment = body.output_commitment
+
+            # Link the receipt to the verdict the shares were released under at claim time,
+            # not whatever the machine attested most recently (a re-attestation mid-job
+            # carries different host keys and a different log leaf).
+            claimed_verdict_id = next(
+                (r.get("verdict_id") for r in (job.guardian_releases or []) if r.get("verdict_id")),
+                None,
+            )
+            res_att = await db.execute(
+                select(MachineAttestation)
+                .where(MachineAttestation.machine_id == machine.id)
+                .order_by(MachineAttestation.created_at.desc())
+            )
+            verdict: dict = {}
+            verdict_leaf_index = None
+            for attestation in res_att.scalars():
+                details = attestation.details or {}
+                candidate = details.get("verdict") or {}
+                if candidate and (claimed_verdict_id is None or candidate.get("verdict_id") == claimed_verdict_id):
+                    verdict = candidate
+                    verdict_leaf_index = details.get("log_leaf_index")
+                    break
+
+            try:
+                if verdict_leaf_index is None:
+                    raise ValueError("attestation verdict for this job has no transparency log leaf")
+                receipt = await create_privacy_receipt_for_job(
+                    db,
+                    job=job,
+                    machine=machine,
+                    attestation_verdict=verdict,
+                    verdict_leaf_index=verdict_leaf_index,
+                    guardian_releases=job.guardian_releases or [],
+                    wipe_receipt=body.wipe_receipt,
+                )
+                job.privacy_receipt_id = receipt.id
+                job.verification = {
+                    "valid": True,
+                    "method": "proof_of_privacy",
+                    "receipt_id": str(receipt.id),
+                }
+            except Exception as exc:
+                logger.error("Privacy receipt creation failed for job %s: %s", job.id, exc)
+                job.error_code = "privacy_receipt_generation_failed"
+                job.error_message = f"privacy receipt failed: {exc}"
+                job.verification = {"valid": False, "reason": job.error_code}
+                await fsm.transition(db, job, fsm.FAILED, reason="privacy_receipt_failed", actor="system")
+                await close_running_attempt(db, job, now, outcome="failed", error_code=job.error_code)
+                await billing.release_hold(db, job)
+                await record_audit(
+                    db, action="job.fail", outcome="failure", actor_user_id=None,
+                    ip=client_ip(request), resource_type="job", resource_id=str(job.id),
+                    reason=job.error_code,
+                )
+                await _post_terminal_hooks(db, job)
+                await release_job_reservation(db, job, now)
+                await db.flush()
+                return JobResultResponse(job_id=job.id, status=job.status)
+
             await fsm.transition(db, job, fsm.COMPLETED, reason="verified", actor="system")
             await close_running_attempt(db, job, now, outcome="completed")
-            # Settle: capture the metered actual cost + release the remainder.
-            # Challenge and shadow jobs carry no hold and no authorization, so
-            # billing them would charge a customer for the platform's own audit.
             invoice = None
             if not verification_service.is_unbilled_job(job):
                 invoice = await billing.settle_job(db, job)
@@ -550,20 +731,48 @@ async def job_result(
             )
             await _post_terminal_hooks(db, job, invoice=invoice)
         else:
-            job.error_code = "output_verification_failed"
-            job.error_message = f"verification failed: {verification.get('reason')}"
-            await fsm.transition(db, job, fsm.FAILED, reason="verification_failed", actor="system")
-            await close_running_attempt(
-                db, job, now, outcome="failed", error_code=job.error_code
-            )
-            # A failed job is never charged — return the full hold.
-            await billing.release_hold(db, job)
-            await record_audit(
-                db, action="job.fail", outcome="failure", actor_user_id=None,
-                ip=client_ip(request), resource_type="job", resource_id=str(job.id),
-                reason=job.error_code,
-            )
-            await _post_terminal_hooks(db, job)
+            # Audit hooks run BEFORE job.verification is overwritten: the challenge
+            # link lives there. Both are advisory evidence — a failure must not cost
+            # the provider a settled job, so each runs in its own savepoint.
+            async with safe_hook(db, "challenge.evaluate"):
+                await challenge_service.evaluate_challenge_job(db, job, body.output or {})
+            async with safe_hook(db, "verification.model_identity"):
+                await verification_service.check_model_identity(
+                    db, job, getattr(body, "model_weight_hash", None)
+                )
+            verification = verify_output(job.workload_type, job.input, body.output or {})
+            job.verification = verification
+            if verification["valid"]:
+                await fsm.transition(db, job, fsm.COMPLETED, reason="verified", actor="system")
+                await close_running_attempt(db, job, now, outcome="completed")
+                invoice = None
+                if not verification_service.is_unbilled_job(job):
+                    invoice = await billing.settle_job(db, job)
+                    async with safe_hook(db, "verification.shadow_sample"):
+                        await verification_service.maybe_create_shadow_job(db, job)
+                elif job.shadow_of_job_id is not None:
+                    async with safe_hook(db, "verification.resolve_redundancy"):
+                        await verification_service.resolve_redundancy(db, job, body.output or {})
+                await record_audit(
+                    db, action="job.complete", outcome="success", actor_user_id=None,
+                    ip=client_ip(request), resource_type="job", resource_id=str(job.id),
+                )
+                await _post_terminal_hooks(db, job, invoice=invoice)
+            else:
+                job.error_code = "output_verification_failed"
+                job.error_message = f"verification failed: {verification.get('reason')}"
+                await fsm.transition(db, job, fsm.FAILED, reason="verification_failed", actor="system")
+                await close_running_attempt(
+                    db, job, now, outcome="failed", error_code=job.error_code
+                )
+                # A failed job is never charged — return the full hold.
+                await billing.release_hold(db, job)
+                await record_audit(
+                    db, action="job.fail", outcome="failure", actor_user_id=None,
+                    ip=client_ip(request), resource_type="job", resource_id=str(job.id),
+                    reason=job.error_code,
+                )
+                await _post_terminal_hooks(db, job)
     else:  # "failed"
         err = body.error or {}
         job.error_code = (err.get("code") or "agent_reported_failure")[:64]
@@ -584,3 +793,279 @@ async def job_result(
     await release_job_reservation(db, job, now)
     await db.flush()
     return JobResultResponse(job_id=job.id, status=job.status)
+
+
+@router.post("/jobs/{job_id}/keys")
+async def job_keys(
+    job_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Release a private job's Data Key shares to the host that attested FOR THIS JOB (WP-B).
+
+    Body: ``{"verdict_id": "..."}`` naming the job-bound verdict from /v1/agents/attestation/verify.
+    Released once per job. Order (R6): log KEY_RELEASE entries -> COMMIT -> release. Any failure
+    fails the job cleanly (hold refunded, machine freed).
+    """
+    machine, raw_body = await authenticate_machine(request, db)
+    try:
+        verdict_id = str(json.loads(raw_body or b"{}").get("verdict_id") or "")
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_body")
+    job = (await db.execute(select(Job).where(Job.id == job_id).with_for_update())).scalar_one_or_none()
+    if job is None or job.machine_id != machine.id or job.status != fsm.RUNNING:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job_not_found")
+    if (job.isolation_tier or "").lower() not in PRIVACY_TIERS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="not_a_private_job")
+
+    verdict = None
+    rows = await db.execute(
+        select(MachineAttestation)
+        .where(MachineAttestation.machine_id == machine.id)
+        .order_by(MachineAttestation.created_at.desc())
+        .limit(20)
+    )
+    for att in rows.scalars():
+        candidate = (att.details or {}).get("verdict") or {}
+        if verdict_id and candidate.get("verdict_id") == verdict_id:
+            verdict = candidate
+            break
+    if verdict is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="verdict_not_found")
+
+    now = utcnow()
+    try:
+        plan = await prepare_guardian_release(db, job=job, machine=machine, attestation_verdict=verdict, now=now)
+        # Claimed BEFORE the commit releases the row lock: a second concurrent request now sees
+        # the job as already releasing and is refused (keys_already_released).
+        job.guardian_releases = [{"status": "releasing", "verdict_id": verdict["verdict_id"]}]
+        await db.commit()
+        released = await execute_guardian_release(db, job=job, machine=machine, attestation_verdict=verdict, plan=plan)
+    except GuardianReleaseError as exc:
+        if exc.code in ("verdict_not_for_this_job", "keys_already_released", "machine_mismatch"):
+            # A wrong or replayed request from the host: refuse it, but do not punish the job.
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.code) from exc
+        await _fail_claimed_job(db, request, job, utcnow(), f"key_release_failed:{exc.code}"[:64])
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": "key_release_failed", "reason": exc.code})
+    job.guardian_releases = released
+    await db.flush()
+    return {
+        "job_id": str(job.id),
+        "verdict_id": verdict["verdict_id"],
+        "wrapped_shares": [
+            {"guardian": r["guardian"], "share_index": r["share_index"], "wrapped_share": r["wrapped_share"]} for r in released
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Machine-signed Attestation (ADR-0005, WP2, Locked Decision L3)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/attestation/challenge",
+    response_model=AttestationChallengeResponse,
+)
+async def agent_attestation_challenge(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> AttestationChallengeResponse:
+    """Issue a fresh challenge nonce to an enrolled machine via machine HMAC auth."""
+    import secrets
+    machine, _ = await authenticate_machine(request, db)
+
+    nonce = secrets.token_hex(24)
+    machine.last_health = issue_attestation_nonce(machine.last_health or {}, nonce, now=utcnow())
+    await db.flush()
+    return AttestationChallengeResponse(machine_id=machine.id, nonce=nonce)
+
+
+@router.post(
+    "/attestation/verify",
+    response_model=AttestationVerifyResponse,
+)
+async def agent_attestation_verify(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> AttestationVerifyResponse:
+    """Cryptographically verify an attestation quote from a machine via machine HMAC auth."""
+    import hashlib
+    import hmac
+
+    machine, raw_body = await authenticate_machine(request, db)
+    try:
+        data = json.loads(raw_body)
+        body = AttestationSubmitRequest(**data)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    # 1. Nonce freshness check
+    health = dict(machine.last_health or {})
+    require_fresh_attestation_nonce(health, body.nonce, now=utcnow())
+
+    # 2. Quote verification (platform PCR hash + nonce)
+    quote_hasher = hashlib.sha384()
+    quote_hasher.update(body.nonce.encode("utf-8"))
+    for k in sorted(body.pcr_measurements.keys()):
+        quote_hasher.update(f"{k}:{body.pcr_measurements[k]}".encode("utf-8"))
+    computed_quote = quote_hasher.hexdigest()
+    if not hmac.compare_digest(body.platform_quote, computed_quote):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="platform_quote_tampered",
+        )
+
+    # 3. Signature verification against machine hardware signing key
+    measurements_json = json.dumps(body.pcr_measurements, sort_keys=True)
+    canonical_str = (
+        f"{machine.id}\n"
+        f"{body.isolation_tier}\n"
+        f"{body.nonce}\n"
+        f"{body.timestamp}\n"
+        f"{measurements_json}\n"
+        f"{body.platform_quote}"
+    )
+    expected_sig = hmac.new(
+        machine.signing_key.encode("utf-8"),
+        canonical_str.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(body.signature, expected_sig):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="signature_verification_failed",
+        )
+
+    now = utcnow()
+    tier = body.isolation_tier
+
+    # A challenge issued at claim time is bound to one private job (WP-B). The verdict it yields
+    # names that job, and only such a verdict can release that job's keys.
+    bound_job_id = nonce_job_id(health)
+    if bound_job_id is not None:
+        bound_job = (
+            await db.execute(select(Job).where(Job.id == uuid.UUID(bound_job_id)).with_for_update())
+        ).scalar_one_or_none()
+        if (
+            bound_job is None
+            or bound_job.machine_id != machine.id
+            or bound_job.status != fsm.RUNNING
+            or (bound_job.isolation_tier or "").lower() not in PRIVACY_TIERS
+            or TIER_RANK.get(tier, -1) < TIER_RANK.get((bound_job.isolation_tier or "").lower(), 99)
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="job_not_attestable")
+
+    verdict = None
+    leaf = None
+    if bound_job_id is not None or tier in ("sealed", "sealed_pro") or (
+        tier == "confidential" and settings.PRIVACY_SOFTWARE_ATTESTATION
+    ):
+        try:
+            verdict, leaf = await verify_machine_evidence(
+                db,
+                machine=machine,
+                requested_tier=tier,
+                nonce=body.nonce,
+                pcr_measurements=body.pcr_measurements,
+                ephemeral_public_key=body.ephemeral_public_key,
+                receipt_signing_public_key=body.receipt_signing_public_key,
+                security_state=body.security_state,
+                now=now,
+                job_id=bound_job_id,
+                hardware_evidence=body.hardware_evidence,
+                hardware_flavor=body.hardware_flavor,
+            )
+        except AttestationVerifierError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.code) from exc
+
+    # Consume nonce
+    machine.last_health = consume_attestation_nonce(health)
+
+    # Record attestation in DB
+    attestation = MachineAttestation(
+        machine_id=machine.id,
+        isolation_tier=tier,
+        nonce=body.nonce,
+        pcr_measurements=body.pcr_measurements,
+        platform_quote=body.platform_quote,
+        signature=body.signature,
+        verification_status="verified",
+        verified_at=now,
+        details={
+            "ip": client_ip(request),
+            **({"verdict": verdict, "log_leaf_index": leaf.leaf_index} if verdict and leaf else {}),
+        },
+    )
+    db.add(attestation)
+
+    # Promote machine capability
+    cap_res = await db.execute(
+        select(ProviderCapability).where(ProviderCapability.machine_id == machine.id)
+    )
+    cap = cap_res.scalar_one_or_none()
+    if cap:
+        existing_tiers = list(cap.supported_isolation_tiers or ["container"])
+        if tier not in existing_tiers:
+            existing_tiers.append(tier)
+            cap.supported_isolation_tiers = existing_tiers
+        # Same promotion as the provider-auth route: the scheduler only routes private
+        # tiers to capabilities marked VERIFIED.
+        cap.verification_status = "VERIFIED"
+
+    await db.flush()
+    return AttestationVerifyResponse(
+        verified=True,
+        machine_id=machine.id,
+        isolation_tier=tier,
+        verification_status="verified",
+        verified_at=now,
+        attestation_id=attestation.id,
+        details=attestation.details,
+        verdict=verdict,
+    )
+
+
+# ---------------------------------------------------------------------------
+# TPM attestation-key enrolment (WP-F): bind the AK to the EK by credential activation
+# ---------------------------------------------------------------------------
+
+@router.post("/tpm/enrolments", response_model=TpmEnrolmentStartResponse)
+async def tpm_enrolment_start(request: Request, db: AsyncSession = Depends(get_db)) -> Any:
+    """Check the EK chain and the AK, then return a TPM2_MakeCredential challenge for them."""
+    from app.services.tpm_enrolment import TpmEnrolmentError, start_enrolment
+
+    machine, raw_body = await authenticate_machine(request, db)
+    body: TpmEnrolmentStartRequest = _parse_body(raw_body, TpmEnrolmentStartRequest)
+    try:
+        enrolment, credential_blob, encrypted_secret = await start_enrolment(
+            db, machine=machine, ek_cert_pem=body.ek_cert, ek_intermediates=body.ek_intermediates, ak_public_hex=body.ak_public
+        )
+    except TpmEnrolmentError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.code) from exc
+    return TpmEnrolmentStartResponse(
+        enrolment_id=enrolment.id,
+        ak_name=enrolment.ak_name,
+        credential_blob=credential_blob.hex(),
+        encrypted_secret=encrypted_secret.hex(),
+        expires_at=enrolment.expires_at,
+    )
+
+
+@router.post("/tpm/enrolments/{enrolment_id}/activate", response_model=TpmEnrolmentActivateResponse)
+async def tpm_enrolment_activate(enrolment_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)) -> Any:
+    """The host returns the secret TPM2_ActivateCredential recovered; the AK becomes active."""
+    from app.services.tpm_enrolment import TpmEnrolmentError, activate_enrolment
+
+    machine, raw_body = await authenticate_machine(request, db)
+    body: TpmEnrolmentActivateRequest = _parse_body(raw_body, TpmEnrolmentActivateRequest)
+    try:
+        enrolment = await activate_enrolment(db, machine=machine, enrolment_id=enrolment_id, secret_hex=body.secret)
+    except TpmEnrolmentError as exc:
+        # Returned, not raised: the failed attempt (and an expiry or lock-out) must be committed.
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": exc.code})
+    await record_audit(
+        db, action="machine.tpm_enrolled", outcome="success", actor_user_id=None,
+        ip=client_ip(request), resource_type="machine", resource_id=str(machine.id),
+    )
+    return TpmEnrolmentActivateResponse(enrolment_id=enrolment.id, ak_name=enrolment.ak_name, status=enrolment.status)
+

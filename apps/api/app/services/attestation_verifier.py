@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import hashlib
 import uuid
 from typing import Any
 
@@ -38,6 +39,8 @@ from app.services.transparency_log import append_transparency_log_entry
 MIN_SEALED_STAKE = decimal.Decimal("1000.00")
 MIN_SEALED_PRO_STAKE = decimal.Decimal("5000.00")
 VERDICT_TTL = dt.timedelta(minutes=30)
+# A verdict bound to one job only needs to live until that job's keys are fetched.
+JOB_VERDICT_TTL = dt.timedelta(minutes=10)
 
 PRIVACY_TIERS = ("sealed", "sealed_pro", "confidential")
 TIER_RANK = {"open": 0, "container": 0, "gvisor": 1, "microvm": 2, "sealed": 3, "sealed_pro": 4, "confidential": 5}
@@ -46,8 +49,12 @@ _IMAGE_TIERS = {"sealed": ("sealed", "sealed_pro"), "sealed_pro": ("sealed", "se
 # Locks the Sealed OS must report as active. Missing is a failure, never a default "yes".
 REQUIRED_SECURITY_STATE = ("bare_metal", "iommu_enabled", "kernel_lockdown")
 
+# Verdict format v2 (R4): ``job_id`` is signed. It is null for a plain machine attestation (which
+# makes a machine eligible to CLAIM private work) and set for a job-bound one (the only kind that
+# can RELEASE keys). Must match apps/guardian/crypto.py and sdk/python/computecoin/ccverify.py.
 VERDICT_FIELDS = (
     "verdict_id",
+    "job_id",
     "machine_id",
     "image_hash",
     "tier_reached",
@@ -120,6 +127,57 @@ async def _matching_image(db: AsyncSession, tier: str, pcrs: dict[str, str]) -> 
     return None
 
 
+def gpu_bound_nonce(nonce: str, gpu_evidence: dict[str, Any]) -> str:
+    """The value a Confidential host's CPU TEE report must commit to (via SHA-512 in REPORTDATA):
+    the challenge AND the GPU's signed measurement response, so CPU and GPU evidence from two
+    different machines cannot be combined."""
+    gpu_digest = hashlib.sha256(str(gpu_evidence.get("response", "")).lower().encode("ascii")).hexdigest()
+    return f"{nonce}|gpu:{gpu_digest}"
+
+
+async def _verify_hardware(
+    db: AsyncSession, machine: ProviderMachine, tier: str, nonce: str, flavor: str, evidence: dict[str, Any]
+) -> dict[str, str]:
+    """Verify hardware evidence for ``tier``; return only hardware-signed measurements.
+
+    Sealed / Sealed Pro: a TPM 2.0 quote from the machine's enrolled AK. Confidential: a CPU TEE
+    report (``tdx`` or ``sev_snp``) AND an NVIDIA GPU report, evidence
+    ``{"cpu_flavor", "cpu", "gpu"}``; the CPU report commits to the GPU report (gpu_bound_nonce).
+    Measurements are returned as ``pcrN`` (TPM) or ``cpu.<name>`` / ``gpu.<index>`` (Confidential).
+    """
+    from app.services.hardware_attestation import HardwareAttestationError, canonical_flavor, get_hardware_verifier, parse_root_certs
+    from app.services.tpm_enrolment import bound_ak_name
+
+    def run(kind: str, ev: dict[str, Any], bound_nonce: str, context: dict[str, Any] | None = None) -> dict[str, str]:
+        return get_hardware_verifier(kind).verify(
+            ev, nonce=bound_nonce, expected_measurements=None, root_certs=roots.get(kind, []), context=context
+        ).measurements
+
+    try:
+        roots = parse_root_certs(settings.PRIVACY_HARDWARE_ROOT_CERTS)
+        if tier in ("sealed", "sealed_pro"):
+            if flavor != "tpm2":
+                raise HardwareAttestationError("hardware_tier_mismatch", f"{tier} is attested with a TPM 2.0 quote")
+            # The AK this machine bound to its EK by credential activation (tpm_enrolment); None
+            # until it enrols, and the TPM verifier then refuses.
+            return run("tpm2", evidence, nonce, {"bound_ak_name": await bound_ak_name(db, machine.id)})
+        if tier == "confidential":
+            if flavor != "confidential" or not isinstance(evidence.get("cpu"), dict) or not isinstance(evidence.get("gpu"), dict):
+                raise HardwareAttestationError("hardware_tier_mismatch", "confidential needs {cpu_flavor, cpu, gpu} evidence")
+            cpu_flavor = canonical_flavor(str(evidence.get("cpu_flavor", "")))
+            if cpu_flavor not in ("tdx", "sev_snp"):
+                raise HardwareAttestationError("hardware_tier_mismatch", "the CPU TEE must be Intel TDX or AMD SEV-SNP")
+            gpu = run("nvidia_cc", evidence["gpu"], nonce)
+            cpu = run(cpu_flavor, evidence["cpu"], gpu_bound_nonce(nonce, evidence["gpu"]))
+            return {**{f"cpu.{k}": v for k, v in cpu.items()}, **{f"gpu.{k}": v for k, v in gpu.items()}}
+        raise HardwareAttestationError("hardware_tier_mismatch", f"{tier!r} has no hardware evidence type")
+    except (HardwareAttestationError, ValueError) as exc:
+        # The reason goes back to the host: it is about the host's own evidence, and an operator
+        # needs it (e.g. "tpm2_ak_not_enrolled" means: run `computecoin-agent tpm-enrol`).
+        code = getattr(exc, "code", "hardware_root_certs_invalid")
+        raise AttestationVerifierError(f"hardware_attestation_failed:{code}", str(exc)) from exc
+
+
 async def verify_machine_evidence(
     db: AsyncSession,
     *,
@@ -131,6 +189,9 @@ async def verify_machine_evidence(
     receipt_signing_public_key: str | None,
     security_state: dict[str, Any] | None,
     now: dt.datetime | None = None,
+    job_id: str | None = None,
+    hardware_evidence: dict[str, Any] | None = None,
+    hardware_flavor: str | None = None,
 ) -> tuple[dict[str, Any], TransparencyLogLeaf]:
     """Check evidence for a privacy tier and issue a signed verdict, logged before it is returned.
 
@@ -141,10 +202,17 @@ async def verify_machine_evidence(
     except PrivacyConfigError as exc:
         raise AttestationVerifierError("privacy_tiers_not_enabled") from exc
     if not settings.PRIVACY_SOFTWARE_ATTESTATION:
-        raise AttestationVerifierError(
-            "hardware_attestation_not_available",
-            "Sealed and Confidential tiers need hardware attestation (TPM / TDX / SEV-SNP + NVIDIA), "
-            "which is not implemented yet; no verdict can be issued.",
+        if not settings.PRIVACY_HARDWARE_ATTESTATION:
+            raise AttestationVerifierError(
+                "hardware_attestation_not_available",
+                "Sealed and Confidential tiers need hardware attestation (TPM / TDX / SEV-SNP + NVIDIA), "
+                "which is not implemented yet; no verdict can be issued.",
+            )
+        if not hardware_evidence or not hardware_flavor:
+            raise AttestationVerifierError("missing_hardware_evidence", "hardware attestation requires hardware_evidence and hardware_flavor")
+        # Only measurements the hardware signed decide the image; the host-reported copy is ignored.
+        pcr_measurements = await _verify_hardware(
+            db, machine, (requested_tier or "").lower(), nonce, hardware_flavor, hardware_evidence
         )
     ts = now or utcnow()
     tier = (requested_tier or "").lower()
@@ -179,6 +247,7 @@ async def verify_machine_evidence(
 
     verdict: dict[str, Any] = {
         "verdict_id": str(uuid.uuid4()),
+        "job_id": job_id,
         "machine_id": str(machine.id),
         "image_hash": image.image_hash,
         "tier_reached": tier,
@@ -186,7 +255,7 @@ async def verify_machine_evidence(
         "receipt_signing_public_key": receipt_signing_public_key.lower(),
         "nonce": nonce,
         "issued_at": ts.isoformat(),
-        "expires_at": (ts + VERDICT_TTL).isoformat(),
+        "expires_at": (ts + (JOB_VERDICT_TTL if job_id else VERDICT_TTL)).isoformat(),
         "verifier_public_key": verifier_public_key(),
     }
     verdict["signature"] = sign_verdict(verdict)

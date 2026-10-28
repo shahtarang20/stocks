@@ -34,6 +34,22 @@ jobs:
         run: alembic upgrade head
       - name: Pytest
         run: pytest -q
+      - name: Guardian service tests
+        working-directory: apps/guardian
+        run: pytest -q
+      - name: Witness service tests
+        working-directory: apps/witness
+        run: pytest -q
+      - name: Software TPM for the hardware-attestation e2e test
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Proof-of-Privacy end-to-end (API + agent + SDK + guardian + software TPM)
+        working-directory: .
+        run: |
+          pip install -e provider-agent -e sdk/python
+          pytest -q -rs tests/e2e
+          # The TPM test must not silently skip in CI.
+          pytest -q -rs tests/e2e/test_tpm_swtpm_e2e.py | tee /tmp/tpm-e2e.txt
+          ! grep -q "SKIPPED" /tmp/tpm-e2e.txt
 
   provider-agent:
     name: Provider agent (test)
@@ -66,6 +82,7 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci || npm install
       - run: npm run typecheck --if-present
+      - run: npm test --if-present
       - run: npm run build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
@@ -84,7 +101,7 @@ jobs:
       - run: |
           python -m pip install -U pip
           pip install -e ".[dev]" || pip install -e .
-      - run: pytest -q || echo "no tests yet"
+      - run: pytest -q
 
   contracts:
     name: Contracts (Hardhat tests)

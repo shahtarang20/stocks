@@ -1,0 +1,90 @@
+{
+  "version": "ccpp-v1",
+  "description": "Deterministic cryptographic test vectors for Proof-of-Privacy (ccpp-v1) envelope format, signing, Shamir sharing, and output commitments.",
+  "x25519": {
+    "private_key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "expected_public_key_hex": "d89e3bad79437dbed9f843418304f460ff05c7fe81fe4a9577a804cb9367ff66"
+  },
+  "ed25519": {
+    "private_seed_hex": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+    "expected_public_key_hex": "8bb04e1c1b83dddf311f5bcddf7c50ede3c0802f47ec796e2a131cf41298d9f3",
+    "message_ascii": "attestation-verdict:job-1234:valid:sealed",
+    "message_hex": "6174746573746174696f6e2d766572646963743a6a6f622d313233343a76616c69643a7365616c6564",
+    "expected_signature_hex": "d95448c99738d42ebfad071159f7f81e67aeb65e0cd4ad4f4e11f017aa21de43635afe2b9219c82b45be9d2cc7eeadc541b0fed7eed8748fc66d66867f7fdd09"
+  },
+  "sealing": {
+    "recipient_private_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "recipient_public_hex": "d89e3bad79437dbed9f843418304f460ff05c7fe81fe4a9577a804cb9367ff66",
+    "ephemeral_private_hex": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+    "ephemeral_public_hex": "392d174a38b3b1beafaf1fe824870841c5fa531bc6eafdb6402c124664488c1c",
+    "nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "plaintext_utf8": "Hello, Computecoin Proof-of-Privacy!",
+    "plaintext_hex": "48656c6c6f2c20436f6d70757465636f696e2050726f6f662d6f662d5072697661637921",
+    "aad_utf8": "ccpp-v1|job-input",
+    "aad_hex": "636370702d76317c6a6f622d696e707574",
+    "expected_shared_secret_hex": "ce233c595ad997651e18a03dddcfd6d6d65ac4bccdeaa1bb7a2f0067b5356342",
+    "expected_seal_key_hex": "5be176295040132abd5f95a87eca81192d1a41957ed8042365c6a85ec88c8e85",
+    "expected_ciphertext_hex": "5347d3cf054a0a0e07e6c273f034df0cc2e6c3ed766437179935cfbaaee3e3343776a1e02dd9d67a90547e160693a7b70d0f07b2",
+    "envelope": {
+      "v": "ccpp-v1",
+      "alg": "X25519-HKDF-SHA256-ChaCha20Poly1305",
+      "epk": "392d174a38b3b1beafaf1fe824870841c5fa531bc6eafdb6402c124664488c1c",
+      "nonce": "a0a1a2a3a4a5a6a7a8a9aaab",
+      "ct": "5347d3cf054a0a0e07e6c273f034df0cc2e6c3ed766437179935cfbaaee3e3343776a1e02dd9d67a90547e160693a7b70d0f07b2"
+    }
+  },
+  "data_encryption": {
+    "data_key_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "nonce_hex": "b0b1b2b3b4b5b6b7b8b9babb",
+    "plaintext_utf8": "{\"prompt\":\"Classify the sentiment of this financial disclosure.\"}",
+    "plaintext_hex": "7b2270726f6d7074223a22436c617373696679207468652073656e74696d656e74206f6620746869732066696e616e6369616c20646973636c6f737572652e227d",
+    "aad_utf8": "ccpp-v1|job-input",
+    "aad_hex": "636370702d76317c6a6f622d696e707574",
+    "expected_ciphertext_hex": "ac5049b53c260175f8d329ecd58123758630e0282ccf5a573f343715b8fd7c2775be44ccfab22a60b125716561869ac0402d182e6f12f99c9711c9ddc6821486fa40bb29a637b22a115f39016c450a5bd8",
+    "envelope": {
+      "v": "ccpp-v1",
+      "alg": "ChaCha20Poly1305",
+      "nonce": "b0b1b2b3b4b5b6b7b8b9babb",
+      "ct": "ac5049b53c260175f8d329ecd58123758630e0282ccf5a573f343715b8fd7c2775be44ccfab22a60b125716561869ac0402d182e6f12f99c9711c9ddc6821486fa40bb29a637b22a115f39016c450a5bd8"
+    }
+  },
+  "shamir": {
+    "secret_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "threshold": 2,
+    "total_shares": 3,
+    "polynomial_field": "GF(256), irreducible 0x11D, generator 2",
+    "coefficients_hex": "0a0d101316191c1f2225282b2e3134373a3d404346494c4f5255585b5e616467",
+    "shares": [
+      {
+        "x": 1,
+        "share_hex": "0b0f1317131f1b172b2f2327233f3b272b2f5357535f5b574b4f4347437f7b47"
+      },
+      {
+        "x": 2,
+        "share_hex": "1518232229343f364d405b5a516c677e6568939299848f86bdb0abaaa1dcd7ee"
+      },
+      {
+        "x": 3,
+        "share_hex": "1f1533313f2d23296f6573717f5d53495f55d3d1dfcdc3c9efe5f3f1ffbdb389"
+      }
+    ]
+  },
+  "output_commitment": {
+    "data_key_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "expected_commit_key_hex": "d2b331268e6c14eab633c73e465af974dd3cf5bf85ac9d7add3669b6f731b19c",
+    "output_json": {
+      "result": "Proof-of-Privacy verified",
+      "status": "completed",
+      "tokens": 42
+    },
+    "canonical_json_utf8": "{\"result\":\"Proof-of-Privacy verified\",\"status\":\"completed\",\"tokens\":42}",
+    "canonical_json_hex": "7b22726573756c74223a2250726f6f662d6f662d50726976616379207665726966696564222c22737461747573223a22636f6d706c65746564222c22746f6b656e73223a34327d",
+    "expected_commitment_hex": "dcf9d55c4c97815c4c835c7d6db5db6c4e30d700aa1daae8a939f0652e6f5ff6"
+  },
+  "aads": {
+    "input_aad": "ccpp-v1|job-input",
+    "output_aad_template": "ccpp-v1|job-output|{job_id}",
+    "share_aad_template": "ccpp-v1|guardian-share|{guardian}",
+    "release_aad_template": "ccpp-v1|host-release|{job_id}|{guardian}"
+  }
+}

@@ -7,6 +7,7 @@ never touch the network.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Optional
 
@@ -63,8 +64,15 @@ class ComputeCoinClient:
         api_key: Optional[str] = None,
         transport: Optional[httpx.BaseTransport] = None,
         timeout: float = 30.0,
+        guardian_pin: Optional[str] = None,
+        require_guardian_pin: bool = False,
     ) -> None:
+        """``guardian_pin``: the guardian-set fingerprint ComputeCoin publishes out of band
+        (default: ``COMPUTECOIN_GUARDIAN_PIN``). Private jobs refuse any other guardian set;
+        ``require_guardian_pin`` also refuses when none is pinned."""
         self.base_url = base_url.rstrip("/")
+        self.guardian_pin = guardian_pin or os.environ.get("COMPUTECOIN_GUARDIAN_PIN") or None
+        self.require_guardian_pin = require_guardian_pin
         self._access_token = access_token
         self._api_key = api_key
         self._client = httpx.Client(
@@ -513,3 +521,117 @@ class ComputeCoinClient:
     def list_payouts(self) -> list[Payout]:
         data = self._request("GET", "/v1/provider/payouts")
         return [Payout.model_validate(p) for p in data]
+
+    # -- ADR-0005: Proof-of-Privacy (Customer Experience, WP11) -------------- #
+    def get_privacy_verifier_key(self) -> dict[str, Any]:
+        """Fetch the platform verifier Ed25519 key, guardian X25519 keys, and threshold."""
+        return self._request("GET", "/v1/privacy/verifier-key")
+
+    def submit_private_job(
+        self,
+        *,
+        workload_type: str,
+        model: str,
+        input_data: dict[str, Any],
+        isolation_tier: str = "sealed",
+        result_public_key: str,
+        guardians: Optional[dict[str, str]] = None,
+        threshold: Optional[int] = None,
+        data_policy: Optional[dict[str, Any]] = None,
+        gpu_count: int = 1,
+        estimated_minutes: int = 1,
+        max_cost: Optional[str] = None,
+        max_runtime_seconds: int = 300,
+        idempotency_key: Optional[str] = None,
+        project_id: Optional[str] = None,
+        value_at_risk: Optional[str] = None,
+    ) -> Job:
+        """Encrypt customer input client-side and submit a private job (L1, L2, WP11)."""
+        from .crypto import check_guardian_pin, prepare_private_job
+
+        if guardians is None or threshold is None:
+            keys = self.get_privacy_verifier_key()
+            guardians = guardians or keys.get("guardians", {})
+            threshold = threshold or keys.get("threshold", 2)
+            # Keys served by the platform are only as good as the pin they are checked against.
+            check_guardian_pin(guardians, threshold, self.guardian_pin, require_pin=self.require_guardian_pin)
+        elif self.guardian_pin:
+            check_guardian_pin(guardians, threshold, self.guardian_pin)
+
+        privacy_payload = prepare_private_job(
+            input_data,
+            guardians=guardians,
+            threshold=threshold,
+            result_public_key=result_public_key,
+            data_policy=data_policy,
+        )
+
+        job_body: dict[str, Any] = {
+            "workload_type": workload_type,
+            "model": model,
+            "isolation_tier": isolation_tier,
+            "input": {},
+            "encrypted_input": privacy_payload["encrypted_input"],
+            "dk_shares": privacy_payload["dk_shares"],
+            "data_policy": privacy_payload["data_policy"],
+            "gpu_count": gpu_count,
+            "estimated_minutes": estimated_minutes,
+            "max_runtime_seconds": max_runtime_seconds,
+        }
+        if max_cost is not None:
+            job_body["max_cost"] = max_cost
+        if project_id is not None:
+            job_body["project_id"] = project_id
+        if value_at_risk is not None:
+            job_body["value_at_risk"] = value_at_risk
+
+        # The API reads the key from the Idempotency-Key HEADER (as submit_job does); in the
+        # body it was silently ignored, so a retried submit created a second job and hold.
+        extra_headers = {"Idempotency-Key": idempotency_key} if idempotency_key is not None else None
+        data = self._request("POST", "/v1/jobs", json=job_body, extra_headers=extra_headers)
+        return Job.model_validate(data)
+
+    def get_private_result(
+        self,
+        job_id: str,
+        customer_private_key: str,
+    ) -> dict[str, Any]:
+        """Fetch job and decrypt its encrypted output using the customer's private key."""
+        from .crypto import decrypt_job_output
+
+        job = self.get_job(job_id)
+        if job.status == "failed":
+            raise RuntimeError(f"Job failed: {job.error_code} - {job.error_message}")
+        if job.status != "completed":
+            raise RuntimeError(f"Job is not completed (current status: {job.status})")
+        if not job.encrypted_output:
+            raise RuntimeError("Job has no encrypted_output")
+        return decrypt_job_output(
+            job.encrypted_output, customer_private_key, job_id=job_id
+        )
+
+    def get_privacy_receipt(self, job_id: str) -> dict[str, Any]:
+        """Fetch the cryptographic privacy receipt for a completed job."""
+        return self._request("GET", f"/v1/privacy/receipts/{job_id}")
+
+    def verify_privacy_receipt(
+        self,
+        receipt: dict[str, Any],
+        verifier_public_key: Optional[str] = None,
+        expected_image_hash: Optional[str] = None,
+        rpc_url: Optional[str] = None,
+        vault_address: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Verify a privacy receipt against the verifier key (ccverify)."""
+        from .ccverify import verify_receipt
+
+        if not verifier_public_key:
+            keys = self.get_privacy_verifier_key()
+            verifier_public_key = keys.get("verifier_public_key", "")
+        return verify_receipt(
+            receipt,
+            verifier_public_key,
+            expected_image_hash=expected_image_hash,
+            rpc_url=rpc_url,
+            vault_address=vault_address,
+        )

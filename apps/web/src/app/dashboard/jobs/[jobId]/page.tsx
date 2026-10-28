@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -12,14 +12,19 @@ import {
   AlertCircle,
   ArrowLeft,
   Ban,
+  CheckCircle2,
   Download,
   FileText,
   Info,
+  Key,
   Loader2,
+  Lock,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
   Terminal,
+  Unlock,
+  XCircle,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { ConsolePageHeader } from "@/components/console/console-page";
@@ -59,6 +64,13 @@ import {
   logLineText,
   shortId,
 } from "@/lib/jobs";
+import {
+  decryptJobOutput,
+  type SealedEnvelope,
+  verifyReceiptLocal,
+  type ReceiptVerificationResult,
+} from "@/lib/ccpp";
+import { getCustomerKey, importCustomerKey, UnbackedKeyError } from "@/lib/customer-keys";
 
 function formatBytes(n: number): string {
   if (!n || n <= 0) return "0 B";
@@ -83,6 +95,18 @@ export default function JobDetailPage() {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeReason, setDisputeReason] = useState("");
+
+  const [decryptedOutput, setDecryptedOutput] = useState<unknown | null>(null);
+  const [decryptionError, setDecryptionError] = useState<string | null>(null);
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [keyImportOpen, setKeyImportOpen] = useState(false);
+  const [keyImportInput, setKeyImportInput] = useState("");
+  const [keyImportError, setKeyImportError] = useState<string | null>(null);
+
+  const [verifyDialogOpen, setVerifyDialogOpen] = useState(false);
+  const [localVerificationResult, setLocalVerificationResult] =
+    useState<ReceiptVerificationResult | null>(null);
+  const [isVerifyingLocal, setIsVerifyingLocal] = useState(false);
 
   const jobQuery = useQuery<Job>({
     queryKey: ["job", jobId],
@@ -162,6 +186,112 @@ export default function JobDetailPage() {
   // A dispute can be opened once a job has settled (completed). Already-disputed
   // jobs can't be disputed again.
   const canDispute = job ? job.status === "completed" : false;
+
+  useEffect(() => {
+    if (!job?.encrypted_output || decryptedOutput) return;
+    let cancelled = false;
+
+    async function tryDecrypt() {
+      setIsDecrypting(true);
+      setDecryptionError(null);
+      try {
+        const key = await getCustomerKey();
+        if (!key) {
+          if (!cancelled) {
+            setDecryptionError(
+              "No private key found in this browser. Import the private key used to submit this job."
+            );
+            setIsDecrypting(false);
+          }
+          return;
+        }
+        const effectiveId = job?.job_id ?? job?.id ?? jobId;
+        const output = decryptJobOutput(
+          job!.encrypted_output as unknown as SealedEnvelope,
+          key.privateKeyHex,
+          effectiveId
+        );
+        if (!cancelled) {
+          setDecryptedOutput(output);
+          setDecryptionError(null);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setDecryptionError(
+            "Decryption failed: this browser's private key cannot decrypt this output. Make sure you are using the same browser that submitted the job, or import your private key backup."
+          );
+        }
+      } finally {
+        if (!cancelled) setIsDecrypting(false);
+      }
+    }
+
+    tryDecrypt();
+    return () => {
+      cancelled = true;
+    };
+  }, [job, jobId, decryptedOutput]);
+
+  async function handleImportKey() {
+    setKeyImportError(null);
+    try {
+      if (!keyImportInput.trim()) {
+        setKeyImportError("Enter a private key hex string or backup JSON");
+        return;
+      }
+      let imported;
+      try {
+        imported = await importCustomerKey(keyImportInput.trim());
+      } catch (err) {
+        if (!(err instanceof UnbackedKeyError)) throw err;
+        if (!window.confirm(`${err.message}\n\nReplace it anyway?`)) {
+          setKeyImportError(err.message);
+          return;
+        }
+        imported = await importCustomerKey(keyImportInput.trim(), { replaceUnbackedKey: true });
+      }
+      setKeyImportOpen(false);
+      setKeyImportInput("");
+
+      if (job?.encrypted_output) {
+        setIsDecrypting(true);
+        try {
+          const effectiveId = job.job_id ?? job.id ?? jobId;
+          const output = decryptJobOutput(
+            job.encrypted_output as unknown as SealedEnvelope,
+            imported.privateKeyHex,
+            effectiveId
+          );
+          setDecryptedOutput(output);
+          setDecryptionError(null);
+        } catch (err: any) {
+          setDecryptionError("Decryption failed with imported key: " + (err?.message || ""));
+        } finally {
+          setIsDecrypting(false);
+        }
+      }
+    } catch (err: any) {
+      setKeyImportError("Invalid private key format: " + (err?.message || String(err)));
+    }
+  }
+
+  async function handleVerifyReceiptLocal() {
+    if (!receiptQuery.data) return;
+    setIsVerifyingLocal(true);
+    setVerifyDialogOpen(true);
+    try {
+      const keys = await privacyApi.getVerifierKeys();
+      const res = verifyReceiptLocal(receiptQuery.data as any, keys.verifier_public_key);
+      setLocalVerificationResult(res);
+    } catch (err: any) {
+      setLocalVerificationResult({
+        verified: false,
+        checks: { error: err?.message || String(err) },
+      });
+    } finally {
+      setIsVerifyingLocal(false);
+    }
+  }
 
   // ---- Loading / error (primary job fetch) ----
   if (jobQuery.isLoading) {
@@ -568,6 +698,79 @@ export default function JobDetailPage() {
           </CardContent>
         </Card>
 
+        {/* ---- Job Output (including in-browser decrypted output) ---- */}
+        {job.encrypted_output || job.output ? (
+          <Card>
+            <CardContent className="p-6">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {job.encrypted_output ? (
+                    <Lock className="h-4 w-4 text-emerald-400" />
+                  ) : (
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  <h2 className="text-sm font-semibold">
+                    {job.encrypted_output ? "Decrypted Output (In-Browser)" : "Job Output"}
+                  </h2>
+                </div>
+                {job.encrypted_output ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setKeyImportOpen(true)}
+                  >
+                    <Key className="mr-1.5 h-3.5 w-3.5" /> Import Key
+                  </Button>
+                ) : null}
+              </div>
+
+              {job.encrypted_output ? (
+                <div>
+                  {isDecrypting ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Decrypting output with browser key…
+                    </div>
+                  ) : decryptedOutput ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+                        <CheckCircle2 className="h-4 w-4" /> Decrypted locally using your browser&apos;s private key.
+                      </div>
+                      <pre className="max-h-96 overflow-auto rounded-md border border-border bg-[#0b0f14] p-4 font-mono text-xs leading-relaxed text-emerald-300">
+                        {typeof decryptedOutput === "string"
+                          ? decryptedOutput
+                          : JSON.stringify(decryptedOutput, null, 2)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div
+                        role="alert"
+                        className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+                      >
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <div>
+                          <p className="font-semibold">Unable to decrypt output</p>
+                          <p className="text-xs text-danger/90">{decryptionError}</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Raw ciphertext stored on server:
+                      </p>
+                      <pre className="max-h-32 overflow-auto rounded-md border border-border bg-surface-2/40 p-3 font-mono text-[11px] text-muted-foreground">
+                        {JSON.stringify(job.encrypted_output, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <pre className="max-h-96 overflow-auto rounded-md border border-border bg-[#0b0f14] p-4 font-mono text-xs leading-relaxed text-blue-300">
+                  {typeof job.output === "string" ? job.output : JSON.stringify(job.output, null, 2)}
+                </pre>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
+
         {/* ---- Proof-of-Privacy receipt (private tiers only) ---- */}
         {job.isolation_tier && ["sealed", "sealed_pro", "confidential"].includes(job.isolation_tier) ? (
           <Card>
@@ -633,6 +836,22 @@ export default function JobDetailPage() {
                       }}
                     >
                       <Download className="mr-1.5 h-3.5 w-3.5" /> Download receipt JSON
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleVerifyReceiptLocal}
+                      disabled={isVerifyingLocal}
+                    >
+                      {isVerifyingLocal ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Verifying…
+                        </>
+                      ) : (
+                        <>
+                          <ShieldCheck className="mr-1.5 h-3.5 w-3.5 text-emerald-400" /> Verify receipt in browser
+                        </>
+                      )}
                     </Button>
                     <span className="text-xs text-muted-foreground">
                       Check it yourself, without trusting us:{" "}
@@ -762,6 +981,171 @@ export default function JobDetailPage() {
               ) : (
                 "Open dispute"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- In-Browser Receipt Verification Modal ---- */}
+      <Dialog
+        open={verifyDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setVerifyDialogOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-emerald-400" />
+              <DialogTitle>In-Browser Privacy Receipt Check</DialogTitle>
+            </div>
+            <DialogDescription className="text-left text-xs">
+              Signatures and Merkle proofs are checked here in your browser, not by our server.
+              The verifier key itself is fetched from ComputeCoin; for an independent check, run
+              ccverify with a key you obtained separately.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isVerifyingLocal ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" /> Verifying signatures and Merkle proofs…
+            </div>
+          ) : localVerificationResult ? (
+            <div className="space-y-4">
+              <div
+                className={`flex items-center justify-between rounded-md p-3 text-sm font-semibold ${
+                  localVerificationResult.verified
+                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                    : "bg-danger/10 text-danger border border-danger/30"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {localVerificationResult.verified ? (
+                    <CheckCircle2 className="h-5 w-5" />
+                  ) : (
+                    <XCircle className="h-5 w-5" />
+                  )}
+                  <span>
+                    {localVerificationResult.verified
+                      ? "ALL CHECKS PASSED (VERIFIED)"
+                      : "VERIFICATION FAILED"}
+                  </span>
+                </div>
+                <Badge variant="outline" className="font-mono text-xs">
+                  {localVerificationResult.isolation_tier}
+                </Badge>
+              </div>
+
+              <div className="space-y-2 rounded-md border border-border bg-surface-2/40 p-3 text-xs">
+                <p className="font-medium text-foreground">Verification details:</p>
+                <ul className="space-y-1.5 font-mono text-[11px]">
+                  {Object.entries(localVerificationResult.checks).map(([key, val]) => {
+                    const pass = val === true || val === "absent";
+                    return (
+                      <li
+                        key={key}
+                        className="flex items-center justify-between border-b border-border/50 pb-1"
+                      >
+                        <span className="text-muted-foreground">{key}</span>
+                        <span
+                          className={
+                            pass
+                              ? "text-emerald-400 font-bold"
+                              : "text-danger font-bold"
+                          }
+                        >
+                          {val === true
+                            ? "PASS"
+                            : val === "absent"
+                              ? "NONE (OPTIONAL)"
+                              : val === false
+                                ? "FAIL"
+                                : String(val)}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                A passing receipt shows that a host with a recorded verdict received this job&apos;s
+                keys, that every key release is in the public log, and that the host signed a wipe
+                statement. It does not prove the wipe happened: hardware attestation is not live
+                yet, so the verdict is not a hardware proof.
+              </p>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVerifyDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Import Private Key Dialog ---- */}
+      <Dialog
+        open={keyImportOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setKeyImportOpen(false);
+            setKeyImportError(null);
+            setKeyImportInput("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2 text-warning">
+              <Key className="h-5 w-5" />
+              <DialogTitle>Import Encryption Key</DialogTitle>
+            </div>
+            <DialogDescription className="text-left text-xs">
+              Paste the contents of your{" "}
+              <code className="text-foreground">computecoin-private-key-backup.json</code> file,
+              or your 64-character private key hex string.
+            </DialogDescription>
+          </DialogHeader>
+
+          {keyImportError ? (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{keyImportError}</span>
+            </div>
+          ) : null}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="import-key-input">Key JSON or Hex</Label>
+            <textarea
+              id="import-key-input"
+              rows={4}
+              value={keyImportInput}
+              onChange={(e) => setKeyImportInput(e.target.value)}
+              placeholder="Paste JSON backup or private key hex..."
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setKeyImportOpen(false);
+                setKeyImportError(null);
+                setKeyImportInput("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="default" onClick={handleImportKey}>
+              Import &amp; Decrypt
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -109,6 +109,99 @@ def verify_inclusion_proof(leaf_hash: str, leaf_index: int, tree_size: int, expe
         return False
 
 
+def _subproof(m: int, leaves: list[str], b: bool) -> list[str]:
+    """RFC 6962 Section 2.1.2 SUBPROOF."""
+    n = len(leaves)
+    if m == n:
+        if b:
+            return []
+        return [compute_merkle_root(leaves)]
+    k = _split(n)
+    if m <= k:
+        return _subproof(m, leaves[:k], b) + [compute_merkle_root(leaves[k:])]
+    else:
+        return _subproof(m - k, leaves[k:], False) + [compute_merkle_root(leaves[:k])]
+
+
+def generate_consistency_proof(leaves: list[str], from_size: int, to_size: int) -> list[str]:
+    """RFC 6962 Section 2.1.2 consistency proof between tree sizes from_size and to_size."""
+    if not (0 < from_size <= to_size <= len(leaves)):
+        raise ValueError(f"invalid tree sizes: from={from_size}, to={to_size}, total={len(leaves)}")
+    if from_size == to_size:
+        return []
+    return _subproof(from_size, leaves[:to_size], True)
+
+
+def verify_consistency_proof(
+    first_size: int,
+    second_size: int,
+    first_root: str,
+    second_root: str,
+    proof: list[str],
+) -> bool:
+    """RFC 9162 Section 2.1.4.2 consistency proof verifier."""
+    try:
+        m, n = first_size, second_size
+        if m < 0 or n < 0 or m > n:
+            return False
+        if m == 0:
+            return len(proof) == 0
+        if m == n:
+            return len(proof) == 0 and first_root.lower() == second_root.lower()
+
+        fn = m - 1
+        sn = n - 1
+        while fn & 1:
+            fn >>= 1
+            sn >>= 1
+
+        p = list(proof)
+        if fn == 0:
+            fr = first_root
+            sr = first_root
+        else:
+            if not p:
+                return False
+            fr = p[0]
+            sr = p[0]
+            p = p[1:]
+
+        for c in p:
+            if sn == 0:
+                return False
+            if fn & 1 or fn == sn:
+                fr = hash_internal_node(c, fr)
+                sr = hash_internal_node(c, sr)
+                while not (fn & 1) and fn != 0:
+                    fn >>= 1
+                    sn >>= 1
+            else:
+                sr = hash_internal_node(sr, c)
+            fn >>= 1
+            sn >>= 1
+
+        return sn == 0 and fr.lower() == first_root.lower() and sr.lower() == second_root.lower()
+    except (ValueError, TypeError, IndexError):
+        return False
+
+
+async def get_consistency_proof(db: AsyncSession, from_size: int, to_size: int) -> dict[str, Any]:
+    """Calculate an RFC 6962 consistency proof between two log sizes."""
+    leaves = await _all_leaf_hashes(db, upto=to_size)
+    if not (0 < from_size <= to_size <= len(leaves)):
+        raise ValueError(f"invalid tree sizes: from={from_size}, to={to_size}, available={len(leaves)}")
+    root1 = compute_merkle_root(leaves[:from_size])
+    root2 = compute_merkle_root(leaves[:to_size])
+    proof = generate_consistency_proof(leaves, from_size, to_size)
+    return {
+        "from_size": from_size,
+        "to_size": to_size,
+        "first_root": root1,
+        "second_root": root2,
+        "consistency_path": proof,
+    }
+
+
 async def _lock_log(db: AsyncSession) -> None:
     """Serialise appends. Two concurrent appends would otherwise pick the same next index."""
     if db.bind is not None and db.bind.dialect.name == "postgresql":
@@ -163,6 +256,63 @@ async def get_inclusion_proofs(db: AsyncSession, leaf_indices: list[int]) -> tup
 async def get_inclusion_proof_for_leaf(db: AsyncSession, leaf_index: int) -> dict[str, Any]:
     _, _, proofs = await get_inclusion_proofs(db, [leaf_index])
     return proofs[leaf_index]
+
+
+# --------------------------------------------------------------------------- signed checkpoints
+
+CHECKPOINT_VERSION = "ccpp-log-v1"
+CHECKPOINT_FIELDS = ("v", "tree_size", "root_hash", "timestamp", "log_public_key")
+
+
+def checkpoint_signing_bytes(checkpoint: dict[str, Any]) -> bytes:
+    """What a checkpoint signature covers. Must match apps/guardian/crypto.py."""
+    return canonical_json_bytes({f: checkpoint[f] for f in CHECKPOINT_FIELDS})
+
+
+def sign_checkpoint(tree_size: int, root_hash: str, timestamp: str) -> dict[str, Any]:
+    from app.services.privacy_crypto import sign
+    from app.services.privacy_keys import log_public_key, log_signing_key
+
+    cp = {"v": CHECKPOINT_VERSION, "tree_size": tree_size, "root_hash": root_hash, "timestamp": timestamp, "log_public_key": log_public_key()}
+    cp["signature"] = sign(log_signing_key(), checkpoint_signing_bytes(cp))
+    return cp
+
+
+async def get_proofs_at_size(
+    db: AsyncSession, leaf_index: int, tree_size: int, from_size: int = 0
+) -> dict[str, Any]:
+    """Inclusion proof for ``leaf_index`` and a consistency proof from ``from_size``, both against
+    the SAME tree of ``tree_size`` leaves, plus a signed checkpoint for that tree.
+
+    Pinning the size makes the bundle immune to appends that happen while it is built.
+    """
+    from app.db.base import utcnow
+
+    hashes = await _all_leaf_hashes(db, upto=tree_size)
+    if len(hashes) != tree_size or not 0 <= leaf_index < tree_size:
+        raise ValueError(f"leaf {leaf_index} / size {tree_size} not available (log has {len(hashes)})")
+    if not 0 <= from_size <= tree_size:
+        raise ValueError(f"invalid consistency base {from_size} for size {tree_size}")
+    root = compute_merkle_root(hashes)
+    cp = sign_checkpoint(tree_size, root, utcnow().isoformat())
+    bundle = {
+        "checkpoint": cp,
+        "inclusion_proof": generate_inclusion_proof(hashes, leaf_index),
+        "consistency_proof": generate_consistency_proof(hashes, from_size, tree_size) if 0 < from_size < tree_size else [],
+        "consistency_from_root": compute_merkle_root(hashes[:from_size]) if from_size > 0 else None,
+    }
+    from app.services.log_witness import gather_witness_cosignatures
+    cosignatures = await gather_witness_cosignatures(cp, db=db, tree_size=tree_size)
+    bundle["witness_cosignatures"] = cosignatures
+    cp["witness_cosignatures"] = cosignatures
+    return bundle
+
+
+async def get_signed_checkpoint(db: AsyncSession) -> dict[str, Any]:
+    from app.db.base import utcnow
+
+    hashes = await _all_leaf_hashes(db)
+    return sign_checkpoint(len(hashes), compute_merkle_root(hashes), utcnow().isoformat())
 
 
 async def get_latest_transparency_root(db: AsyncSession) -> str:

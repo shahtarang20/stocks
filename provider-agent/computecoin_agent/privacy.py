@@ -22,6 +22,7 @@ from typing import Any, Callable
 from .privacy_crypto import (
     INPUT_AAD,
     canonical_json,
+    compute_output_commitment,
     decrypt_data,
     open_sealed,
     output_aad,
@@ -32,6 +33,26 @@ from .privacy_crypto import (
 )
 
 WIPE_FIELDS = ("machine_id", "job_id", "wiped_items", "wiped_at")
+
+
+class SealedExecutionResult(tuple):
+    """Subclass of tuple (encrypted_output, wipe_receipt) providing .output_commitment."""
+
+    encrypted_output: dict[str, Any]
+    wipe_receipt: dict[str, Any]
+    output_commitment: str
+
+    def __new__(
+        cls,
+        encrypted_output: dict[str, Any],
+        wipe_receipt: dict[str, Any],
+        output_commitment: str = "",
+    ):
+        obj = super().__new__(cls, (encrypted_output, wipe_receipt))
+        obj.encrypted_output = encrypted_output
+        obj.wipe_receipt = wipe_receipt
+        obj.output_commitment = output_commitment
+        return obj
 
 
 def _zero(buf: bytearray) -> None:
@@ -109,6 +130,7 @@ def execute_sealed_job(
         dk_buffer = bytearray(reconstruct_secret(shares, k=threshold))
         decrypted = json.loads(decrypt_data(bytes(dk_buffer), encrypted_input, INPUT_AAD).decode("utf-8"))
         result = workload_runner_fn(decrypted)
+        output_commitment = compute_output_commitment(bytes(dk_buffer), result)
         encrypted_output = seal(result_public_key, json.dumps(result, sort_keys=True).encode("utf-8"), output_aad(job_id))
     finally:
         wipe_receipt = wipe_environment(
@@ -119,4 +141,4 @@ def execute_sealed_job(
             scratch_dir=scratch_dir,
             gpu_reset_fn=gpu_reset_fn,
         )
-    return encrypted_output, wipe_receipt
+    return SealedExecutionResult(encrypted_output, wipe_receipt, output_commitment)

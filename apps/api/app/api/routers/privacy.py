@@ -27,6 +27,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.deps import get_current_user, require_roles
 from app.models.enums import Role
@@ -51,11 +52,22 @@ from app.schemas.privacy import (
 from app.services.audit import record_audit
 from app.services.canary import report_canary_leak
 from app.services.freivalds import freivalds_verify
-from app.services.privacy_keys import PrivacyConfigError, guardian_public_keys, guardian_threshold, verifier_public_key
+from app.services.privacy_keys import (
+    PrivacyConfigError,
+    guardian_manifest_fingerprint,
+    guardian_public_keys,
+    guardian_threshold,
+    log_public_key,
+    verifier_public_key,
+)
+from app.services.log_anchor import build_anchor_section_for_receipt
+from app.services.log_witness import build_witness_section_for_receipt
 from app.services.privacy_receipt import verify_privacy_receipt_offline
 from app.services.transparency_log import (
     EMPTY_ROOT,
     append_transparency_log_entry,
+    get_consistency_proof,
+    get_signed_checkpoint,
     get_inclusion_proof_for_leaf,
     get_log_size,
 )
@@ -71,8 +83,10 @@ async def get_verifier_keys() -> VerifierKeysOut:
     try:
         return VerifierKeysOut(
             verifier_public_key=verifier_public_key(),
+            log_public_key=log_public_key(),
             guardians=guardian_public_keys(),
             threshold=guardian_threshold(),
+            guardian_fingerprint=guardian_manifest_fingerprint(guardian_public_keys(), guardian_threshold()),
         )
     except PrivacyConfigError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
@@ -106,7 +120,20 @@ async def get_job_privacy_receipt(
     receipt = (await db.execute(select(PrivacyReceipt).where(PrivacyReceipt.job_id == job_id))).scalar_one_or_none()
     if receipt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="privacy_receipt_not_yet_generated")
-    return receipt
+
+    tree_size = 0
+    for p in (receipt.inclusion_proofs or {}).values():
+        if isinstance(p, dict) and "tree_size" in p:
+            tree_size = int(p["tree_size"])
+            break
+
+    # Both sections are built from what the log already holds; reading a receipt never calls a
+    # chain or a witness. They appear once the worker has anchored / witnessed a checkpoint at or
+    # above this receipt's tree size.
+    out = PrivacyReceiptOut.model_validate(receipt)
+    out.anchor = await build_anchor_section_for_receipt(db, tree_size, receipt.merkle_root)
+    out.witness = await build_witness_section_for_receipt(db, tree_size)
+    return out
 
 
 @router.post("/receipts/verify")
@@ -156,6 +183,28 @@ async def get_latest_transparency_anchor(db: AsyncSession = Depends(get_db)) -> 
         "anchored_tx_hash": latest.anchored_tx_hash,
         "anchored_block_number": latest.anchored_block_number,
     }
+
+
+@router.get("/transparency-log/checkpoint")
+async def get_transparency_checkpoint(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """The current tree size and root, signed with the log key (pinned by guardians and witnesses)."""
+    try:
+        return await get_signed_checkpoint(db)
+    except PrivacyConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@router.get("/transparency-log/consistency")
+async def get_transparency_consistency(
+    from_size: int = Query(..., ge=1),
+    to_size: int = Query(..., ge=1),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """RFC 6962 consistency proof between tree size from_size and to_size."""
+    try:
+        return await get_consistency_proof(db, from_size, to_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

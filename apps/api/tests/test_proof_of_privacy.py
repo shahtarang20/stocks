@@ -5,8 +5,9 @@ Each test pins a property that an earlier version of this code got wrong:
 - the Sealed tier is granted only by evidence (trusted image, security locks, stake), never by a
   host's self-report, a stake it gave itself, or software attestation outside dev/test;
 - verdicts are Ed25519-signed and a self-signed or edited verdict is refused;
-- shares are released only to the attested host, re-sealed so only its private key opens them,
-  and logged before release; the platform alone cannot release when it holds < k guardian keys;
+- shares are released only to the host that attested FOR THAT JOB (verdict v2 carries a signed
+  job_id), re-sealed so only its private key opens them, and logged before release; the platform
+  alone cannot release when it holds < k guardian keys;
 - receipts get an id on the job, verify offline, and fail when anything is edited;
 - canaries look like real private jobs; only security staff can report a leak;
 - stake can only be recorded by an administrator and grants no tier.
@@ -38,7 +39,7 @@ from app.models.provider import HardwareInventory, Provider, ProviderCapability,
 from app.models.reputation import SlashEvent
 from app.models.user import User, UserRole
 from app.services import privacy_crypto as pc
-from app.services.attestation_verifier import sign_verdict, verify_verdict_signature
+from app.services.attestation_verifier import sign_verdict, verify_machine_evidence, verify_verdict_signature
 from app.services.canary import create_canary_job
 from app.services.key_guardians import GuardianReleaseError, release_guardian_shares
 from app.services.privacy_keys import guardian_public_keys, verifier_public_key
@@ -310,15 +311,29 @@ async def _assigned_private_job(db_engine, machine, customer_id, prompt="TOP SEC
         return job, dk, result_priv
 
 
+async def _job_verdict(db_engine, machine_id, job_id, tier="sealed"):
+    """A verdict attested for ONE job with fresh host keys: what the agent gets after attesting with
+    the claim's key-attestation nonce. Returns (verdict, verdict_leaf_index, host_priv, receipt_priv)."""
+    host_priv, host_pub = pc.generate_x25519_keypair()
+    r_priv, r_pub = pc.generate_ed25519_keypair()
+    async with _sm(db_engine)() as db:
+        verdict, leaf = await verify_machine_evidence(
+            db, machine=await db.get(ProviderMachine, machine_id), requested_tier=tier, nonce=secrets.token_hex(24),
+            pcr_measurements=PCRS, ephemeral_public_key=host_pub, receipt_signing_public_key=r_pub,
+            security_state=LOCKS, job_id=str(job_id),
+        )
+        await db.commit()
+    return verdict, leaf.leaf_index, host_priv, r_priv
+
+
 @pytest.mark.asyncio
 async def test_guardians_release_only_to_the_attested_host_and_log_first(client: AsyncClient, db_engine, software_attestation):
     host, token = await _user(db_engine, "h-g@test.io", Role.provider)
     cust, _ = await _user(db_engine, "c-g@test.io")
     m = await _machine(db_engine, host, "g", tiers=["container"], stake="2000", signing_key="k-g")
     await _trusted_image(db_engine)
-    resp, host_priv, _ = await _attest(client, token, m, "k-g")
-    verdict = resp.json()["verdict"]
     job, dk, _ = await _assigned_private_job(db_engine, m, cust.id)
+    verdict, _, host_priv, _ = await _job_verdict(db_engine, m.id, job.id)
 
     async with _sm(db_engine)() as db:
         machine = await db.get(ProviderMachine, m.id)
@@ -348,8 +363,10 @@ async def test_guardians_refuse_bad_verdicts_and_bad_states(client: AsyncClient,
     m = await _machine(db_engine, host, "r", tiers=["container"], stake="2000", signing_key="k-r")
     other = await _machine(db_engine, host, "r2", tiers=["container"], stake="2000", signing_key="k-r2")
     await _trusted_image(db_engine)
-    verdict = (await _attest(client, token, m, "k-r"))[0].json()["verdict"]
+    machine_level = (await _attest(client, token, m, "k-r"))[0].json()["verdict"]
     job, _, _ = await _assigned_private_job(db_engine, m, cust.id)
+    other_job, _, _ = await _assigned_private_job(db_engine, m, cust.id)
+    verdict, _, _, _ = await _job_verdict(db_engine, m.id, job.id)
 
     async def attempt(v=verdict, machine_id=m.id):
         async with _sm(db_engine)() as db:
@@ -358,6 +375,14 @@ async def test_guardians_refuse_bad_verdicts_and_bad_states(client: AsyncClient,
             return exc.value.code
 
     assert await attempt(v=dict(verdict, ephemeral_public_key=pc.generate_x25519_keypair()[1])) == "verdict_signature_invalid"
+    # R4/R5: a machine-level verdict (job_id null), a verdict for another job, or a v1 verdict with
+    # no job_id at all never releases this job's keys.
+    assert machine_level["job_id"] is None
+    assert await attempt(v=machine_level) == "verdict_not_for_this_job"
+    assert await attempt(v=(await _job_verdict(db_engine, m.id, other_job.id))[0]) == "verdict_not_for_this_job"
+    v1 = {k: val for k, val in verdict.items() if k not in ("job_id", "signature")}
+    v1["signature"] = pc.sign(settings.PRIVACY_VERIFIER_SIGNING_KEY, pc.canonical_json(v1))  # correctly signed v1
+    assert await attempt(v=v1) == "verdict_signature_invalid"
     assert await attempt(machine_id=other.id) == "machine_mismatch"
     expired = dict(verdict, issued_at="2020-01-01T00:00:00+00:00", expires_at="2020-01-01T00:30:00+00:00")
     expired["signature"] = sign_verdict(expired)
@@ -402,6 +427,13 @@ async def test_transparency_log_proofs_and_public_endpoints(client: AsyncClient,
     assert (await client.get("/v1/privacy/transparency-log/anchor")).json()["total_leaves"] == 7
     keys = (await client.get("/v1/privacy/verifier-key")).json()
     assert keys["verifier_public_key"] == verifier_public_key() and keys["threshold"] == 2 and len(keys["guardians"]) == 2
+    # The published fingerprint is what clients pin (spec 6e); the shared vector keeps API, SDK and web equal.
+    from app.services.privacy_keys import guardian_manifest_fingerprint
+
+    assert keys["guardian_fingerprint"] == guardian_manifest_fingerprint(keys["guardians"], keys["threshold"])
+    assert guardian_manifest_fingerprint({"computecoin": "AA" * 32, "partner": "bb" * 32}, 2) == (
+        "90047f24b306726940afab8f77365e85bf3b89f88bd916a9c5e60da4890a31f1"
+    )
 
 
 @pytest.mark.asyncio
@@ -411,24 +443,31 @@ async def test_privacy_receipt_end_to_end(client: AsyncClient, db_engine, softwa
     stranger, stranger_token = await _user(db_engine, "x-rc@test.io")
     m = await _machine(db_engine, host, "rc", tiers=["container"], stake="2000", signing_key="k-rc")
     await _trusted_image(db_engine)
-    resp, _, r_priv = await _attest(client, token, m, "k-rc")
-    verdict = resp.json()["verdict"]
     job, _, _ = await _assigned_private_job(db_engine, m, cust.id)
+    verdict, verdict_leaf_index, _, r_priv = await _job_verdict(db_engine, m.id, job.id)
+    foreign, _, _, foreign_r_priv = await _job_verdict(db_engine, m.id, uuid.uuid4())
 
     async with _sm(db_engine)() as db:
-        verdict_leaf = (await db.execute(select(TransparencyLogLeaf).where(TransparencyLogLeaf.event_type == "ATTESTATION_VERDICT"))).scalar_one()
         machine, j = await db.get(ProviderMachine, m.id), await db.get(Job, job.id)
         released = await release_guardian_shares(db, job=j, machine=machine, attestation_verdict=verdict)
         wipe = {"machine_id": str(m.id), "job_id": str(job.id), "wiped_items": ["key_material"], "wiped_at": utcnow().isoformat()}
         wipe["signature"] = pc.sign(r_priv, wipe_receipt_signing_bytes(wipe))
 
+        # B9: a verdict attested for another job never backs this receipt, even with a wipe receipt
+        # correctly signed by that verdict's own key (so only the job binding can refuse it).
+        foreign_wipe = dict(wipe)
+        foreign_wipe["signature"] = pc.sign(foreign_r_priv, wipe_receipt_signing_bytes(wipe))
+        with pytest.raises(ValueError, match="not attested for this job"):
+            await create_privacy_receipt_for_job(db, job=j, machine=machine, attestation_verdict=foreign,
+                                                 verdict_leaf_index=verdict_leaf_index, guardian_releases=released, wipe_receipt=foreign_wipe)
+
         bad_wipe = dict(wipe, signature=pc.sign(pc.generate_ed25519_keypair()[0], wipe_receipt_signing_bytes(wipe)))
         with pytest.raises(ValueError):
             await create_privacy_receipt_for_job(db, job=j, machine=machine, attestation_verdict=verdict,
-                                                 verdict_leaf_index=verdict_leaf.leaf_index, guardian_releases=released, wipe_receipt=bad_wipe)
+                                                 verdict_leaf_index=verdict_leaf_index, guardian_releases=released, wipe_receipt=bad_wipe)
 
         receipt = await create_privacy_receipt_for_job(db, job=j, machine=machine, attestation_verdict=verdict,
-                                                       verdict_leaf_index=verdict_leaf.leaf_index, guardian_releases=released, wipe_receipt=wipe)
+                                                       verdict_leaf_index=verdict_leaf_index, guardian_releases=released, wipe_receipt=wipe)
         await db.commit()
         assert receipt.verified is True
         assert (await db.get(Job, job.id)).privacy_receipt_id == receipt.id  # was always None before
@@ -439,10 +478,31 @@ async def test_privacy_receipt_end_to_end(client: AsyncClient, db_engine, softwa
     assert verify_privacy_receipt_offline(data)["valid"] is True
     assert (await client.post("/v1/privacy/receipts/verify", json=data)).json()["valid"] is True
     assert (await client.get(f"/v1/privacy/receipts/{job.id}", headers={"Authorization": f"Bearer {stranger_token}"})).status_code == 404
+    assert data["anchor"] is None and data["witness"] is None  # nothing anchored or witnessed yet
+
+    # Once the worker has anchored and witnessed a LATER checkpoint, the same receipt read carries
+    # both sections (built from the database; reading a receipt never calls a chain or a witness).
+    async with _sm(db_engine)() as db:
+        await append_transparency_log_entry(db, "IMAGE_HASH", {"later": True})
+        last = (await db.execute(select(TransparencyLogLeaf).order_by(TransparencyLogLeaf.leaf_index.desc()))).scalars().first()
+        last.anchored_tx_hash, last.anchored_block_number = "0x" + "ab" * 32, 7
+        last.witness_cosignatures = {"checkpoint": {"tree_size": last.leaf_index + 1, "root_hash": last.merkle_root}, "cosignatures": []}
+        await db.commit()
+    later = (await client.get(f"/v1/privacy/receipts/{job.id}", headers={"Authorization": f"Bearer {cust_token}"})).json()
+    receipt_size = next(iter(data["inclusion_proofs"].values()))["tree_size"]
+    for section in (later["anchor"], later["witness"]):
+        assert section is not None and section["consistency_proof"]
+    assert later["anchor"]["tree_size"] == last.leaf_index + 1 > receipt_size
+    assert later["anchor"]["merkle_root"] == last.merkle_root
 
     tampered = json.loads(json.dumps(data))
     tampered["wipe_receipt"]["wiped_items"] = ["gpu_memory", "key_material"]
     assert verify_privacy_receipt_offline(tampered)["valid"] is False
+    # B9: a receipt whose verdict was attested for a different job does not verify.
+    tampered = json.loads(json.dumps(data))
+    tampered["job_id"] = str(uuid.uuid4())
+    report = verify_privacy_receipt_offline(tampered)
+    assert report["valid"] is False and report["checks"]["verdict_for_this_job"] is False
     tampered = json.loads(json.dumps(data))
     first = next(iter(tampered["inclusion_proofs"]))
     tampered["inclusion_proofs"][first]["payload"]["nonce"] = "edited"
@@ -521,7 +581,8 @@ def test_production_privacy_needs_real_keys_and_fewer_local_guardians_than_thres
         Settings(**strong, PRIVACY_ENABLED=True)
     g1, _ = pc.generate_x25519_keypair()
     g2, _ = pc.generate_x25519_keypair()
-    real = dict(PRIVACY_ENABLED=True, PRIVACY_VERIFIER_SIGNING_KEY=pc.generate_ed25519_keypair()[0])
+    real = dict(PRIVACY_ENABLED=True, PRIVACY_VERIFIER_SIGNING_KEY=pc.generate_ed25519_keypair()[0],
+                PRIVACY_LOG_SIGNING_KEY=pc.generate_ed25519_keypair()[0])
     with pytest.raises(Exception, match="fewer keys than the threshold"):
         Settings(**strong, **real, PRIVACY_GUARDIAN_PRIVATE_KEYS=json.dumps({"computecoin": g1, "partner": g2}))
     ok = Settings(**strong, **real, PRIVACY_GUARDIAN_PRIVATE_KEYS=json.dumps({"computecoin": g1}))

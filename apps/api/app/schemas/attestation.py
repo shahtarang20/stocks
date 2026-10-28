@@ -32,6 +32,37 @@ class AttestationSubmitRequest(BaseModel):
     ephemeral_public_key: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
     receipt_signing_public_key: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
     security_state: dict[str, bool] | None = None
+    # Hardware evidence (WP-F): used only when PRIVACY_HARDWARE_ATTESTATION is on. "tpm2" for Sealed /
+    # Sealed Pro; "confidential" = {cpu_flavor: tdx|sev_snp, cpu, gpu} for Confidential. The signed
+    # measurements replace pcr_measurements for the trusted-image match.
+    hardware_flavor: str | None = Field(default=None, pattern="^(tpm2|confidential)$")
+    hardware_evidence: dict | None = None
+
+
+class TpmEnrolmentStartRequest(BaseModel):
+    """The host's EK certificate (+ intermediates up to a pinned TPM vendor root) and its AK."""
+
+    ek_cert: str = Field(min_length=64, max_length=16384)
+    ek_intermediates: list[str] = Field(default_factory=list, max_length=5)
+    ak_public: str = Field(pattern="^[0-9a-f]{2,2048}$")  # TPMT_PUBLIC, hex
+
+
+class TpmEnrolmentStartResponse(BaseModel):
+    enrolment_id: uuid.UUID
+    ak_name: str
+    credential_blob: str  # TPM2B_ID_OBJECT contents, hex
+    encrypted_secret: str  # TPM2B_ENCRYPTED_SECRET contents, hex
+    expires_at: dt.datetime
+
+
+class TpmEnrolmentActivateRequest(BaseModel):
+    secret: str = Field(pattern="^[0-9a-f]{2,64}$")
+
+
+class TpmEnrolmentActivateResponse(BaseModel):
+    enrolment_id: uuid.UUID
+    ak_name: str
+    status: str
 
 
 class AttestationVerifyResponse(BaseModel):

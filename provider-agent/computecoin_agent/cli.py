@@ -139,6 +139,9 @@ def work(
     interval: float = typer.Option(
         5.0, "--interval", help="Seconds to wait after an empty claim (204)."
     ),
+    private_tier: Optional[str] = typer.Option(
+        None, "--private-tier", help="Also take private jobs (sealed, sealed_pro or confidential). Each job is attested with its own fresh in-RAM keys, wiped when it ends."
+    ),
 ) -> None:
     """Run the claim -> execute -> result loop.
 
@@ -177,6 +180,7 @@ def work(
         iterations=n,
         interval=interval,
         emit=_emit,
+        attestation_manager=_attestation_manager(base_url, config, private_tier),
     )
 
 
@@ -190,6 +194,9 @@ def start(
     ),
     poll_interval: float = typer.Option(
         5.0, "--poll-interval", help="Seconds to wait between job claims when idle."
+    ),
+    private_tier: Optional[str] = typer.Option(
+        None, "--private-tier", help="Also take private jobs (sealed, sealed_pro or confidential). Each job is attested with its own fresh in-RAM keys, wiped when it ends."
     ),
 ) -> None:
     """Run BOTH the heartbeat presence daemon AND the job worker concurrently.
@@ -242,9 +249,104 @@ def start(
             iterations=0,
             interval=poll_interval,
             emit=_worker_emit,
+            attestation_manager=_attestation_manager(base_url, config, private_tier),
         )
     except (KeyboardInterrupt, SystemExit):
         typer.echo("\nStopping ComputeCoin agent gracefully...")
+
+
+def _attestation_manager(base_url: str, config: "AgentConfig", tier: Optional[str]):
+    if not tier:
+        return None
+    if tier not in ("sealed", "sealed_pro", "confidential"):
+        typer.echo("--private-tier must be sealed, sealed_pro or confidential")
+        raise typer.Exit(code=2)
+    from .attestation import AttestationManager
+    from .tpm import hardware_provider
+
+    return AttestationManager(
+        base_url, config.machine_id, config.machine_secret, tier=tier,
+        on_error=lambda exc: typer.echo(f"[attest] {exc}"),
+        hardware=hardware_provider(config.tpm()),
+    )
+
+
+@app.command()
+def attest(
+    server: Optional[str] = typer.Option(
+        None, "--server", help="Backend base URL (defaults to the stored api_url)."
+    ),
+    tier: str = typer.Option(
+        "sealed", "--tier", help="Requested isolation tier: sealed, sealed_pro, or confidential."
+    ),
+) -> None:
+    """Obtain a signed Attestation Verdict from the backend using machine HMAC authentication.
+
+    Generates ephemeral session keys strictly in RAM and verifies that host measurements
+    and security locks match trusted criteria (ADR-0005, WP2).
+    """
+    from .attestation import AttestationClientError, perform_attestation
+    from .tpm import TpmError, hardware_provider
+
+    config = AgentConfig.load()
+    if not config.has_machine_credential():
+        typer.echo("Machine has no backend credential. Run `computecoin-agent enroll` first.")
+        raise typer.Exit(code=1)
+
+    base_url = server or config.api_url
+    typer.echo(f"Requesting remote attestation for tier '{tier}' from {base_url}...")
+    try:
+        session = perform_attestation(
+            base_url,
+            config.machine_id,
+            config.machine_secret,
+            tier=tier,
+            hardware=hardware_provider(config.tpm()),
+        )
+    except (AttestationClientError, TpmError) as exc:
+        typer.echo(f"Attestation failed: {exc}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Attestation verified: verdict_id={session.verdict.get('verdict_id')}")
+    typer.echo(f"Tier reached: {session.isolation_tier}")
+    typer.echo(f"Expires at: {session.expires_at.isoformat()}")
+    typer.echo(f"Ephemeral X25519 in RAM: {session.ephemeral_public_key}")
+    typer.echo(f"Receipt Ed25519 in RAM: {session.receipt_signing_public_key}")
+    if session.log_leaf_index is not None:
+        typer.echo(f"Transparency log leaf index: #{session.log_leaf_index}")
+    typer.echo(
+        "This was a check only: the keys above lived in this process and are now gone. "
+        "To take private jobs run `computecoin-agent start --private-tier <tier>`."
+    )
+
+
+@app.command()
+def tpm_enrol(
+    server: Optional[str] = typer.Option(None, "--server", help="Backend base URL (defaults to the stored api_url)."),
+) -> None:
+    """Bind this machine's TPM attestation key to its EK with the backend (credential activation).
+
+    Creates the EK and AK inside the TPM if needed (persistent handles; nothing secret on disk),
+    sends the EK certificate and the AK's public area, answers the backend's MakeCredential
+    challenge with TPM2_ActivateCredential, and returns the recovered secret.
+    """
+    from .jobrunner import JobRunnerError
+    from .tpm import TpmError, enrol
+
+    config = AgentConfig.load()
+    if not config.has_machine_credential():
+        typer.echo("Machine has no backend credential. Run `computecoin-agent enroll` first.")
+        raise typer.Exit(code=1)
+    tpm = config.tpm()
+    if tpm is None:
+        typer.echo("No TPM configured: set tpm_tcti (e.g. device:/dev/tpmrm0) in the agent config.")
+        raise typer.Exit(code=1)
+    try:
+        ak_name = enrol(server or config.api_url, config.machine_id, config.machine_secret, tpm)
+    except (TpmError, JobRunnerError) as exc:
+        typer.echo(f"TPM enrolment failed: {exc}")
+        raise typer.Exit(code=1)
+    typer.echo(f"TPM attestation key enrolled: {ak_name}")
 
 
 @app.command()

@@ -38,6 +38,11 @@ from app.schemas.provider import (
 from app.models.billing import LedgerEntry, LedgerTransaction, ProviderPayout
 from app.schemas.billing import AmountIn, EarningsOut, LedgerEntryOut, PayoutOut
 from app.services import ledger
+from app.services.attestation_nonce import (
+    consume_attestation_nonce,
+    issue_attestation_nonce,
+    require_fresh_attestation_nonce,
+)
 from app.services.attestation_verifier import AttestationVerifierError, verify_machine_evidence
 from app.services.audit import record_audit
 from app.services.provider import (
@@ -462,10 +467,7 @@ async def create_attestation_challenge(
         raise _MACHINE_NOT_FOUND
 
     nonce = secrets.token_hex(24)
-    health = dict(machine.last_health or {})
-    health["latest_attestation_nonce"] = nonce
-    health["latest_attestation_nonce_created_at"] = utcnow().isoformat()
-    machine.last_health = health
+    machine.last_health = issue_attestation_nonce(machine.last_health or {}, nonce, now=utcnow())
     await db.flush()
     return AttestationChallengeResponse(machine_id=machine.id, nonce=nonce)
 
@@ -491,14 +493,9 @@ async def verify_machine_attestation(
     if machine is None:
         raise _MACHINE_NOT_FOUND
 
-    # 1. Nonce freshness check
+    # 1. Nonce freshness check (same rules as the machine-HMAC route)
     health = dict(machine.last_health or {})
-    stored_nonce = health.get("latest_attestation_nonce")
-    if not stored_nonce or stored_nonce != body.nonce:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid_or_expired_nonce",
-        )
+    require_fresh_attestation_nonce(health, body.nonce, now=utcnow())
 
     # 2. Quote verification (platform PCR hash + nonce)
     quote_hasher = hashlib.sha384()
@@ -541,9 +538,10 @@ async def verify_machine_attestation(
     # key-release verdict is issued only when the evidence check passes. Failure here leaves the
     # nonce unconsumed and nothing recorded (the transaction rolls back).
     verdict = None
+    leaf = None
     if tier in ("sealed", "sealed_pro") or (tier == "confidential" and settings.PRIVACY_SOFTWARE_ATTESTATION):
         try:
-            verdict, _ = await verify_machine_evidence(
+            verdict, leaf = await verify_machine_evidence(
                 db,
                 machine=machine,
                 requested_tier=tier,
@@ -558,8 +556,7 @@ async def verify_machine_attestation(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.code) from exc
 
     # Consume nonce
-    health.pop("latest_attestation_nonce", None)
-    machine.last_health = health
+    machine.last_health = consume_attestation_nonce(health)
 
     # Record attestation in DB
     attestation = MachineAttestation(
@@ -571,7 +568,10 @@ async def verify_machine_attestation(
         signature=body.signature,
         verification_status="verified",
         verified_at=now,
-        details={"ip": client_ip(request), **({"verdict": verdict} if verdict else {})},
+        details={
+            "ip": client_ip(request),
+            **({"verdict": verdict, "log_leaf_index": leaf.leaf_index} if verdict and leaf else {}),
+        },
     )
     db.add(attestation)
 

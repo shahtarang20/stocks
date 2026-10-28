@@ -2126,6 +2126,8 @@ export interface VerifierKeys {
   verifier_public_key: string;
   guardians: Record<string, string>;
   threshold: number;
+  /** Informational only: the client recomputes it and compares with its own pin. */
+  guardian_fingerprint?: string;
 }
 
 export const privacyApi = {

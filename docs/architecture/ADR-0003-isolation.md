@@ -88,3 +88,44 @@ are a security boundary they are not.
   be placed under them is rejected, not downgraded.
 - We market isolation honestly (baseline vs strong) and gate sensitive
   workloads to stronger tiers as they become available.
+
+---
+
+## Addendum: AMD GPU Support (ROCm) — D5 Tier Matrix & D6 Device Rules
+
+### D5 Isolation Tier Matrix for AMD GPU Workloads
+
+In v1, AMD GPU workloads run strictly under the **container** isolation tier:
+
+| Isolation Tier | NVIDIA GPU | AMD GPU (ROCm) | CPU (Simulated) |
+| :--- | :--- | :--- | :--- |
+| `container` | Supported | **Supported (v1)** | Supported |
+| `gvisor` (`runsc`) | Experimental | **Refused (422 / IsolationUnavailableError)** | Supported |
+| `microvm` (Kata / Firecracker) | Planned (VFIO) | **Refused (422 / IsolationUnavailableError)** | Supported |
+| `sealed` / `sealed_pro` / `confidential` | Host-memory encryption | **Refused (v1)** | Supported |
+
+Rationale: Kata Containers and gVisor do not have battle-tested, upstream-supported ROCm KFD + render-node virtualization paths in our production stack. Silently downgrading an isolation tier is forbidden: any AMD GPU job requesting non-container isolation is rejected at validation (`validate_job` -> 422), and at the agent (`IsolationUnavailableError`).
+
+### D6 Device Passthrough Rules for AMD GPUs
+
+AMD GPU compute requires access to the kernel fusion driver and direct render nodes. To maintain isolation parity with ADR-0003:
+
+1. **Explicit Device Nodes**:
+   - Passthrough `/dev/kfd` with `--device /dev/kfd:/dev/kfd:rwm`.
+   - Passthrough only the specific assigned render node: `--device /dev/dri/renderD<N>:/dev/dri/renderD<N>:rwm`.
+   - Never mount `/dev/dri` wholesale.
+   - Never mount `/dev/dri/card*` (display engine / modesetting is irrelevant to compute).
+2. **Numeric Group Identification**:
+   - Query host GIDs directly from the device nodes: `stat -c %g /dev/kfd` and `stat -c %g /dev/dri/renderD<N>`.
+   - Pass `--group-add` for each distinct GID that owns `/dev/kfd` and the assigned render nodes (usually `render`, sometimes `video`). Never hardcode a GID such as 44 or 107.
+3. **Preserved Hardening Invariants**:
+   - `--cap-drop ALL`
+   - `--security-opt no-new-privileges:true`
+   - `--read-only` rootfs
+   - `--network none` (unless explicit egress allowlist)
+   - Dedicated writable tmpfs and scratch directory.
+4. **Forbidden Flags**:
+   - Never use `--privileged`.
+   - Never use `--ipc=host` or `--pid=host`.
+   - Never use `--security-opt seccomp=unconfined`.
+   - Never use `--cap-add` for compute access.

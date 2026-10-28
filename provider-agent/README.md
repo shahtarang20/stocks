@@ -14,13 +14,15 @@ cd provider-agent
 python3 -m venv .venv            # or: python3 -m virtualenv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"          # dev extras add pytest
-# Optional GPU support (NVIDIA NVML bindings):
-pip install -e ".[gpu]"
+# Optional GPU support:
+pip install -e ".[gpu]"          # NVIDIA NVML bindings
+pip install -e ".[amd]"          # AMD ROCm amdsmi bindings (must match host ROCm version)
 ```
 
-> The `gpu` extra is **optional**. Without it, GPU detection returns an empty
+> The `gpu` and `amd` extras are **optional**. Without them, GPU detection returns an empty
 > list and a clear "CPU-only" capability report — the agent never crashes on a
-> machine without a GPU.
+> machine without a GPU. When using AMD GPUs, ensure the installed `amdsmi` package
+> version matches your host's installed ROCm runtime version (e.g. ROCm 6.x).
 
 ## Usage
 

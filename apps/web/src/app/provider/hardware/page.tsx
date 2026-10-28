@@ -179,7 +179,29 @@ export default function ProviderHardwarePage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div className="text-sm">{hardwareSummary(m)}</div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-medium">{hardwareSummary(m)}</span>
+                      {m.hardware.gpu_vendor ? (
+                        <Badge
+                          variant="neutral"
+                          className={
+                            m.hardware.gpu_vendor === "amd"
+                              ? "border-red-500/30 text-red-400 bg-red-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                              : "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                          }
+                        >
+                          {m.hardware.gpu_vendor}
+                        </Badge>
+                      ) : null}
+                      {m.hardware.gpu_runtime ? (
+                        <Badge
+                          variant="neutral"
+                          className="border-primary/30 text-primary bg-primary/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                        >
+                          {m.hardware.gpu_runtime}
+                        </Badge>
+                      ) : null}
+                    </div>
                     <div className="text-xs text-muted-foreground">
                       {m.hardware.gpu_model
                         ? `${formatMbAsGb(m.hardware.vram_mb)} VRAM · `

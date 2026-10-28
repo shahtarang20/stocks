@@ -54,6 +54,7 @@ class JobCreate(BaseModel):
     isolation_tier: str = Field(
         default="container", pattern="^(container|open|gvisor|microvm|sealed|sealed_pro|confidential)$"
     )
+    required_gpu_runtime: str = Field(default="cuda", pattern="^(cuda|rocm|any)$")
     data_policy: DataPolicy | None = None
     # ccpp-v1 data envelope (see app/services/privacy_crypto.py); the platform never sees plaintext.
     encrypted_input: dict | None = None
@@ -92,6 +93,7 @@ class JobOut(BaseModel):
     status: str
     execution_mode: str
     isolation_tier: str = "container"
+    required_gpu_runtime: str = "cuda"
     machine_id: uuid.UUID | None = None
     reservation_id: uuid.UUID | None = None
     gpu_count: int

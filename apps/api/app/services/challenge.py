@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
 import secrets
 import uuid
@@ -35,6 +36,8 @@ from app.core.config import settings
 from app.models.jobs import Job
 from app.models.verification import VerificationChallenge, VerificationResult
 from app.services import job_fsm as fsm
+
+logger = logging.getLogger(__name__)
 
 # Where the challenge linkage is stashed on the job row. ``jobs.verification``
 # is a server-only JSON column (never echoed to the agent in the claim payload),
@@ -269,8 +272,19 @@ async def evaluate_challenge_job(
     if challenge is None:
         return None
 
+    # The known answer for the runtime this machine used: CUDA and ROCm builds may legitimately
+    # differ. No answer recorded for that runtime = inconclusive (no result, reputation unchanged).
+    runtime = "cuda"
+    if job.machine_id is not None and job.gpu_count:
+        from app.services.gpu_runtime import gpu_runtime_of_machine
+
+        runtime = await gpu_runtime_of_machine(db, job.machine_id) or "cuda"
+    by_runtime = challenge.expected_hashes_by_runtime or {}
+    expected = (by_runtime.get(runtime) or (challenge.expected_output_hash if runtime == "cuda" else "") or "").lower()
+    if not expected:
+        logger.info("challenge %s: no expected hash for runtime %s; inconclusive", challenge.id, runtime)
+        return None
     actual = hash_for_policy(output, challenge.config)
-    expected = (challenge.expected_output_hash or "").lower()
     passed = secrets.compare_digest(actual, expected)
 
     result = VerificationResult(

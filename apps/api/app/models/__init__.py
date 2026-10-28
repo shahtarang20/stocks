@@ -25,7 +25,7 @@ from app.models.marketplace import (
     Quote,
     ResourceReservation,
 )
-from app.models.model_registry import Model, ModelVersion
+from app.models.model_registry import Model, ModelVersion, ModelVersionImage, image_for
 from app.models.org import (
     ApiKey,
     Organization,

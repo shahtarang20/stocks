@@ -138,6 +138,7 @@ try {
       max_cost: "5.00",
       max_runtime_seconds: 300,
       retry_policy: { max_retries: 1 },
+      gpu_runtime: "cuda", // "cuda" | "rocm" | "any" (default: "cuda")
     },
     "my-job-1", // Idempotency-Key
   );

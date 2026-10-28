@@ -32,6 +32,8 @@ class ReliabilityOut(BaseModel):
 class MarketplaceMachineOut(BaseModel):
     machine_id: uuid.UUID
     gpu_model: str | None = None
+    gpu_vendor: str | None = None
+    gpu_runtime: str | None = None
     gpu_count: int = 0
     vram_mb: int = 0
     cpu_model: str | None = None

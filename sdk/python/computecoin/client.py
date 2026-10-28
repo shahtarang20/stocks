@@ -233,6 +233,8 @@ class ComputeCoinClient:
         self,
         *,
         gpu_model: Optional[str] = None,
+        gpu_vendor: Optional[str] = None,
+        gpu_runtime: Optional[str] = None,
         min_vram_mb: Optional[int] = None,
         max_price_per_hour: Optional[str] = None,
         region: Optional[str] = None,
@@ -248,6 +250,8 @@ class ComputeCoinClient:
         """
         params: dict[str, Any] = {
             "gpu_model": gpu_model,
+            "gpu_vendor": gpu_vendor,
+            "gpu_runtime": gpu_runtime,
             "min_vram_mb": min_vram_mb,
             "max_price_per_hour": max_price_per_hour,
             "region": region,
@@ -341,6 +345,8 @@ class ComputeCoinClient:
         machine_id: Optional[str] = None,
         retry_policy: Optional[dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
+        gpu_runtime: Optional[str] = None,
+        required_gpu_runtime: Optional[str] = None,
     ) -> Job:
         """Submit a job (POST /v1/jobs).
 
@@ -364,6 +370,9 @@ class ComputeCoinClient:
             "max_cost": max_cost,
             "max_runtime_seconds": max_runtime_seconds,
         }
+        target_runtime = required_gpu_runtime or gpu_runtime
+        if target_runtime is not None:
+            payload["required_gpu_runtime"] = target_runtime
         if machine_id is not None:
             payload["machine_id"] = machine_id
         if retry_policy is not None:

@@ -19,6 +19,7 @@ import datetime as dt
 import decimal
 import logging
 import uuid
+from typing import Any
 from dataclasses import dataclass
 
 from fastapi import status
@@ -35,6 +36,7 @@ from app.models.provider import ProviderMachine
 from app.services import job_fsm as fsm
 from app.services import reputation as reputation_svc
 from app.services.billing import release_hold, reserve_for_job
+from app.services.gpu_runtime import ROCM_TIERS, is_gpu_compatible, job_gpu_runtime, machine_gpu_runtime, model_image_runtimes
 
 logger = logging.getLogger(__name__)
 from app.services.ledger import InsufficientFunds
@@ -219,17 +221,25 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
         _validate_input(job.workload_type, job.input)
 
     # 3) GPU fit against a targeted machine (if specified).
+    # D5: an AMD (ROCm) GPU job can only run in the container tier in v1; refuse it now rather
+    # than queue a job no machine will ever accept.
+    if job.gpu_count and job_gpu_runtime(job) == "rocm" and (job.isolation_tier or "container").lower() not in ROCM_TIERS:
+        raise JobValidationError(f"rocm_tier_{(job.isolation_tier or '').lower()}_unsupported", status.HTTP_409_CONFLICT)
+
     target: ProviderMachine | None = None
     if job.machine_id is not None:
         target = await _get_machine(db, job.machine_id)
         if target is None:
             raise JobValidationError("machine_not_found", status.HTTP_404_NOT_FOUND)
-        machine_gpus = target.hardware.gpu_count if target.hardware else 0
-        if job.gpu_count > machine_gpus:
-            raise JobValidationError("gpu_count_exceeds_machine")
         tier_ok, reason = _machine_supports_tier_and_policy(target, job)
         if not tier_ok:
             raise JobValidationError(reason or "isolation_tier_not_supported_by_machine", status.HTTP_409_CONFLICT)
+        target_images = await model_image_runtimes(db, mv) if job.execution_mode == "hardware" else None
+        gpu_ok, gpu_reason = is_gpu_compatible(job, target, target_images)
+        if not gpu_ok:
+            if gpu_reason == "gpus":
+                raise JobValidationError("gpu_count_exceeds_machine")
+            raise JobValidationError(gpu_reason or "gpu_incompatible", status.HTTP_409_CONFLICT)
 
     # 4) Estimated cost <= budget cap.
     if job.max_cost is not None:
@@ -257,6 +267,9 @@ class _Candidate:
     price: decimal.Decimal
 
 
+_UNSET = object()
+
+
 async def _eligible_machines(
     db: AsyncSession, job: Job, now: dt.datetime
 ) -> list[_Candidate]:
@@ -265,6 +278,7 @@ async def _eligible_machines(
         query = query.where(ProviderMachine.id == job.machine_id)
     result = await db.execute(query)
     candidates: list[_Candidate] = []
+    images: Any = _UNSET  # runtimes the model has an image for; looked up once, for hardware GPU jobs
     for m in result.scalars().all():
         if m.status == "deregistered" or m.asking_price_per_hour is None:
             logger.debug("scheduler skip (deregistered/unpriced): machine=%s", m.id)
@@ -276,9 +290,16 @@ async def _eligible_machines(
         if job.workload_type not in (workloads or []):
             logger.debug("scheduler skip (workload): machine=%s", m.id)
             continue
-        machine_gpus = m.hardware.gpu_count if m.hardware else 0
-        if machine_gpus < job.gpu_count:
-            logger.debug("scheduler skip (gpus): machine=%s gpus=%s", m.id, machine_gpus)
+        # AMD support (D1/D4/D5): canonical is_gpu_compatible helper
+        if images is _UNSET:
+            images = (
+                await model_image_runtimes(db, await get_model_version(db, job.model))
+                if job.gpu_count and job.execution_mode == "hardware"
+                else None
+            )
+        gpu_ok, gpu_reason = is_gpu_compatible(job, m, images)
+        if not gpu_ok:
+            logger.debug("scheduler skip (%s): machine=%s", gpu_reason, m.id)
             continue
         # Phase 8 & ADR-0005: Proof-of-Privacy tier & policy matching (never downgrade)
         tier_ok, reason = _machine_supports_tier_and_policy(m, job)

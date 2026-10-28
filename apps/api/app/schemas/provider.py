@@ -63,6 +63,9 @@ class HardwareOut(BaseModel):
     ram_mb: int = 0
     disk_gb: int = 0
     cuda_version: str | None = None
+    gpu_vendor: str | None = None
+    gpu_runtime: str | None = None
+    gpu_runtime_version: str | None = None
 
 
 class MachineOut(BaseModel):
@@ -102,6 +105,9 @@ class GpuReport(BaseModel):
     model: str | None = None
     vram_mb: int = 0
     cuda_version: str | None = None
+    gpu_vendor: str | None = None
+    gpu_runtime: str | None = None
+    gpu_runtime_version: str | None = None
 
 
 class CapabilityReport(BaseModel):

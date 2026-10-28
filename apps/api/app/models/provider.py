@@ -113,6 +113,18 @@ class ProviderMachine(Base, TimestampMixin):
         back_populates="machine", cascade="all, delete-orphan", uselist=False
     )
 
+    @property
+    def gpu_runtime(self) -> str:
+        if self.hardware and self.hardware.gpu_runtime:
+            return self.hardware.gpu_runtime
+        return "cuda"
+
+    @property
+    def gpu_vendor(self) -> str:
+        if self.hardware and self.hardware.gpu_vendor:
+            return self.hardware.gpu_vendor
+        return "nvidia"
+
 
 class HardwareInventory(Base, TimestampMixin):
     __tablename__ = "hardware_inventory"
@@ -135,6 +147,9 @@ class HardwareInventory(Base, TimestampMixin):
     gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     vram_mb: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cuda_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gpu_vendor: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gpu_runtime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gpu_runtime_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Full self-reported capability snapshot (JSON), kept for forensics.
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

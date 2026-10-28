@@ -192,6 +192,48 @@ def test_search_machines_shapes_query_and_parses_items():
     assert machine.reliability.success_rate is None
 
 
+def test_search_machines_filters_by_gpu_vendor_and_runtime():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "machine_id": "m_amd",
+                        "gpu_model": "Radeon RX 7900 XTX",
+                        "gpu_count": 1,
+                        "vram_mb": 24576,
+                        "cpu_model": "AMD EPYC",
+                        "cpu_cores": 16,
+                        "ram_mb": 65536,
+                        "region": "us-east",
+                        "price_per_hour": "1.20",
+                        "currency": "USDC_CREDITS",
+                        "supported_workloads": ["text-generation"],
+                        "available_slots": 1,
+                        "max_concurrent_jobs": 1,
+                        "gpu_vendor": "amd",
+                        "gpu_runtime": "rocm",
+                        "gpu_runtime_version": "6.2",
+                    }
+                ],
+                "page": 1,
+                "page_size": 20,
+                "total": 1,
+            },
+        )
+
+    client = ComputeCoinClient("https://api.test", transport=httpx.MockTransport(handler))
+    page = client.search_machines(gpu_vendor="amd", gpu_runtime="rocm")
+    assert captured["params"]["gpu_vendor"] == "amd"
+    assert captured["params"]["gpu_runtime"] == "rocm"
+    assert page.items[0].gpu_vendor == "amd"
+    assert page.items[0].gpu_runtime == "rocm"
+
+
 def test_create_quote_returns_breakdown_strings():
     captured = {}
 
@@ -383,6 +425,30 @@ def test_create_job_shapes_body_and_sends_idempotency_header():
     # Honesty stamp surfaced on the returned Job.
     assert job.execution_mode == "simulated"
     assert job.status == "created"
+
+
+def test_create_job_with_gpu_runtime_sends_required_gpu_runtime():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json=_job_body(required_gpu_runtime="rocm"))
+
+    transport = httpx.MockTransport(handler)
+    client = ComputeCoinClient("https://api.test", access_token="tok123", transport=transport)
+    job = client.create_job(
+        workload_type="text-generation",
+        model="echo-sim-v1",
+        input={"prompt": "Hello"},
+        gpu_count=1,
+        estimated_minutes=5,
+        max_cost="5.00",
+        max_runtime_seconds=300,
+        gpu_runtime="rocm",
+    )
+    assert captured["body"]["required_gpu_runtime"] == "rocm"
+    assert job.required_gpu_runtime == "rocm"
+    assert job.gpu_runtime == "rocm"
 
 
 def test_create_job_omits_idempotency_header_when_not_given():

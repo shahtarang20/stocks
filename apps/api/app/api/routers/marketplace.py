@@ -28,6 +28,8 @@ router = APIRouter(prefix="/v1/marketplace", tags=["marketplace"])
 @router.get("/machines", response_model=MarketplaceListOut)
 async def search_machines(
     gpu_model: str | None = Query(default=None),
+    gpu_vendor: str | None = Query(default=None),
+    gpu_runtime: str | None = Query(default=None),
     min_vram_mb: int | None = Query(default=None, ge=0),
     max_price_per_hour: decimal.Decimal | None = Query(default=None, ge=0),
     region: str | None = Query(default=None),
@@ -42,6 +44,8 @@ async def search_machines(
     items, total = await list_marketplace_machines(
         db,
         gpu_model=gpu_model,
+        gpu_vendor=gpu_vendor,
+        gpu_runtime=gpu_runtime,
         min_vram_mb=min_vram_mb,
         max_price_per_hour=max_price_per_hour,
         region=region,

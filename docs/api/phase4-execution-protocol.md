@@ -60,7 +60,9 @@ req: {
   "gpu_count": 1, "estimated_minutes": 5,
   "max_cost": "5.00",             // budget cap; validated against the quote
   "max_runtime_seconds": 300,
-  "retry_policy": { "max_retries": 1 }?
+  "retry_policy": { "max_retries": 1 }?,
+  "required_gpu_runtime": "cuda" | "rocm" | "any",  // default "cuda" (D3)
+  "isolation_tier": "container" | "gvisor" | "microvm" | "sealed" | "sealed_pro" | "confidential"
 }
 res 201: <job object>   # status starts at "created"; pipeline advances it
 ```
@@ -68,19 +70,21 @@ Idempotent: same (customer, Idempotency-Key) returns the SAME job (no duplicate)
 Validation (VALIDATING): model approved + supports workload (else 422
 model_not_supported); input schema valid for workload (422 invalid_input);
 gpu_count <= target/any machine gpus; estimated cost <= max_cost (409
-budget_exceeded). On success -> QUEUED.
+budget_exceeded); D5 tier rule: a ROCm GPU job with a non-container tier is rejected with HTTP 409 `rocm_tier_<tier>_unsupported`.
+On success -> QUEUED.
 
 Scheduling (QUEUED->MATCHED->RESERVED): the scheduler applies HARD eligibility
-(workload+model+gpu+vram+region+online+available) then a transparent WEIGHTED
-score (price, success_rate-if-any, availability) and picks the best machine, then
-atomically reserves capacity (Phase 3 invariant — no double-book). If none
-eligible: stays QUEUED (retried) and, when retries exhausted, -> FAILED
-(no_provider). The match is explainable: `job.match_explanation` lists the chosen
-machine + score factors.
+via the canonical `is_gpu_compatible` helper (runtime match, D5 AMD container-only
+tier, image exists in `model_version_images` for the machine's runtime) then a
+transparent WEIGHTED score (price, success_rate-if-any, availability) and picks
+the best machine, then atomically reserves capacity (Phase 3 invariant — no
+double-book). If none eligible: stays QUEUED (retried) with logged skip reason,
+and when retries exhausted, -> FAILED (no_provider). The match is explainable:
+`job.match_explanation` lists the chosen machine + score factors.
 
 ### GET /v1/jobs / GET /v1/jobs/{id}   (own only; 404 otherwise)
-Returns the job incl. status, execution_mode, match_explanation, verification,
-final_cost (null in Phase 4), timestamps.
+Returns the job incl. status, execution_mode, required_gpu_runtime, match_explanation,
+verification, final_cost (null in Phase 4), timestamps.
 ### GET /v1/jobs/{id}/events           -> ordered FSM history (job_events)
 ### GET /v1/jobs/{id}/logs             -> log lines (from object storage via metadata)
 ### GET /v1/jobs/{id}/artifacts        -> [{artifact_id, kind, size, sha256, content_type, created_at}]
@@ -92,13 +96,14 @@ X-ComputeCoin-Machine/Timestamp/Signature over canonical `machine_id\n ts \n sha
 ### POST /v1/agents/jobs/claim
 Body `{ "machine_id": "<id>" }`. Returns the next job in RESERVED for this machine
 and transitions it RESERVED->RUNNING, sets lease_expires_at = now+LEASE_TTL, and
-returns a job spec + a short-lived signed artifact upload grant:
+returns a job spec + a short-lived signed artifact upload grant. The job spec's
+`image_digest` is resolved per the claiming machine's runtime via `image_for_runtime(mv, machine.gpu_runtime)`:
 ```
 res 200: {
   "job_id": "uuid", "workload_type": "...", "model": "echo-sim-v1",
   "input": {...}, "execution_mode": "simulated",
   "limits": { "max_runtime_seconds": 300, "memory_mb": 2048, "cpus": "1.0", "gpu_count": 1 },
-  "image_digest": null,                 // null => simulated; a pinned digest => DockerExecutor
+  "image_digest": null,                 // null => simulated; a pinned digest for the machine's runtime => DockerExecutor
   "artifact_upload": { "url": "...", "token": "...", "expires_at": "..." },
   "lease_expires_at": "..."
 }

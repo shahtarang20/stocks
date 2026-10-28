@@ -54,6 +54,8 @@ class VerificationChallenge(Base):
     # The job ``input`` payload submitted verbatim when this challenge is used.
     input: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     expected_output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Per-runtime expected hashes, e.g. {"cuda": "...", "rocm": "..."}
+    expected_hashes_by_runtime: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Comparison policy, e.g. {"mode": "exact"} or {"mode": "cosine", "min": 0.98}.
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)

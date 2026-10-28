@@ -71,6 +71,7 @@ class ComputeCoinMeta(BaseModel):
     machine_id: Optional[str] = None
     provider_id: Optional[str] = None
     model_version: Optional[str] = None
+    image_digest: Optional[str] = None
 
 
 class ChatCompletionResponse(BaseModel):

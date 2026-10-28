@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import logging
 import math
 import time
 import uuid
@@ -54,7 +55,15 @@ from app.schemas.inference import (
     EmbeddingResponse,
     EmbeddingUsage,
 )
+from app.services.gpu_runtime import (
+    image_for_runtime,
+    is_gpu_compatible,
+    machine_gpu_runtime,
+    model_image_runtimes,
+)
 from app.services.provider import derive_status
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -88,12 +97,17 @@ def _machine_query():
 
 
 async def _find_eligible_machine(
-    db: AsyncSession, workload_type: str, now: dt.datetime | None = None
-) -> ProviderMachine | None:
-    """Find the best eligible online machine for the given workload type.
+    db: AsyncSession,
+    workload_type: str,
+    model_version: ModelVersion | None = None,
+    now: dt.datetime | None = None,
+) -> tuple[ProviderMachine | None, str | None]:
+    """Find the best eligible online machine for the given workload type and model.
 
-    Uses a simplified version of the Phase 4 scheduler: cheapest price among
-    online machines that support the workload.
+    Uses the same compatibility helper (is_gpu_compatible) so 'any' runtime
+    goes to the cheapest eligible machine of either vendor, and the job carries
+    the image for the chosen machine's runtime.
+    Returns (best_machine, chosen_image_digest).
     """
     now = now or utcnow()
     result = await db.execute(
@@ -106,18 +120,46 @@ async def _find_eligible_machine(
     best: ProviderMachine | None = None
     best_price = None
 
+    # A hardware model may only go to machines it has an image for, and a hardware model with no
+    # image at all goes to no GPU machine (an empty set filters them all, it is not "no filter").
+    # A simulated model runs no image, so it is not filtered.
+    image_runtimes: set[str] | None = None
+    if model_version is not None and model_version.runtime != "simulated":
+        image_runtimes = await model_image_runtimes(db, model_version)
+
     for m in result.scalars().all():
+        if getattr(m, "is_banned", False):
+            logger.debug("inference skip (banned): machine=%s", m.id)
+            continue
         if derive_status(m, now) != "online":
+            logger.debug("inference skip (offline): machine=%s avail=%s", m.id, m.availability)
             continue
         workloads = m.capability.supported_workloads if m.capability else []
         if workload_type not in (workloads or []):
+            logger.debug("inference skip (workload): machine=%s", m.id)
             continue
+
+        gpu_ok, gpu_reason = is_gpu_compatible(
+            machine=m,
+            image_runtimes=image_runtimes,
+            job_gpu_runtime="any",
+            job_gpu_count=1 if (m.hardware and m.hardware.gpu_count > 0) else 0,
+            isolation_tier="container",
+        )
+        if not gpu_ok:
+            logger.debug("inference skip (%s): machine=%s", gpu_reason, m.id)
+            continue
+
         price = m.asking_price_per_hour
         if best_price is None or price < best_price:
             best = m
             best_price = price
 
-    return best
+    image_digest: str | None = None
+    if best is not None and model_version is not None:
+        image_digest = await image_for_runtime(db, model_version, machine_gpu_runtime(best))
+
+    return best, image_digest
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +180,7 @@ def _simulated_chat_response(
     request: ChatCompletionRequest,
     model_version: ModelVersion,
     machine: ProviderMachine | None,
+    image_digest: str | None = None,
 ) -> ChatCompletionResponse:
     """Produce a deterministic simulated chat completion.
 
@@ -188,6 +231,7 @@ def _simulated_chat_response(
             machine_id=str(machine.id) if machine else None,
             provider_id=str(machine.provider_id) if machine else None,
             model_version=model_version.version_tag,
+            image_digest=image_digest,
         ),
     )
 
@@ -218,6 +262,7 @@ def _simulated_embedding_response(
     request: EmbeddingRequest,
     model_version: ModelVersion,
     machine: ProviderMachine | None,
+    image_digest: str | None = None,
 ) -> EmbeddingResponse:
     """Produce deterministic simulated embeddings.
 
@@ -243,6 +288,7 @@ def _simulated_embedding_response(
             machine_id=str(machine.id) if machine else None,
             provider_id=str(machine.provider_id) if machine else None,
             model_version=model_version.version_tag,
+            image_digest=image_digest,
         ),
     )
 
@@ -287,15 +333,15 @@ async def run_chat_completion(
             http_status=404,
         )
 
-    machine = await _find_eligible_machine(db, "text-generation")
+    machine, image_digest = await _find_eligible_machine(db, "text-generation", model_version=mv)
 
     if mv.runtime == "simulated" or machine is None:
         # Simulated path — deterministic, no real GPU.
-        return _simulated_chat_response(request, mv, machine)
+        return _simulated_chat_response(request, mv, machine, image_digest=image_digest)
 
     # Hardware path — future Phase 4+ integration.
     # For now, fall back to simulated and stamp it honestly.
-    return _simulated_chat_response(request, mv, machine)
+    return _simulated_chat_response(request, mv, machine, image_digest=image_digest)
 
 
 async def run_embedding(
@@ -333,12 +379,12 @@ async def run_embedding(
         )
 
     # Route to an eligible machine supporting embeddings (fall back to text-generation)
-    machine = await _find_eligible_machine(db, "embeddings")
+    machine, image_digest = await _find_eligible_machine(db, "embeddings", model_version=mv)
     if machine is None:
-        machine = await _find_eligible_machine(db, "text-generation")
+        machine, image_digest = await _find_eligible_machine(db, "text-generation", model_version=mv)
 
     if mv.runtime == "simulated" or machine is None:
-        return _simulated_embedding_response(request, mv, machine)
+        return _simulated_embedding_response(request, mv, machine, image_digest=image_digest)
 
     # Hardware path — future.
-    return _simulated_embedding_response(request, mv, machine)
+    return _simulated_embedding_response(request, mv, machine, image_digest=image_digest)

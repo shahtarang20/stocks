@@ -73,6 +73,7 @@ class Job(Base, TimestampMixin):
 
     execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="simulated")
     isolation_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="container")
+    required_gpu_runtime: Mapped[str] = mapped_column(String(32), nullable=False, default="cuda")
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # --- Phase B/C: batching, challenges and redundant (shadow) execution ---

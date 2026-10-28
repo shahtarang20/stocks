@@ -48,6 +48,8 @@ function reliabilityText(m: MarketplaceMachine): string {
 export function LiveGpuTable() {
   // Applied filters drive the query; inputs are committed on submit.
   const [gpuModel, setGpuModel] = useState("");
+  const [gpuVendor, setGpuVendor] = useState("");
+  const [gpuRuntime, setGpuRuntime] = useState("");
   const [minVram, setMinVram] = useState<number | "">("");
   const [maxPrice, setMaxPrice] = useState("");
   const [region, setRegion] = useState("");
@@ -63,13 +65,15 @@ export function LiveGpuTable() {
   const params = useMemo<MarketplaceSearchParams>(() => {
     const p: MarketplaceSearchParams = { page, page_size: PAGE_SIZE };
     if (gpuModel.trim()) p.gpu_model = gpuModel.trim();
+    if (gpuVendor) p.gpu_vendor = gpuVendor;
+    if (gpuRuntime) p.gpu_runtime = gpuRuntime;
     if (minVram !== "") p.min_vram_mb = Number(minVram);
     if (maxPrice.trim()) p.max_price_per_hour = maxPrice.trim();
     if (region.trim()) p.region = region.trim();
     if (workload.trim()) p.workload = workload.trim();
     if (verification) p.verification_status = verification;
     return p;
-  }, [gpuModel, minVram, maxPrice, region, workload, verification, page]);
+  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, verification, page]);
 
   const query = useQuery({
     queryKey: ["marketplace", "machines", params],
@@ -84,6 +88,8 @@ export function LiveGpuTable() {
 
   function resetFilters() {
     setGpuModel("");
+    setGpuVendor("");
+    setGpuRuntime("");
     setMinVram("");
     setMaxPrice("");
     setRegion("");
@@ -116,7 +122,7 @@ export function LiveGpuTable() {
             Refresh
           </Button>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
             <Label htmlFor="f-model">GPU model</Label>
             <Input
@@ -128,6 +134,38 @@ export function LiveGpuTable() {
                 setPage(1);
               }}
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="f-vendor">Vendor</Label>
+            <select
+              id="f-vendor"
+              className={selectClass}
+              value={gpuVendor}
+              onChange={(e) => {
+                setGpuVendor(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">Any vendor</option>
+              <option value="nvidia">NVIDIA</option>
+              <option value="amd">AMD</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="f-runtime">Runtime</Label>
+            <select
+              id="f-runtime"
+              className={selectClass}
+              value={gpuRuntime}
+              onChange={(e) => {
+                setGpuRuntime(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">Any runtime</option>
+              <option value="cuda">CUDA</option>
+              <option value="rocm">ROCm</option>
+            </select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="f-vram">Min VRAM (MB)</Label>
@@ -278,9 +316,31 @@ export function LiveGpuTable() {
               {items.map((m) => (
                 <TableRow key={m.machine_id}>
                   <TableCell>
-                    <div className="font-medium">
-                      {m.gpu_model ?? "CPU-only"}
-                      {m.gpu_count > 1 ? ` ×${m.gpu_count}` : ""}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-medium">
+                        {m.gpu_model ?? "CPU-only"}
+                        {m.gpu_count > 1 ? ` ×${m.gpu_count}` : ""}
+                      </span>
+                      {m.gpu_vendor ? (
+                        <Badge
+                          variant="neutral"
+                          className={
+                            m.gpu_vendor === "amd"
+                              ? "border-red-500/30 text-red-400 bg-red-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                              : "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                          }
+                        >
+                          {m.gpu_vendor}
+                        </Badge>
+                      ) : null}
+                      {m.gpu_runtime ? (
+                        <Badge
+                          variant="neutral"
+                          className="border-primary/30 text-primary bg-primary/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                        >
+                          {m.gpu_runtime}
+                        </Badge>
+                      ) : null}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {m.gpu_model ? `${formatMbAsGb(m.vram_mb)} VRAM` : "—"}

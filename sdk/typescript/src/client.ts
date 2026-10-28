@@ -312,7 +312,11 @@ export class ComputeCoinClient {
    * {@link ConflictError} carrying `.code` -- the call never fabricates success.
    */
   async createJob(params: CreateJobParams, idempotencyKey?: string): Promise<Job> {
-    const opts: { body: unknown; headers?: Record<string, string> } = { body: params };
+    const body: Record<string, unknown> = { ...params };
+    if (params.gpu_runtime && !params.required_gpu_runtime) {
+      body.required_gpu_runtime = params.gpu_runtime;
+    }
+    const opts: { body: unknown; headers?: Record<string, string> } = { body };
     if (idempotencyKey !== undefined) {
       opts.headers = { "Idempotency-Key": idempotencyKey };
     }

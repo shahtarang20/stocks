@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class TokenPair(BaseModel):
@@ -80,6 +80,9 @@ class MarketplaceMachine(BaseModel):
     max_concurrent_jobs: int = 0
     reliability: Optional[MachineReliability] = None
     last_heartbeat_at: Optional[str] = None
+    gpu_vendor: Optional[str] = None
+    gpu_runtime: Optional[str] = None
+    gpu_runtime_version: Optional[str] = None
 
 
 class MachinePage(BaseModel):
@@ -160,6 +163,14 @@ class Job(BaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     isolation_tier: Optional[str] = "container"
+    required_gpu_runtime: Optional[str] = "cuda"
+    gpu_runtime: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _sync_gpu_runtime(self) -> "Job":
+        if self.gpu_runtime is None and self.required_gpu_runtime is not None:
+            self.gpu_runtime = self.required_gpu_runtime
+        return self
     encrypted_input: Optional[dict[str, Any]] = None
     encrypted_output: Optional[dict[str, Any]] = None
     dk_shares: Optional[dict[str, Any]] = None

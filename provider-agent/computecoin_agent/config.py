@@ -13,9 +13,10 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import tomli_w
+from pydantic import field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -78,6 +79,19 @@ class AgentConfig(BaseSettings):
     machine_secret: Optional[str] = None
     heartbeat_interval_seconds: int = 30
     online_window_seconds: int = 90
+    # Optional GPU vendor override ("nvidia" | "amd") when a host has both vendors (D2)
+    gpu_vendor: Optional[str] = None
+
+    @field_validator("gpu_vendor", mode="before")
+    @classmethod
+    def _check_gpu_vendor(cls, value: Any) -> Optional[str]:
+        """Refuse a typo ("AMD ", "intel") instead of silently running CPU-only or as NVIDIA."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        vendor = str(value).strip().lower()
+        if vendor not in ("nvidia", "amd"):
+            raise ValueError("gpu_vendor must be 'nvidia' or 'amd'")
+        return vendor
     # ---- TPM 2.0 (hardware attestation, WP-F). Unset = no TPM evidence is sent.
     # tpm2-tools TCTI, e.g. "device:/dev/tpmrm0" (real host) or "swtpm:host=127.0.0.1,port=2321".
     tpm_tcti: Optional[str] = None

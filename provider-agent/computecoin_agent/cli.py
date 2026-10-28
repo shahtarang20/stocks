@@ -23,7 +23,7 @@ from .config import AgentConfig
 from .enrollment import EnrollmentError
 from .enrollment import enroll as enroll_machine
 from .enrollment import enroll_remote
-from .hardware import build_capability_report
+from .hardware import build_capability_report, check_dual_gpu_vendor_conflict
 from .heartbeat import HeartbeatAuthError, HeartbeatStaleError, heartbeat_loop
 from .jobrunner import poll_loop
 
@@ -33,7 +33,8 @@ app = typer.Typer(add_completion=False, help="ComputeCoin provider agent.")
 @app.command()
 def detect() -> None:
     """Detect local hardware and print the capability report as JSON."""
-    report = build_capability_report()
+    config = AgentConfig.load()
+    report = build_capability_report(config_gpu_vendor=config.gpu_vendor)
     typer.echo(json.dumps(report.model_dump(mode="json"), indent=2))
 
 
@@ -50,8 +51,17 @@ def enroll(
     Phase 2 contract and stores the returned machine credential (0600). Without
     it, the Phase 1 offline path mints a local signing secret instead.
     """
+    config = AgentConfig.load()
+    if check_dual_gpu_vendor_conflict(config.gpu_vendor):
+        typer.echo(
+            "Enrollment refused: both NVIDIA and AMD GPUs were detected. "
+            "Set gpu_vendor ('nvidia' or 'amd') in ~/.computecoin/agent.toml "
+            "or COMPUTECOIN_GPU_VENDOR before enrolling."
+        )
+        raise typer.Exit(code=1)
+
     if server:
-        report = build_capability_report()
+        report = build_capability_report(config_gpu_vendor=config.gpu_vendor)
         try:
             result = enroll_remote(server, token, report)
         except EnrollmentError as exc:
@@ -97,7 +107,7 @@ def run(
 
     base_url = server or config.api_url
     period = interval if interval is not None else float(config.heartbeat_interval_seconds)
-    report = build_capability_report()
+    report = build_capability_report(config_gpu_vendor=config.gpu_vendor)
 
     def _emit(i: int, result) -> None:
         label = f"{i + 1}/{iterations}" if iterations > 0 else f"{i + 1}"

@@ -325,6 +325,66 @@ def _default_nvidia_available() -> bool:
     return which("nvidia-smi") is not None or which("nvidia-container-runtime") is not None
 
 
+def _default_amd_available() -> bool:
+    """Best-effort probe: is AMD ROCm compute available (/dev/kfd and docker)?"""
+    from shutil import which
+
+    return os.path.exists("/dev/kfd") and which("docker") is not None
+
+
+def _device_gids(paths: list[str]) -> list[int]:
+    """Groups that own the device files: exactly what the container needs to open them
+    (render for renderD*, render or video for /dev/kfd, depending on the distribution)."""
+    gids: list[int] = []
+    for path in paths:
+        try:
+            gid = os.stat(path).st_gid
+        except OSError as exc:
+            raise HardwareUnavailableError(f"AMD device {path} is not accessible ({exc})") from exc
+        if gid not in gids:
+            gids.append(gid)
+    return gids
+
+
+def build_gpu_argv(
+    gpu_vendor: str,
+    gpu_count: int,
+    *,
+    render_nodes: Optional[list[str]] = None,
+    render_gid: Optional[int] = None,
+    video_gid: Optional[int] = None,
+) -> list[str]:
+    """Docker GPU argv for the vendor.
+
+    - NVIDIA: byte-identical ``['--gpus', str(gpu_count)]``.
+    - AMD (D6): ``/dev/kfd`` plus ONLY the render nodes of the GPUs given (from detection, which
+      resolves each GPU's own node), and the numeric GIDs owning those devices. Never the whole
+      /dev/dri, never a guessed node, never --privileged / --ipc=host / seccomp=unconfined /
+      --cap-add. Fewer known nodes than GPUs requested is refused, not padded.
+    """
+    vendor = (gpu_vendor or "nvidia").lower().strip()
+    if vendor == "nvidia":
+        return ["--gpus", str(gpu_count)]
+    if vendor != "amd":
+        raise ExecutorError(f"Unsupported gpu_vendor: {gpu_vendor!r}")
+
+    nodes = list((render_nodes or [])[:gpu_count])
+    if len(nodes) < gpu_count:
+        raise HardwareUnavailableError(
+            f"AMD GPU job needs {gpu_count} GPU(s) but only {len(nodes)} render node(s) are known"
+        )
+    argv = ["--device", "/dev/kfd"]
+    for node in nodes:
+        argv.extend(["--device", node])
+    if render_gid is not None or video_gid is not None:
+        gids = [g for g in (render_gid, video_gid) if g is not None]
+    else:
+        gids = _device_gids(["/dev/kfd", *nodes])
+    for gid in gids:
+        argv.extend(["--group-add", str(gid)])
+    return argv
+
+
 @dataclass
 class DockerRunResult:
     returncode: int
@@ -374,9 +434,17 @@ class DockerExecutor(Executor):
         runner: DockerRunner = _subprocess_runner,
         docker_available: Callable[[], bool] = _default_docker_available,
         nvidia_available: Callable[[], bool] = _default_nvidia_available,
+        amd_available: Optional[Callable[[], bool]] = None,
+        kfd_available: Optional[Callable[[], bool]] = None,
         gvisor_available: Optional[Callable[[], bool]] = None,
         microvm_available: Optional[Callable[[], bool]] = None,
         confidential_available: Optional[Callable[[], bool]] = None,
+        gpu_vendor: Optional[str] = None,
+        render_nodes: Optional[list[str]] = None,
+        render_gid: Optional[int] = None,
+        video_gid: Optional[int] = None,
+        amdsmi_module: Any = None,
+        nvml_module: Any = None,
         output_root: Optional[str] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -389,11 +457,41 @@ class DockerExecutor(Executor):
         self._runner = runner
         self._docker_available = docker_available
         self._nvidia_available = nvidia_available
+        self._amd_available = amd_available or _default_amd_available
+        self._kfd_available = kfd_available or (lambda: os.path.exists("/dev/kfd"))
         self._gvisor_available = gvisor_available or probe_gvisor
         self._microvm_available = microvm_available or probe_microvm
         self._confidential_available = confidential_available or probe_confidential_computing
+        self._render_nodes = render_nodes
+        self._render_gid = render_gid
+        self._video_gid = video_gid
+        self._amdsmi_module = amdsmi_module
+        self._nvml_module = nvml_module
         self._output_root = output_root
         self._clock = clock
+
+        # Resolved on the first GPU job (_resolve_gpu), not per construction: a CPU job never
+        # pays for GPU detection.
+        self._gpu_vendor = gpu_vendor.lower().strip() if gpu_vendor else None
+
+    def _resolve_gpu(self) -> str:
+        """The vendor of this host's GPUs, and for AMD each GPU's own render node, from detection
+        (an explicit constructor value wins). Unknown vendor = NVIDIA, as before AMD support."""
+        need_nodes = self._render_nodes is None and self._gpu_vendor in (None, "amd")
+        if self._gpu_vendor is None or need_nodes:
+            from .config import AgentConfig
+            from .hardware import detect_gpus
+
+            try:
+                configured = AgentConfig.load().gpu_vendor
+            except Exception:
+                configured = None
+            gpus, _ = detect_gpus(config_gpu_vendor=configured, amdsmi_module=self._amdsmi_module)
+            if self._gpu_vendor is None:
+                self._gpu_vendor = gpus[0].gpu_vendor if gpus else (configured or "nvidia")
+            if self._gpu_vendor == "amd" and self._render_nodes is None:
+                self._render_nodes = [g.render_node for g in gpus if g.gpu_vendor == "amd" and g.render_node]
+        return self._gpu_vendor
 
     # -- argv construction (pure; the core of the hardening contract) -------- #
     def build_argv(self, job_spec: JobSpec, output_dir: str) -> list[str]:
@@ -453,15 +551,6 @@ class DockerExecutor(Executor):
             f"COMPUTECOIN_WORKLOAD_TYPE={job_spec.workload_type}",
         ]
 
-        # GPU only when requested AND the toolkit is present.
-        if gpu_count > 0:
-            if not self._nvidia_available():
-                raise HardwareUnavailableError(
-                    "GPU job requires the NVIDIA container toolkit, which is "
-                    "unavailable on this host"
-                )
-            argv += ["--gpus", str(gpu_count)]
-
         # --- Phase 8: Isolation Tier Enforcement ---
         from .isolation import (
             TIER_CONFIDENTIAL,
@@ -471,6 +560,37 @@ class DockerExecutor(Executor):
         )
 
         tier = (job_spec.isolation_tier or TIER_CONTAINER).lower()
+
+        vendor = self._resolve_gpu() if gpu_count > 0 else (self._gpu_vendor or "nvidia")
+        # D5: AMD GPU jobs support container isolation only in v1
+        if gpu_count > 0 and vendor == "amd" and tier != TIER_CONTAINER:
+            raise IsolationUnavailableError(
+                f"AMD GPU jobs support container isolation only in v1 (requested {tier!r}). "
+                "Workload cannot be silently downgraded."
+            )
+
+        # GPU only when requested AND the driver/toolkit is present.
+        if gpu_count > 0:
+            if vendor == "amd":
+                if not self._kfd_available():
+                    raise HardwareUnavailableError(
+                        "AMD GPU job requires /dev/kfd, which is unavailable on this host"
+                    )
+                argv += build_gpu_argv(
+                    "amd",
+                    gpu_count,
+                    render_nodes=self._render_nodes,
+                    render_gid=self._render_gid,
+                    video_gid=self._video_gid,
+                )
+            else:
+                if not self._nvidia_available():
+                    raise HardwareUnavailableError(
+                        "GPU job requires the NVIDIA container toolkit, which is "
+                        "unavailable on this host"
+                    )
+                argv += build_gpu_argv("nvidia", gpu_count)
+
         if tier == TIER_GVISOR:
             if not self._gvisor_available():
                 raise IsolationUnavailableError(
@@ -605,13 +725,30 @@ class DockerExecutor(Executor):
         )
         schema_ok = validate_output(job_spec.workload_type, output)
 
-        # Collect hardware metrics if available (honest NVML readings; never fabricated)
+        # Collect hardware metrics if available (honest readings; never fabricated)
         gpu_util_pct = None
         max_mem_mb = None
-        if self._nvidia_available():
+        if self._gpu_vendor == "amd" and (job_spec.limits or {}).get("gpu_count", 0):
             try:
                 from .telemetry import sample_gpu_metrics
-                samples = sample_gpu_metrics(simulated=False)
+
+                samples = sample_gpu_metrics(
+                    simulated=False,
+                    amdsmi_module=self._amdsmi_module,
+                )
+                if samples and samples[0].extra_metrics is None:
+                    gpu_util_pct = samples[0].gpu_util_pct
+                    max_mem_mb = samples[0].mem_used_mb
+            except Exception:
+                pass
+        elif self._nvidia_available():
+            try:
+                from .telemetry import sample_gpu_metrics
+
+                samples = sample_gpu_metrics(
+                    simulated=False,
+                    nvml_module=self._nvml_module,
+                )
                 if samples and samples[0].extra_metrics is None:
                     gpu_util_pct = samples[0].gpu_util_pct
                     max_mem_mb = samples[0].mem_used_mb

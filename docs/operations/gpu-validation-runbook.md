@@ -250,3 +250,103 @@ Verify via `GET /v1/jobs/9d82e1c3-4f2a-4b91-89ce-123456789abc`:
 | `container_nonzero_exit: docker run exited 137` | Out of Memory (OOM) killed by kernel or cgroup memory quota. | Verify GPU VRAM and system memory limits. Increase `memory_mb` in job spec or assign a machine with higher VRAM. |
 | `permission denied` reading `/out/input.json` inside container | Output directory created with restricted umask. | The agent automatically applies `chmod 0777` to the per-job temporary output directory and `chmod 0666` to `input.json` to allow the unprivileged `nobody:nogroup` container user to read input and write output. Verify host filesystem is not mounted `noexec` or `nosuid`. |
 | `missing_output: container exited 0 but produced no valid output` | Model runner crashed silently or failed to write `/out/output.json`. | Inspect container logs via `journalctl -u computecoin-agent` or check container standard error. |
+
+---
+
+## 8. AMD Host Setup & Validation Runbook (ROCm)
+
+> **Purpose:** Detailed instructions for provisioning an AMD GPU host (Radeon RX 7900 or Instinct MI300X/MI250), configuring ROCm kernel and userspace device access, enrolling with ComputeCoin, and validating hardware job execution.
+
+### 8.1 Hardware & Driver Prerequisites
+- **Supported GPUs**:
+  - AMD Instinct MI300X / MI250 / MI210 (CDNA)
+  - AMD Radeon RX 7900 XTX / XT / GRE (RDNA3)
+- **Supported OS**: Ubuntu 22.04 LTS (kernel >= 5.15) or 24.04 LTS.
+- **ROCm Version**: ROCm 6.1.x or 6.2.x with matching `amdsmi`.
+
+### 8.2 Install Kernel Driver and ROCm
+```bash
+# Download and install AMD repo package
+sudo apt-get update && sudo apt-get install -y wget gnupg2
+wget https://repo.radeon.com/amdgpu-install/6.2/ubuntu/jammy/amdgpu-install_6.2.60200-1_all.deb
+sudo dpkg -i amdgpu-install_6.2.60200-1_all.deb
+sudo apt-get update
+
+# Install ROCm compute and kernel dkms modules
+sudo amdgpu-install --usecase=rocm,dkms --no-dkms -y
+# Or standard full ROCm:
+sudo apt-get install -y rocm-hip-sdk rocm-smi-lib
+
+# Add service user to render and video groups
+sudo usermod -aG render,video $USER
+sudo usermod -aG render,video computecoin-agent
+```
+
+### 8.3 Verify Device Nodes & Permissions
+Confirm the Kernel Fusion Driver (`/dev/kfd`) and render nodes exist:
+```bash
+ls -la /dev/kfd /dev/dri/renderD*
+# Verify rocm-smi
+rocm-smi
+```
+Expected output shows `/dev/kfd` with read/write access (mode 0666 or group render/video), and render nodes `/dev/dri/renderD128`, etc.
+
+### 8.4 Install Provider Agent with AMD Extra
+Install the provider agent with the optional `amd` dependency extra:
+```bash
+cd /opt/computecoin/provider-agent
+source .venv/bin/activate
+pip install -e ".[amd]"
+```
+
+Verify GPU detection:
+```bash
+computecoin-agent detect
+```
+Expected output:
+```json
+{
+  "gpus": [
+    {
+      "model": "Radeon RX 7900 XTX",
+      "vram_mb": 24576,
+      "gpu_vendor": "amd",
+      "gpu_runtime": "rocm",
+      "gpu_runtime_version": "6.2.0",
+      "verification_status": "detected"
+    }
+  ]
+}
+```
+
+### 8.5 Enrolling & Validating ROCm Jobs
+1. **Enroll Machine**:
+   ```bash
+   computecoin-agent enroll --token enr_xxxx --api-url https://api.computecoin.network
+   ```
+   Check the web dashboard: the machine appears with the `AMD` and `ROCM` badges, status `Detected`.
+
+2. **Submit a ROCm Job**:
+   Submit via `POST /v1/jobs` with `"required_gpu_runtime": "rocm"` and `"isolation_tier": "container"`.
+   ```bash
+   curl -X POST https://api.computecoin.network/v1/jobs \
+     -H "Authorization: Bearer <CUSTOMER_JWT>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "workload_type": "text-generation",
+       "model": "echo-sim-v1",
+       "input": {"prompt": "Testing AMD ROCm inference"},
+       "gpu_count": 1,
+       "estimated_minutes": 5,
+       "max_cost": "2.00",
+       "max_runtime_seconds": 180,
+       "required_gpu_runtime": "rocm",
+       "isolation_tier": "container"
+     }'
+   ```
+
+3. **Verify D5 & D6 Guarantees**:
+   - Submitting with `"isolation_tier": "gvisor"` or `"microvm"` returns HTTP 409 with `rocm_tier_gvisor_unsupported` (or `rocm_tier_microvm_unsupported`).
+   - The agent claims the job and executes Docker with `--device /dev/kfd` and ONLY the assigned `/dev/dri/renderD<N>`, plus `--group-add <render GID>` and `--group-add <video GID>`.
+   - No `--privileged`, `--ipc=host`, or whole `/dev/dri` mounts are present.
+   - Run metrics (`gpu_util_pct`, `temp_c`, `power_w`, `mem_used_mb`) are sampled via `amdsmi` and reported in the signed heartbeat batch.

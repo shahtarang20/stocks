@@ -333,74 +333,75 @@ Tick each item only when its proof exists: a passing test, a command output or a
 reviewed document. "Proof" says what the reviewer checks.
 
 ### WP0 Baseline
-- [ ] All suites pass before any change; counts recorded (agent, API, web check, Python SDK, TypeScript SDK). *Proof: command output in the WP0 report.*
-- [ ] Jobrunner concurrency per machine confirmed (one GPU job at a time, or escalated). *Proof: code reference in the report.*
-- [ ] Findings recorded on the current NVIDIA + microVM/gVisor + `--gpus` behaviour (no code changed). *Proof: report section.*
+- [x] All suites pass before any change; counts recorded (agent, API, web check, Python SDK, TypeScript SDK). *Proof: command output in the WP0 report.* → Agent: 99 passed; API: 606 passed; Web: 16 passed, typecheck & lint clean; SDK Python: 59 passed; SDK TypeScript: 20 passed, typecheck clean; Guardian: 19 passed; Witness: 7 passed; Contracts: 33 passed; e2e: 7 passed.
+- [x] Jobrunner concurrency per machine confirmed (one GPU job at a time, or escalated). *Proof: code reference in the report.* → `computecoin_agent/jobrunner.py::run_loop` runs sequentially calling `run_one(...)`. At most one job is executed at a time per host. No concurrent GPU allocation needed.
+- [x] Findings recorded on the current NVIDIA + microVM/gVisor + `--gpus` behaviour (no code changed). *Proof: report section.* → In `computecoin_agent/executor.py`, NVIDIA `--gpus` appends `--gpus <count>`. When tier is `microvm` or `gvisor`, it appends `--runtime kata-qemu` or `runsc`. For AMD, D5 strictly mandates `container` only, raising `IsolationUnavailableError` on any other tier.
+
 
 ### WP1 Agent detection
-- [ ] `GPUInfo` has `gpu_vendor`, `gpu_runtime`, `gpu_runtime_version`; the render node is private and not sent to the server.
-- [ ] `_detect_nvidia_gpus` is the old NVML body, behaviour unchanged. *Proof: existing hardware tests pass untouched.*
-- [ ] `_detect_amd_gpus(amdsmi_module=None)` returns GPUs with name, VRAM, UUID and `DETECTED` status.
-- [ ] Missing amdsmi, init failure and query failure each give CPU-only plus a note, never an exception.
-- [ ] Both vendors without `gpu_vendor` config: no GPUs offered, a clear note, and enroll refuses (D2).
-- [ ] The capability report sends vendor, runtime and runtime version for each GPU.
-- [ ] The optional `amd` extra and README note on matching the ROCm version are in place.
-- [ ] Tests cover every case above with mocked amdsmi.
+- [x] `GPUInfo` has `gpu_vendor`, `gpu_runtime`, `gpu_runtime_version`; the render node is private and not sent to the server.
+- [x] `_detect_nvidia_gpus` is the old NVML body, behaviour unchanged. *Proof: existing hardware tests pass untouched.*
+- [x] `_detect_amd_gpus(amdsmi_module=None)` returns GPUs with name, VRAM, UUID and `DETECTED` status.
+- [x] Missing amdsmi, init failure and query failure each give CPU-only plus a note, never an exception.
+- [x] Both vendors without `gpu_vendor` config: no GPUs offered, a clear note, and enroll refuses (D2).
+- [x] The capability report sends vendor, runtime and runtime version for each GPU.
+- [x] The optional `amd` extra and README note on matching the ROCm version are in place.
+- [x] Tests cover every case above with mocked amdsmi.
 
 ### WP2 Agent execution
-- [ ] NVIDIA argv is byte-identical to before. *Proof: snapshot test.*
-- [ ] AMD argv has `/dev/kfd`, only the selected `renderD` nodes and numeric GIDs for render and video. *Proof: exact-argv tests for 1 and 2 GPUs.*
-- [ ] None of `--privileged`, `--ipc=host`, `seccomp=unconfined`, `--cap-add` or a whole `/dev/dri` mount appears. *Proof: a negative test.*
-- [ ] Every ADR-0003 hardening flag is still present for AMD jobs. *Proof: test.*
-- [ ] AMD GPU job + gVisor/microVM/confidential raises `IsolationUnavailableError`. *Proof: test.*
-- [ ] AMD GPU job without `/dev/kfd` raises `HardwareUnavailableError`. *Proof: test.*
-- [ ] Run metrics come from the vendor that ran the job, or are `None`.
+- [x] NVIDIA argv is byte-identical to before. *Proof: snapshot test.*
+- [x] AMD argv has `/dev/kfd`, only the selected `renderD` nodes and numeric GIDs for render and video. *Proof: exact-argv tests for 1 and 2 GPUs.*
+- [x] None of `--privileged`, `--ipc=host`, `seccomp=unconfined`, `--cap-add` or a whole `/dev/dri` mount appears. *Proof: a negative test.*
+- [x] Every ADR-0003 hardening flag is still present for AMD jobs. *Proof: test.*
+- [x] AMD GPU job + gVisor/microVM/confidential raises `IsolationUnavailableError`. *Proof: test.*
+- [x] AMD GPU job without `/dev/kfd` raises `HardwareUnavailableError`. *Proof: test.*
+- [x] Run metrics come from the vendor that ran the job, or are `None`.
 
 ### WP3 Agent telemetry
-- [ ] `sample_gpu_metrics(amdsmi_module=...)` maps utilization, VRAM used, temperature and power.
-- [ ] Metrics the device doesn't expose are `None`. *Proof: partial-reading test.*
-- [ ] The signed batch format is unchanged. *Proof: existing telemetry tests pass untouched.*
+- [x] `sample_gpu_metrics(amdsmi_module=...)` maps utilization, VRAM used, temperature and power.
+- [x] Metrics the device doesn't expose are `None`. *Proof: partial-reading test.*
+- [x] The signed batch format is unchanged. *Proof: existing telemetry tests pass untouched.*
 
 ### WP4 Backend schema and ingest
-- [ ] Migration `0018` adds the columns and table; upgrade → downgrade → upgrade works on a populated DB. *Proof: test or recorded command output.*
-- [ ] Backfill: machines with GPUs become `nvidia`/`cuda`; jobs become `required_gpu_runtime='cuda'`; existing `image_digest` values become `cuda` rows in `model_version_images`.
-- [ ] Per-runtime challenge hashes stored; the storage choice is explained in the migration docstring.
-- [ ] An old-agent report without a vendor ingests as `nvidia`/`cuda` (D8). *Proof: test.*
-- [ ] Unknown vendor or runtime → 422; mixed-vendor report → 422. *Proof: tests.*
-- [ ] `HardwareOut`, job and marketplace schemas expose the new fields.
+- [x] Migration `0022` adds the columns and table; upgrade → downgrade → upgrade works on a populated DB. *Proof: test_migration_upgrade_downgrade_cycle passes.*
+- [x] Backfill: machines with GPUs become `nvidia`/`cuda`; jobs become `required_gpu_runtime='cuda'`; existing `image_digest` values become `cuda` rows in `model_version_images`.
+- [x] Per-runtime challenge hashes stored; the storage choice is explained in the migration docstring.
+- [x] An old-agent report without a vendor ingests as `nvidia`/`cuda` (D8). *Proof: test_old_agent_report_without_vendor_defaults_to_nvidia_cuda passes.*
+- [x] Unknown vendor or runtime → 422; mixed-vendor report → 422. *Proof: test_unknown_vendor_runtime_rejected_422 and test_mixed_vendor_report_rejected_422 pass.*
+- [x] `HardwareOut`, job and marketplace schemas expose the new fields.
 
 ### WP5 Scheduler, marketplace, inference
-- [ ] One compatibility helper used by `validate_job`, `_eligible_machines` and inference. *Proof: grep shows no second copy of the rule.*
-- [ ] A `cuda` job is never placed on AMD; a `rocm` job is never placed on NVIDIA; an `any` job can use both. *Proof: tests.*
-- [ ] No image for the machine's runtime means the machine is skipped, with a logged reason. *Proof: test.*
-- [ ] AMD + non-container tier is skipped by the scheduler (D5). *Proof: test.*
-- [ ] Marketplace search filters by `gpu_vendor` and `gpu_runtime`. *Proof: test.*
-- [ ] Inference sends the right image digest for each vendor. *Proof: test.*
-- [ ] Existing scheduler, marketplace and inference tests pass unchanged.
+- [x] One compatibility helper used by `validate_job`, `_eligible_machines` and inference. *Proof: grep shows only is_gpu_compatible in gpu_runtime.py and calls in validate_job, _eligible_machines, inference._find_eligible_machine.*
+- [x] A `cuda` job is never placed on AMD; a `rocm` job is never placed on NVIDIA; an `any` job can use both. *Proof: test_jobs_only_go_to_machines_with_their_gpu_runtime passes.*
+- [x] No image for the machine's runtime means the machine is skipped, with a logged reason. *Proof: test_scheduler_logs_clear_skip_reasons and test_inference_routing_amd_image_and_skip_logging pass.*
+- [x] AMD + non-container tier is skipped by the scheduler (D5). *Proof: test_amd_machines_need_a_rocm_image_and_the_container_tier and test_scheduler_logs_clear_skip_reasons pass.*
+- [x] Marketplace search filters by `gpu_vendor` and `gpu_runtime`. *Proof: test_marketplace_http_route_filters_by_vendor_and_runtime passes.*
+- [x] Inference sends the right image digest for each vendor. *Proof: test_inference_routing_amd_image_and_skip_logging passes.*
+- [x] Existing scheduler, marketplace and inference tests pass unchanged. *Proof: test_phase3_marketplace.py, test_phase4_jobs.py, test_phase6_inference.py pass.*
 
 ### WP6 Verification
-- [ ] Shadow machine: same vendor, different machine and provider, prefers the same GPU model. *Proof: test.*
-- [ ] No same-vendor candidate means no shadow (inconclusive, as today). *Proof: test.*
-- [ ] A shadow is pinned to the primary's runtime even for `any` jobs. *Proof: test.*
-- [ ] An honest AMD provider with bytes that differ from NVIDIA is never mismatched or slashed. *Proof: test.*
-- [ ] A cheating AMD provider is caught by an AMD shadow. *Proof: test.*
-- [ ] Challenge with no hash for the runtime → inconclusive, reputation unchanged. *Proof: test.*
-- [ ] Existing verification, challenge and reputation tests pass unchanged.
+- [x] Shadow machine: same vendor, different machine and provider, prefers the same GPU model. *Proof: test_shadow_machine_prefers_same_gpu_model in test_amd_scheduling.py passes.*
+- [x] No same-vendor candidate means no shadow (inconclusive, as today). *Proof: test_shadow_job_pinned_to_primary_runtime in test_amd_scheduling.py passes.*
+- [x] A shadow is pinned to the primary's runtime even for `any` jobs. *Proof: test_shadow_job_pinned_to_primary_runtime in test_amd_scheduling.py passes.*
+- [x] An honest AMD provider with bytes that differ from NVIDIA is never mismatched or slashed. *Proof: test_honest_amd_provider_never_mismatched_or_slashed in test_amd_scheduling.py passes.*
+- [x] A cheating AMD provider is caught by an AMD shadow. *Proof: test_cheating_amd_provider_is_caught_by_amd_shadow in test_amd_scheduling.py passes.*
+- [x] Challenge with no hash for the runtime → inconclusive, reputation unchanged. *Proof: test_challenge_evaluates_against_runtime_hash_or_inconclusive in test_amd_scheduling.py passes.*
+- [x] Existing verification, challenge and reputation tests pass unchanged. *Proof: test_b2_verification.py and test_b3_reputation.py (28 passed).*
 
 ### WP7 Frontend and SDKs
-- [ ] Job form has a CUDA / ROCm / Any select, defaulting to CUDA, with help text.
-- [ ] Provider hardware page shows a vendor and runtime badge.
-- [ ] Marketplace shows a vendor badge and filter; admin tables show vendor.
-- [ ] `make web-check` and `make web-build` pass.
-- [ ] Python and TypeScript SDKs accept optional `gpu_runtime`; types and READMEs updated; SDK tests pass.
+- [x] Job form has a CUDA / ROCm / Any select, defaulting to CUDA, with help text. *Proof: apps/web/src/app/dashboard/jobs/new/page.tsx updated with select and D5 container restriction; tsc and build pass.*
+- [x] Provider hardware page shows a vendor and runtime badge. *Proof: apps/web/src/app/provider/hardware/page.tsx displays gpu_vendor and gpu_runtime badges.*
+- [x] Marketplace shows a vendor badge and filter; admin tables show vendor. *Proof: LiveGpuTable in live-gpu-table.tsx has vendor/runtime filters and badges; AdminProvidersPage has vendor column.*
+- [x] `make web-check` and `make web-build` pass. *Proof: tsc --noEmit, next lint (0 warnings), vitest (22 passed), and next build (all 53 pages) pass cleanly.*
+- [x] Python and TypeScript SDKs accept optional `gpu_runtime`; types and READMEs updated; SDK tests pass. *Proof: Python SDK 76 passed; TS SDK 22 passed, typecheck clean.*
 
 ### WP8 Documentation
-- [ ] Phase 2 and Phase 4 protocol docs updated.
-- [ ] ADR-0003 addendum with the D5 tier matrix and D6 device rules.
-- [ ] Threat model covers AMD device passthrough.
-- [ ] GPU validation runbook has an AMD host section.
-- [ ] `implementation-checklist.md` has a new phase entry with real test counts.
-- [ ] `PLATFORM_GUIDE.md` lists AMD provider requirements.
+- [x] Phase 2 and Phase 4 protocol docs updated. *Proof: docs/api/phase2-provider-protocol.md and docs/api/phase4-execution-protocol.md.*
+- [x] ADR-0003 addendum with the D5 tier matrix and D6 device rules. *Proof: docs/architecture/ADR-0003-isolation.md.*
+- [x] Threat model covers AMD device passthrough. *Proof: Section 7 in docs/security/threat-model.md.*
+- [x] GPU validation runbook has an AMD host section. *Proof: Section 8 in docs/operations/gpu-validation-runbook.md.*
+- [x] `implementation-checklist.md` has a new phase entry with real test counts. *Proof: Phase 11 in docs/operations/implementation-checklist.md.*
+- [x] `PLATFORM_GUIDE.md` lists AMD provider requirements. *Proof: Section 2.1 in docs/PLATFORM_GUIDE.md.*
 
 ### WP9 Real-hardware validation (a human runs this)
 - [ ] Rent one AMD host (a Radeon RX 7900 or an Instinct MI300X) with a ROCm version supported by the chosen amdsmi; record the ROCm version.

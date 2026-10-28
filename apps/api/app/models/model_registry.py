@@ -56,3 +56,42 @@ class ModelVersion(Base, TimestampMixin):
     trust_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
 
     model: Mapped["Model"] = relationship(back_populates="versions")
+    images: Mapped[list["ModelVersionImage"]] = relationship(
+        back_populates="model_version", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class ModelVersionImage(Base, TimestampMixin):
+    """Pinned image digest per GPU runtime (e.g. cuda vs rocm) for a model version (D4)."""
+
+    __tablename__ = "model_version_images"
+    __table_args__ = (
+        UniqueConstraint("model_version_id", "gpu_runtime", name="uq_model_version_images_runtime"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    model_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("model_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    gpu_runtime: Mapped[str] = mapped_column(String(32), nullable=False)
+    image_digest: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    model_version: Mapped["ModelVersion"] = relationship(back_populates="images")
+
+
+def image_for(model_version: ModelVersion, gpu_runtime: str) -> str | None:
+    """Return the pinned container image digest for the model version and gpu runtime.
+
+    If an exact row exists in model_version_images for gpu_runtime, return it.
+    Fallback: if none found and gpu_runtime is 'cuda', use model_version.image_digest.
+    """
+    target = (gpu_runtime or "").lower().strip()
+    if hasattr(model_version, "images") and model_version.images:
+        for img in model_version.images:
+            if (img.gpu_runtime or "").lower().strip() == target:
+                return img.image_digest
+
+    if target == "cuda":
+        return model_version.image_digest
+
+    return None

@@ -95,6 +95,9 @@ export interface MachineHardware {
   ram_mb: number;
   disk_gb: number;
   cuda_version: string | null;
+  gpu_vendor?: string | null;
+  gpu_runtime?: string | null;
+  gpu_runtime_version?: string | null;
   [key: string]: unknown;
 }
 
@@ -162,11 +165,16 @@ export interface MarketplaceMachine {
   max_concurrent_jobs: number;
   reliability: MachineReliability;
   last_heartbeat_at: string | null;
+  gpu_vendor?: string | null;
+  gpu_runtime?: string | null;
+  gpu_runtime_version?: string | null;
   [key: string]: unknown;
 }
 
 export interface MarketplaceSearchParams {
   gpu_model?: string;
+  gpu_vendor?: string;
+  gpu_runtime?: string;
   min_vram_mb?: number;
   max_price_per_hour?: string;
   region?: string;
@@ -319,6 +327,8 @@ export interface Job {
     | "gvisor"
     | "microvm"
     | string;
+  required_gpu_runtime?: "cuda" | "rocm" | "any" | string;
+  gpu_runtime?: "cuda" | "rocm" | "any" | string;
   privacy_receipt_id?: string | null;
   data_policy?: Record<string, unknown> | null;
   encrypted_output?: Record<string, unknown> | null;
@@ -410,6 +420,8 @@ export interface CreateJobInput {
     | "container"
     | "gvisor"
     | "microvm";
+  required_gpu_runtime?: "cuda" | "rocm" | "any";
+  gpu_runtime?: "cuda" | "rocm" | "any";
   data_policy?: {
     classification?: string;
     allowed_regions?: string[];
@@ -1380,6 +1392,8 @@ export const api = {
   ): Promise<MarketplaceSearchResult> {
     const qs = new URLSearchParams();
     if (params.gpu_model) qs.set("gpu_model", params.gpu_model);
+    if (params.gpu_vendor) qs.set("gpu_vendor", params.gpu_vendor);
+    if (params.gpu_runtime) qs.set("gpu_runtime", params.gpu_runtime);
     if (params.min_vram_mb != null)
       qs.set("min_vram_mb", String(params.min_vram_mb));
     if (params.max_price_per_hour)

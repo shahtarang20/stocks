@@ -141,6 +141,7 @@ with ComputeCoinClient("https://api.computecoin.example") as client:
             max_cost="5.00",
             max_runtime_seconds=300,
             retry_policy={"max_retries": 1},
+            gpu_runtime="cuda",  # "cuda" | "rocm" | "any" (default: "cuda")
             idempotency_key="my-job-1",
         )
     except ValidationError as exc:

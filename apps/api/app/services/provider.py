@@ -87,6 +87,9 @@ def _hardware_out(machine: ProviderMachine) -> HardwareOut:
         ram_mb=hw.ram_mb,
         disk_gb=hw.disk_gb,
         cuda_version=hw.cuda_version,
+        gpu_vendor=hw.gpu_vendor,
+        gpu_runtime=hw.gpu_runtime,
+        gpu_runtime_version=hw.gpu_runtime_version,
     )
 
 

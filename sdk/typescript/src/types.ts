@@ -78,6 +78,9 @@ export interface MarketplaceMachine {
   max_concurrent_jobs: number;
   reliability?: MachineReliability;
   last_heartbeat_at?: string;
+  gpu_vendor?: string | null;
+  gpu_runtime?: string | null;
+  gpu_runtime_version?: string | null;
 }
 
 export interface MachinePage {
@@ -89,6 +92,8 @@ export interface MachinePage {
 
 export interface SearchMachinesParams {
   gpu_model?: string;
+  gpu_vendor?: string;
+  gpu_runtime?: string;
   min_vram_mb?: number;
   /** money (decimal string) */
   max_price_per_hour?: string;
@@ -181,6 +186,8 @@ export interface Job {
   max_cost?: string;
   max_runtime_seconds?: number;
   retry_policy?: RetryPolicy | null;
+  required_gpu_runtime?: string;
+  gpu_runtime?: string;
   attempts_made?: number;
   priority?: number;
   idempotency_key?: string | null;
@@ -208,6 +215,8 @@ export interface CreateJobParams {
   max_cost: string;
   max_runtime_seconds: number;
   retry_policy?: RetryPolicy;
+  gpu_runtime?: "cuda" | "rocm" | "any";
+  required_gpu_runtime?: "cuda" | "rocm" | "any";
 }
 
 /** One immutable row of the append-only job FSM history. */

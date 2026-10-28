@@ -383,7 +383,19 @@ Install the agent on the GPU host and give it the enrollment token. The agent:
 Every agent request is HMAC-signed. A forged signature or a tampered body is
 rejected with 401 — verified by test.
 
-**Requirements:** Docker, and the NVIDIA container toolkit for GPU jobs.
+### Hardware & Software Requirements for Providers
+
+#### NVIDIA Hosts
+- **Docker Engine**: Docker CE >= 24.0.
+- **NVIDIA Driver**: Version >= 535.86.
+- **NVIDIA Container Toolkit**: Installed and configured as Docker default runtime (`nvidia-ctk runtime configure`).
+
+#### AMD Hosts (ROCm)
+- **ROCm Version**: ROCm 6.1.x or 6.2.x. Tested on RDNA3 (Radeon RX 7900 series) and CDNA (Instinct MI300X/MI250).
+- **Driver & Groups**: Kernel driver with `/dev/kfd` and render nodes (`/dev/dri/renderD*`). The agent user must belong to both `render` and `video` groups (`sudo usermod -aG render,video $USER`).
+- **Agent AMD Extra**: The agent must be installed with the optional `amd` extra (`pip install -e ".[amd]"`), which pulls in `amdsmi` matching the host's ROCm version.
+- **Mixed-Vendor Hosts (D2 Policy)**: ComputeCoin requires exactly one GPU vendor per machine. If a host contains both NVIDIA and AMD GPUs, enrollment is refused unless `gpu_vendor = "nvidia"` or `gpu_vendor = "amd"` is pinned in `computecoin.toml` (or via `--gpu-vendor`).
+- **Isolation Tier (D5)**: AMD GPU jobs run under the `container` tier only in v1. Non-container tiers (gVisor, microVM) are refused.
 
 ---
 

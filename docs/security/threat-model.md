@@ -110,6 +110,18 @@ reconciliation and holds.
 **Residual risk:** bridging on-chain settlement with the off-chain ledger is a
 new double-spend surface; design the reconciliation carefully before shipping.
 
+## 7. AMD GPU Device Passthrough & Hardware Scoping (ROCm)
+
+| STRIDE | Threat | Mitigation |
+| --- | --- | --- |
+| I | Cross-tenant memory/state snooping via broad device mounts | Mount only `/dev/kfd` and the explicitly assigned `/dev/dri/renderD<N>`. Never mount whole `/dev/dri` or display controller `/dev/dri/card*`. |
+| E | Privilege escalation / container breakout via dangerous Docker flags | Prohibit `--privileged`, `--ipc=host`, `--pid=host`, `--security-opt seccomp=unconfined`, and `--cap-add`. Retain `--cap-drop ALL`, `no-new-privileges`, `--read-only`, and non-root user. |
+| E | Host group hijacking / access denial from hardcoded render/video GIDs | Query numeric GIDs dynamically from device inodes on the host (`stat -c %g /dev/kfd`, `stat -c %g /dev/dri/renderD<N>`) and apply with `--group-add`. Never assume fixed group numbers across distros. |
+| S | Multi-vendor host spoofing / driver confusion | D2 strict single-vendor policy: dual-vendor detection without explicit `gpu_vendor` config refuses enrollment. |
+| E | MicroVM / sandbox escape via unverified VFIO paths | D5 container-only policy for AMD GPU jobs in v1. Non-container isolation requests are rejected at submit (422) and executor (IsolationUnavailableError). |
+
+**Residual risk:** AMD GPU compute nodes `/dev/kfd` and render nodes share kernel-mode driver surfaces (amdgpu). A vulnerability in the amdgpu kernel driver could lead to container escape or host denial of service. Dedicated hardware allocation per tenant and memory clearing between jobs are required.
+
 ---
 
 ## Cross-cutting residual risks (stated honestly)

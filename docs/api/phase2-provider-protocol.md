@@ -96,7 +96,8 @@ res 200: [ {
   "last_heartbeat_at": "..."|null,
   "hardware": {
      "gpu_model": "..."|null, "gpu_count": 0, "vram_mb": 0,
-     "cpu_model": "...", "cpu_cores": 0, "ram_mb": 0, "disk_gb": 0, "cuda_version": null
+     "cpu_model": "...", "cpu_cores": 0, "ram_mb": 0, "disk_gb": 0, "cuda_version": null,
+     "gpu_vendor": "nvidia|amd"|null, "gpu_runtime": "cuda|rocm"|null, "gpu_runtime_version": "..."|null
   },
   "supported_workloads": ["text-generation","batch-inference", ...],
   "created_at": "..."
@@ -130,7 +131,12 @@ req: {
   "capability_report": {
     "verification_status": "detected",
     "cpu_model": "...", "cpu_cores": 0, "ram_mb": 0, "disk_gb": 0,
-    "gpus": [ { "model": "...", "vram_mb": 0, "cuda_version": "..."|null } ],   // [] on CPU-only
+    "gpus": [
+      {
+        "model": "...", "vram_mb": 0, "cuda_version": "..."|null,
+        "gpu_vendor": "nvidia|amd", "gpu_runtime": "cuda|rocm", "gpu_runtime_version": "..."|null
+      }
+    ],   // [] on CPU-only. Single vendor only (D2); mixed vendors rejected (422).
     "supported_workloads": ["text-generation","batch-inference"]
   }
 }
@@ -140,7 +146,7 @@ res 201: {
   "heartbeat_interval_seconds": 30,
   "online_window_seconds": 90
 }
-errors: 400 invalid body; 401 token invalid/expired/used/revoked.
+errors: 400 invalid body; 401 token invalid/expired/used/revoked; 422 mixed vendor / unknown vendor.
 ```
 Server: validate token → create `provider_machines` (availability=offline,
 status=registered) + `hardware_inventory` snapshot (DETECTED) + capabilities;

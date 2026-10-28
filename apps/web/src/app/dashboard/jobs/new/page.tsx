@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
@@ -64,6 +64,7 @@ const schema = z
         "microvm",
       ])
       .default("container"),
+    required_gpu_runtime: z.enum(["cuda", "rocm", "any"]).default("cuda"),
     model: z.string().trim().min(1, "Model is required"),
     prompt: z.string().optional(),
     max_tokens: z
@@ -139,6 +140,13 @@ const schema = z
         });
       }
     }
+    if (val.required_gpu_runtime === "rocm" && val.isolation_tier !== "container") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["isolation_tier"],
+        message: "AMD (ROCm) jobs can only use the Container isolation tier for now.",
+      });
+    }
   });
 
 type FormValues = z.input<typeof schema>;
@@ -157,12 +165,14 @@ export default function NewJobPage() {
     register,
     handleSubmit,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       workload_type: "text-generation",
       isolation_tier: "container",
+      required_gpu_runtime: "cuda",
       model: "echo-sim-v1",
       prompt: "",
       max_tokens: "64",
@@ -178,9 +188,16 @@ export default function NewJobPage() {
 
   const workloadType = watch("workload_type");
   const isolationTier = watch("isolation_tier");
+  const requiredGpuRuntime = watch("required_gpu_runtime");
   const isPrivateTier = Boolean(
     isolationTier && ["sealed", "sealed_pro", "confidential"].includes(isolationTier)
   );
+
+  useEffect(() => {
+    if (requiredGpuRuntime === "rocm" && isolationTier !== "container") {
+      setValue("isolation_tier", "container");
+    }
+  }, [requiredGpuRuntime, isolationTier, setValue]);
 
   const createMut = useMutation({
     mutationFn: (input: CreateJobInput) =>
@@ -205,6 +222,7 @@ export default function NewJobPage() {
     const payload: CreateJobInput = {
       workload_type: values.workload_type,
       isolation_tier: values.isolation_tier,
+      required_gpu_runtime: values.required_gpu_runtime,
       model: values.model.trim(),
       input,
       gpu_count: Number(values.gpu_count),
@@ -344,7 +362,7 @@ export default function NewJobPage() {
               </div>
             ) : null}
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-1.5">
                 <Label htmlFor="workload_type">Workload type</Label>
                 <select
@@ -357,6 +375,23 @@ export default function NewJobPage() {
                 </select>
               </div>
               <div className="space-y-1.5">
+                <Label htmlFor="required_gpu_runtime">GPU runtime</Label>
+                <select
+                  id="required_gpu_runtime"
+                  className={selectClass}
+                  {...register("required_gpu_runtime")}
+                >
+                  <option value="cuda">CUDA</option>
+                  <option value="rocm">ROCm</option>
+                  <option value="any">Any</option>
+                </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {requiredGpuRuntime === "rocm"
+                    ? "AMD (ROCm) GPUs: Container isolation only for now."
+                    : "Target GPU runtime environment."}
+                </p>
+              </div>
+              <div className="space-y-1.5">
                 <Label htmlFor="isolation_tier">Isolation & Privacy Tier</Label>
                 <select
                   id="isolation_tier"
@@ -364,11 +399,21 @@ export default function NewJobPage() {
                   {...register("isolation_tier")}
                 >
                   <option value="container">Container (shared kernel)</option>
-                  <option value="gvisor">gVisor sandbox (runsc)</option>
-                  <option value="microvm">microVM (Kata / Firecracker)</option>
-                  <option value="sealed">Sealed (private)</option>
-                  <option value="sealed_pro">Sealed Pro (private)</option>
-                  <option value="confidential">Confidential (private)</option>
+                  <option value="gvisor" disabled={requiredGpuRuntime === "rocm"}>
+                    gVisor sandbox (runsc){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  </option>
+                  <option value="microvm" disabled={requiredGpuRuntime === "rocm"}>
+                    microVM (Kata / Firecracker){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  </option>
+                  <option value="sealed" disabled={requiredGpuRuntime === "rocm"}>
+                    Sealed (private){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  </option>
+                  <option value="sealed_pro" disabled={requiredGpuRuntime === "rocm"}>
+                    Sealed Pro (private){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  </option>
+                  <option value="confidential" disabled={requiredGpuRuntime === "rocm"}>
+                    Confidential (private){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  </option>
                 </select>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {isPrivateTier ? (

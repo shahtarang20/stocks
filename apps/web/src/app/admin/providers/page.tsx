@@ -82,6 +82,7 @@ export default function AdminProvidersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Machine ID</TableHead>
+                  <TableHead>Vendor</TableHead>
                   <TableHead>GPU</TableHead>
                   <TableHead>VRAM</TableHead>
                   <TableHead>Region</TableHead>
@@ -96,6 +97,18 @@ export default function AdminProvidersPage() {
                   <TableRow key={m.machine_id}>
                     <TableCell className="font-mono text-xs text-primary">
                       {m.machine_id.slice(0, 8)}…
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="neutral"
+                        className={
+                          m.gpu_vendor === "amd"
+                            ? "border-red-500/30 text-red-400 bg-red-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                            : "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                        }
+                      >
+                        {m.gpu_vendor ?? "nvidia"}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-sm">{m.gpu_model ?? "—"}</TableCell>
                     <TableCell className="text-sm">

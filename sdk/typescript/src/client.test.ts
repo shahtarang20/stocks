@@ -121,6 +121,50 @@ describe("ComputeCoinClient marketplace (Phase 3)", () => {
     expect(machine.reliability?.success_rate).toBeNull();
   });
 
+  it("filters marketplace machines by gpu_vendor and gpu_runtime", async () => {
+    let capturedUrl = "";
+    const fetchImpl = mockFetch((url) => {
+      capturedUrl = url;
+      return {
+        status: 200,
+        body: {
+          items: [
+            {
+              machine_id: "m_amd",
+              gpu_model: "Radeon RX 7900 XTX",
+              gpu_count: 1,
+              vram_mb: 24576,
+              cpu_model: "AMD EPYC",
+              cpu_cores: 16,
+              ram_mb: 65536,
+              region: "us-east",
+              price_per_hour: "1.20",
+              currency: "USDC_CREDITS",
+              supported_workloads: ["text-generation"],
+              available_slots: 1,
+              max_concurrent_jobs: 1,
+              gpu_vendor: "amd",
+              gpu_runtime: "rocm",
+              gpu_runtime_version: "6.2",
+            },
+          ],
+          page: 1,
+          page_size: 20,
+          total: 1,
+        },
+      };
+    });
+    const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl });
+    const page = await client.searchMachines({
+      gpu_vendor: "amd",
+      gpu_runtime: "rocm",
+    });
+    expect(capturedUrl).toContain("gpu_vendor=amd");
+    expect(capturedUrl).toContain("gpu_runtime=rocm");
+    expect(page.items[0]?.gpu_vendor).toBe("amd");
+    expect(page.items[0]?.gpu_runtime).toBe("rocm");
+  });
+
   it("creates a quote and keeps every breakdown money field a string", async () => {
     let captured: { url?: string; auth?: string | null; body?: unknown } = {};
     const fetchImpl = mockFetch((url, init) => {
@@ -298,6 +342,34 @@ describe("ComputeCoinClient jobs (Phase 4)", () => {
     expect(typeof (captured.body as Record<string, unknown>)["max_cost"]).toBe("string");
     // Honesty stamp surfaced on the returned Job.
     expect(job.execution_mode).toBe("simulated");
+  });
+
+  it("submits job with gpu_runtime and surfaces required_gpu_runtime", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    const fetchImpl = mockFetch((_url, init) => {
+      capturedBody = JSON.parse(init.body as string);
+      return {
+        status: 201,
+        body: jobBody({ required_gpu_runtime: "rocm", gpu_runtime: "rocm" }),
+      };
+    });
+    const client = new ComputeCoinClient("https://api.test", {
+      fetch: fetchImpl,
+      accessToken: "tok123",
+    });
+    const job = await client.createJob({
+      workload_type: "text-generation",
+      model: "echo-sim-v1",
+      input: { prompt: "Hi" },
+      gpu_count: 1,
+      estimated_minutes: 5,
+      max_cost: "5.00",
+      max_runtime_seconds: 300,
+      gpu_runtime: "rocm",
+    });
+    expect(capturedBody.required_gpu_runtime).toBe("rocm");
+    expect(job.required_gpu_runtime).toBe("rocm");
+    expect(job.gpu_runtime).toBe("rocm");
   });
 
   it("omits the Idempotency-Key header when no key is given", async () => {

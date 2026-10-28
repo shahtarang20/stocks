@@ -45,6 +45,7 @@ from app.schemas.attestation import (
     TpmEnrolmentStartRequest,
     TpmEnrolmentStartResponse,
 )
+from app.services.gpu_runtime import gpu_runtime_of_machine, image_for_runtime
 from app.services.attestation_nonce import (
     consume_attestation_nonce,
     issue_attestation_nonce,
@@ -173,6 +174,44 @@ async def enroll(
     report = body.capability_report
     first_gpu = report.gpus[0] if report.gpus else None
 
+    # Validate GPU vendor & runtime if GPUs are present (WP4 & D1, D2, D8)
+    gpu_vendor = None
+    gpu_runtime = None
+    gpu_runtime_version = None
+    cuda_version = None
+
+    if report.gpus:
+        vendors = set()
+        for g in report.gpus:
+            v = (g.gpu_vendor or "nvidia").lower().strip()
+            r = (g.gpu_runtime or "cuda").lower().strip()
+            if v not in ("nvidia", "amd"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Unknown gpu_vendor: {g.gpu_vendor!r} (must be 'nvidia' or 'amd')",
+                )
+            if r not in ("cuda", "rocm"):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Unknown gpu_runtime: {g.gpu_runtime!r} (must be 'cuda' or 'rocm')",
+                )
+            vendors.add(v)
+
+        if len(vendors) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Mixed-vendor GPU reports are not permitted; one vendor per machine.",
+            )
+
+        gpu_vendor = (first_gpu.gpu_vendor or "nvidia").lower().strip()
+        gpu_runtime = (first_gpu.gpu_runtime or "cuda").lower().strip()
+        gpu_runtime_version = first_gpu.gpu_runtime_version or (
+            first_gpu.cuda_version if gpu_runtime == "cuda" else None
+        )
+        cuda_version = first_gpu.cuda_version or (
+            gpu_runtime_version if gpu_runtime == "cuda" else None
+        )
+
     # One machine per (provider, hostname). A deregistered machine releases its
     # hostname so a reinstalled host can enroll again; an ACTIVE duplicate is a
     # clear 409 and the token stays unused. This used to surface as a bare 500
@@ -219,7 +258,10 @@ async def enroll(
         gpu_model=first_gpu.model if first_gpu else None,
         gpu_count=len(report.gpus),
         vram_mb=first_gpu.vram_mb if first_gpu else 0,
-        cuda_version=first_gpu.cuda_version if first_gpu else None,
+        cuda_version=cuda_version,
+        gpu_vendor=gpu_vendor,
+        gpu_runtime=gpu_runtime,
+        gpu_runtime_version=gpu_runtime_version,
         raw=report.model_dump(),
     )
     db.add(hardware)
@@ -436,7 +478,8 @@ async def claim_job(
         job_input = {}  # the platform never hands out plaintext input for a private job
 
     mv = await get_model_version(db, job.model)
-    image_digest = mv.image_digest if mv else None
+    # The image built for THIS machine's GPU runtime (a CUDA image does not run on an AMD GPU).
+    image_digest = await image_for_runtime(db, mv, await gpu_runtime_of_machine(db, machine.id) if job.gpu_count else None)
 
     grant_exp = grant_expiry()
     upload_token = make_upload_grant(str(job.id), grant_exp)

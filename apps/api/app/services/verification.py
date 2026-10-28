@@ -259,11 +259,21 @@ async def _pick_shadow_machine(
 
     primary_machine_id = primary.machine_id
     primary_provider_id = None
+    primary_gpu_model = None
     if primary_machine_id is not None:
-        from app.models.provider import ProviderMachine
+        from app.models.provider import HardwareInventory, ProviderMachine
 
         machine = await db.get(ProviderMachine, primary_machine_id)
         primary_provider_id = machine.provider_id if machine else None
+        hw_row = (
+            await db.execute(
+                select(HardwareInventory.gpu_model).where(
+                    HardwareInventory.machine_id == primary_machine_id
+                )
+            )
+        ).first()
+        if hw_row and hw_row[0]:
+            primary_gpu_model = str(hw_row[0]).strip().lower()
 
     candidates = [
         c
@@ -273,8 +283,14 @@ async def _pick_shadow_machine(
     ]
     if not candidates:
         return None
-    # Cheapest eligible candidate — the platform pays for its own audits.
-    return min(candidates, key=lambda c: c.price).machine
+
+    def _rank_key(c):
+        hw = getattr(c.machine, "hardware", None)
+        model = (hw.gpu_model or "").strip().lower() if hw else ""
+        matches_model = (model == primary_gpu_model) if primary_gpu_model else False
+        return (0 if matches_model else 1, c.price)
+
+    return min(candidates, key=_rank_key).machine
 
 
 async def create_shadow_job(
@@ -325,6 +341,14 @@ async def create_shadow_job(
         # of a private job would hand the Data Key to an under-staked machine.
         value_at_risk=primary.value_at_risk,
     )
+    # Same GPU runtime as the machine that ran the primary: CUDA and ROCm builds may legitimately
+    # produce different bytes, so a cross-vendor comparison would wrongly accuse an honest host.
+    if primary.machine_id is not None and primary.gpu_count:
+        from app.services.gpu_runtime import gpu_runtime_of_machine
+
+        shadow.required_gpu_runtime = await gpu_runtime_of_machine(db, primary.machine_id) or "cuda"
+    else:
+        shadow.required_gpu_runtime = primary.required_gpu_runtime
     machine = await _pick_shadow_machine(db, primary, shadow, now)
     if machine is None:
         logger.info("redundancy: no independent machine for job=%s", primary.id)
@@ -525,7 +549,12 @@ async def check_model_identity(
             select(ModelVersion).where(ModelVersion.version_tag == job.model)
         )
     ).scalar_one_or_none()
-    expected = normalize_weight_hash(version.image_digest if version else None)
+    # The image built for the runtime this machine used: an AMD host runs the ROCm build, and
+    # comparing its (correct) digest with the CUDA one would accuse it of running another model.
+    from app.services.gpu_runtime import gpu_runtime_of_machine, image_for_runtime
+
+    runtime = await gpu_runtime_of_machine(db, job.machine_id) if job.gpu_count else None
+    expected = normalize_weight_hash(await image_for_runtime(db, version, runtime))
     if expected is None:
         logger.info("model identity: no pinned digest for model=%s", job.model)
         return None

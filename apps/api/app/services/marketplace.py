@@ -116,6 +116,8 @@ def _matches_filters(
     machine: ProviderMachine,
     *,
     gpu_model: str | None,
+    gpu_vendor: str | None = None,
+    gpu_runtime: str | None = None,
     min_vram_mb: int | None,
     max_price_per_hour: decimal.Decimal | None,
     region: str | None,
@@ -126,6 +128,14 @@ def _matches_filters(
     if gpu_model is not None:
         model = (hw.gpu_model if hw else None) or ""
         if gpu_model.lower() not in model.lower():
+            return False
+    if gpu_vendor is not None:
+        vendor = (hw.gpu_vendor if hw else None) or ""
+        if gpu_vendor.lower().strip() != vendor.lower().strip():
+            return False
+    if gpu_runtime is not None:
+        runtime = (hw.gpu_runtime if hw else None) or ""
+        if gpu_runtime.lower().strip() != runtime.lower().strip():
             return False
     if min_vram_mb is not None:
         vram = hw.vram_mb if hw else 0
@@ -160,6 +170,8 @@ def shape_marketplace_machine(
     return MarketplaceMachineOut(
         machine_id=machine.id,
         gpu_model=hw.gpu_model if hw else None,
+        gpu_vendor=hw.gpu_vendor if hw else None,
+        gpu_runtime=hw.gpu_runtime if hw else None,
         gpu_count=hw.gpu_count if hw else 0,
         vram_mb=hw.vram_mb if hw else 0,
         cpu_model=hw.cpu_model if hw else None,
@@ -189,6 +201,8 @@ async def list_marketplace_machines(
     db: AsyncSession,
     *,
     gpu_model: str | None = None,
+    gpu_vendor: str | None = None,
+    gpu_runtime: str | None = None,
     min_vram_mb: int | None = None,
     max_price_per_hour: decimal.Decimal | None = None,
     region: str | None = None,
@@ -214,6 +228,8 @@ async def list_marketplace_machines(
         if _matches_filters(
             m,
             gpu_model=gpu_model,
+            gpu_vendor=gpu_vendor,
+            gpu_runtime=gpu_runtime,
             min_vram_mb=min_vram_mb,
             max_price_per_hour=max_price_per_hour,
             region=region,

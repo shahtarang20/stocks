@@ -19,7 +19,7 @@ import app.models  # noqa: F401
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Env var wins; fall back to settings default.
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

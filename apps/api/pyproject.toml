@@ -22,15 +22,31 @@ dependencies = [
     # crypto to it). Without it `_key_for` fails closed with
     # `sso_id_token_key_unsupported`, which means SSO is simply broken against
     # every real IdP: Okta, Entra ID, Google and Auth0 all sign RS256.
-    "cryptography>=43.0.0",
+    # Upper bound is REQUIRED by signxml==3.2.2 (RIM verification):
+    #  - signxml 3.2.2 imports OpenSSL.crypto.verify, removed from pyOpenSSL in 24.3,
+    #    so pyOpenSSL must stay <24.3 (which itself requires cryptography<44).
+    #  - cryptography>=47 also dropped ec.SECT163K1, which signxml references at import.
+    # signxml does not pin either, so an unbounded resolve breaks `import signxml`
+    # and with it every RIM test. Re-test before lifting these bounds.
+    "cryptography>=43.0.0,<44",
+    "pyOpenSSL>=23.0.0,<24.3",
     "redis==5.2.1",
     "email-validator==2.2.0",
     "python-multipart==0.0.20",
-    "eth-account>=0.14.0",
+    "eth-account>=0.14.0,<0.15",  # withdrawal_signer uses private eth_account._utils helpers: stay on the checked series
     "stripe>=11.0.0",
     "sentry-sdk>=2.0.0",
     "httpx>=0.28.0",
     "boto3>=1.35.0",
+    # P2: NVIDIA RIM (signed SWID/XML) signature check; version pinned per plan (R7: confirm current release)
+    "signxml==3.2.2",
+    # U1: Kit param schemas and signed manifests (verify API against current docs before merge)
+    "jsonschema>=4.23.0",
+    # U6: verification plug-ins (perceptual hash, SSIM/PSNR). Pinned; verify versions against PyPI before merge (L4).
+    "Pillow==11.1.0",
+    "numpy==2.2.2",
+    "scikit-image==0.25.1",
+    "imagehash==4.3.1",
 ]
 
 [project.optional-dependencies]
@@ -48,3 +64,6 @@ include = ["app*"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "postgres_only: needs real Postgres row locking (set TEST_DATABASE_URL); skipped on SQLite",
+]

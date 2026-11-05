@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "language": {
+      "type": "string",
+      "pattern": "^(auto|[a-z]{2,3})$",
+      "default": "auto"
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "transcribe",
+        "translate"
+      ],
+      "default": "transcribe"
+    },
+    "beam_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 5
+    },
+    "word_timestamps": {
+      "type": "boolean",
+      "default": false
+    },
+    "vad_filter": {
+      "type": "boolean",
+      "default": false
+    },
+    "formats": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "json",
+          "srt",
+          "vtt",
+          "txt"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 4,
+      "default": [
+        "json",
+        "txt"
+      ]
+    }
+  }
+}

@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api.routers import (
     admin,
+    agent_v2,
+    multi_node,
     agents,
     analytics,
     artifacts,
@@ -23,12 +25,19 @@ from app.api.routers import (
     billing,
     chain_recon,
     connect,
+    data_plane,
     datasets,
     disputes,
     health,
     inference,
     invoices,
     jobs,
+    fanout,
+    pipelines,
+    jobs_v2,
+    unit_quotes,
+    sessions,
+    kits,
     marketplace,
     metrics,
     orgs,
@@ -38,6 +47,7 @@ from app.api.routers import (
     quotes,
     reputation,
     reservations,
+    workload_images,
     privacy,
     settlement,
     wallet,
@@ -47,6 +57,7 @@ from app.api.routers import (
     vendors,
     verification,
     webhooks,
+    withdrawals,
     ws,
 )
 from app.core.config import settings
@@ -116,6 +127,68 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 await task
 
 
+class _StreamedBodyLimit:
+    """Pure ASGI guard: refuse a request whose streamed body exceeds MAX_REQUEST_BYTES with 413.
+
+    The Content-Length check in ``_limit_request_body`` is skipped by a chunked upload (no Content-Length header),
+    so the bytes are counted as they arrive. On overflow the app sees a disconnect (it stops reading) and whatever
+    it answers is replaced by a 413.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        total = 0
+        too_large = False
+        started = False  # a response (the app's, or our 413) has begun
+        sent_413 = False
+
+        async def counting_receive():
+            nonlocal total, too_large
+            if too_large:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                total += len(message.get("body", b""))
+                if total > settings.MAX_REQUEST_BYTES:
+                    too_large = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def send_413() -> None:
+            nonlocal started, sent_413
+            sent_413 = True
+            payload = b'{"detail":"request_too_large"}'
+            started = True
+            await send({"type": "http.response.start", "status": 413, "headers": [
+                (b"content-type", b"application/json"), (b"content-length", str(len(payload)).encode())]})
+            await send({"type": "http.response.body", "body": payload})
+
+        async def tracking_send(message) -> None:
+            nonlocal started
+            if sent_413:
+                return  # the app's own (error) response is replaced by the 413
+            if too_large and not started:
+                if message["type"] == "http.response.start":
+                    await send_413()
+                return
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, counting_receive, tracking_send)
+        except Exception:
+            if too_large and not started:
+                await send_413()
+                return
+            raise
+
+
 def create_app() -> FastAPI:
     # Expose interactive API docs only in dev-like environments.
     _is_dev = settings.ENVIRONMENT.lower() in {"development", "dev", "test", "testing", "local"}
@@ -132,7 +205,7 @@ def create_app() -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
+        allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -162,6 +235,9 @@ def create_app() -> FastAPI:
                 return JSONResponse({"detail": "invalid_content_length"}, status_code=400)
         return await call_next(request)
 
+    # The Content-Length check above is skipped by a chunked upload (no Content-Length): count the bytes as they arrive.
+    application.add_middleware(_StreamedBodyLimit)
+
     application.include_router(health.router)
     application.include_router(metrics.router)
     application.include_router(auth.router)
@@ -178,7 +254,14 @@ def create_app() -> FastAPI:
     application.include_router(invoices.router)
     application.include_router(disputes.router)
     application.include_router(inference.router)
+    application.include_router(workload_images.router)
     application.include_router(telemetry.router)
+    from app.api.routers import observability as _observability
+
+    application.include_router(_observability.router)
+    from app.api.routers import abuse as _abuse
+
+    application.include_router(_abuse.router)
     application.include_router(settlement.router)
     application.include_router(wallet.router)
     application.include_router(wallet.admin_router)
@@ -206,6 +289,27 @@ def create_app() -> FastAPI:
     application.include_router(chain_recon.router)
     application.include_router(vendors.router)
     application.include_router(privacy.router)
+    application.include_router(withdrawals.router)
+    application.include_router(withdrawals.admin_router)
+    application.include_router(data_plane.router)
+    application.include_router(kits.router)
+    application.include_router(kits.admin_router)
+    application.include_router(agent_v2.router)
+    application.include_router(multi_node.router)
+    application.include_router(multi_node.admin_router)
+    application.include_router(jobs_v2.router)
+    from app.api.routers import byoc as _byoc  # U8
+
+    application.include_router(_byoc.router)
+    application.include_router(_byoc.admin_router)
+    application.include_router(fanout.router)
+    from app.api.routers import services as _services
+
+    application.include_router(_services.router)
+    application.include_router(_services.agent_router)
+    application.include_router(pipelines.router)
+    application.include_router(unit_quotes.router)
+    application.include_router(sessions.router)
 
     @application.get("/")
     async def root() -> dict:

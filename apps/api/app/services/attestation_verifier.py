@@ -260,4 +260,8 @@ async def verify_machine_evidence(
     }
     verdict["signature"] = sign_verdict(verdict)
     leaf = await append_transparency_log_entry(db, "ATTESTATION_VERDICT", verdict)
+    if job_id is None and tier in ("sealed", "sealed_pro"):
+        # A6: a machine-level verdict is what lets an AMD machine take Sealed work (gpu_runtime reads it and
+        # ignores it once expires_at passes). Job-bound verdicts never replace it.
+        machine.sealed_verdict = dict(verdict)
     return verdict, leaf

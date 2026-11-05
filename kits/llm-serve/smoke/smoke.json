@@ -1,0 +1,89 @@
+{
+  "kit": "llm-serve",
+  "schema": 1,
+  "purpose": "U12: smoke test of llm-serve (a Service replica image) on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models; the fleet is the owner's decision. A serving image never exits, so this spec uses a `service` step (kits/README.md, Smoke test spec): kits/tools/smoke_runner.py starts the image like service_agent.DockerServiceContainer, polls /health, POSTs one chat completion, stops.",
+  "fixture": {
+    "how": "none: the check posts a fixed prompt at temperature 0 and compares token counts and the answer shape, not text",
+    "input_name": null,
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {}
+  },
+  "limits": {
+    "max_seconds": 900
+  },
+  "checks": [
+    {
+      "id": "health",
+      "expect": "GET /health on port 8000 returns 2xx within the start limit, with the container on an --internal network and no published port"
+    },
+    {
+      "id": "chat_completion",
+      "expect": "POST /v1/chat/completions with model 'model', max_tokens 16, temperature 0 returns 200 and a non-empty choices[0].message.content"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none or --internal succeeds and the process makes no outbound connection (HF_HUB_OFFLINE)"
+    },
+    {
+      "id": "readonly_nonroot",
+      "expect": "starts with --read-only --tmpfs /tmp --user 65532:65532 --cap-drop ALL (the service agent's flags)"
+    },
+    {
+      "id": "weights_tamper",
+      "expect": "a flipped byte in a baked weight file makes the container exit 2 with asset_hash_mismatch before serving"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds to healthy",
+    "tokens per second",
+    "peak vram"
+  ],
+  "steps": [
+    {
+      "type": "service",
+      "id": "serve",
+      "port": 8000,
+      "health_path": "/health",
+      "start_timeout_seconds": 600,
+      "requests": [
+        {
+          "id": "chat_completion",
+          "method": "POST",
+          "path": "/v1/chat/completions",
+          "content_type": "application/json",
+          "body": {
+            "model": "model",
+            "messages": [
+              {
+                "role": "user",
+                "content": "Say hello."
+              }
+            ],
+            "max_tokens": 16,
+            "temperature": 0
+          },
+          "timeout_seconds": 120,
+          "expect": {
+            "status": 200,
+            "json": [
+              {
+                "path": "choices.0.message.content",
+                "non_empty": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

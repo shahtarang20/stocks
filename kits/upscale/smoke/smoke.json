@@ -1,0 +1,20 @@
+{
+  "kit": "upscale",
+  "schema": 1,
+  "purpose": "U5.1: upscale a small image set on at least 3 GPU models",
+  "gpu_models_required": ["NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090", "NVIDIA A100 80GB"],
+  "gpu_models_note": "Minimum is 3 distinct models.",
+  "fixture": {"script": "kits/upscale/smoke/make_fixture.py", "how": "python make_fixture.py images.zip  (two synthetic 128x96 PNGs, deterministic)", "input_name": "source", "sha256": "PENDING"},
+  "input": {"params": {"model": "realesrgan-x4plus", "scale": 4, "tile": 64}},
+  "limits": {"max_seconds": 300},
+  "checks": [
+    {"id": "exit_zero", "expect": "container exit code 0 and output.json ok=true"},
+    {"id": "size", "expect": "upscaled/a_x4.png is 512x384 and upscaled/b_x4.png is 512x384"},
+    {"id": "tile_seams", "expect": "tile=64 output matches tile=0 output within the kit's perceptual thresholds (no visible seams)"},
+    {"id": "cross_gpu", "expect": "outputs of different GPU models pass the kit's perceptual verification against each other"},
+    {"id": "zip_safety", "expect": "a zip with ../x.png, an absolute name, or 501 members is refused with invalid_input"},
+    {"id": "resume", "expect": "rerun with COMPUTECOIN_RESUME=1 and the checkpoint dir does not recompute committed images"},
+    {"id": "no_network", "expect": "run with --network none succeeds"}
+  ],
+  "record": ["gpu model", "driver", "seconds per image", "peak vram", "sha256 of every output"]
+}

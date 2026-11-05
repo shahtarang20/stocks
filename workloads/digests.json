@@ -1,0 +1,17 @@
+{
+  "_comment": "Written by .github/workflows/workload-images.yml. Placeholders until the first CI build; register with POST /admin/model-versions/{version_tag}/images.",
+  "images": {
+    "text-generation": {
+      "model_version_tag": "tinyllama-1.1b-chat-v1",
+      "cuda": null,
+      "rocm": null,
+      "weights_manifest_sha256": null
+    },
+    "embeddings": {
+      "model_version_tag": "minilm-l6-v2-embed-v1",
+      "cuda": null,
+      "rocm": null,
+      "weights_manifest_sha256": null
+    }
+  }
+}

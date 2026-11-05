@@ -63,6 +63,21 @@ from app.models.settlement import (
 
 from app.models.token_deposit import TokenDeposit  # noqa: F401
 from app.models.wallet import LinkedWallet  # noqa: F401
+from app.models.withdrawal import Withdrawal  # noqa: F401
+from app.models.data_plane import (  # noqa: F401
+    ByoBucket,
+    DataFile,
+    DataObject,
+    DataUpload,
+    DataUploadPart,
+)
+from app.models.kits import Kit  # noqa: F401
+from app.models.fanout import FanoutGroup, FanoutPart, FanoutPartRun  # noqa: F401
+from app.models.services import Service, ServiceReplica, ServiceRequest, ServiceRequestCharge  # noqa: F401
+from app.models.pipelines import PipelineRun, PipelineStep  # noqa: F401
+from app.models.unit_quotes import UnitQuote, UnitQuoteSample  # noqa: F401
+from app.models.sessions import ComputeSession  # noqa: F401
+from app.models.node_group import NetworkBenchmark, NodeGroup, NodeGroupMember  # noqa: F401
 
 # Phase B — verification, reputation, spend controls and webhooks.
 from app.models.verification import (
@@ -89,7 +104,9 @@ from app.models.workloads import Batch, Dataset, TrainingCheckpoint
 
 # Phase D — on-chain reconciliation audit trail.
 from app.models.vendors import VendorAlert, VendorService  # noqa: F401
-from app.models.reconciliation import ChainReconciliationRun
+from app.models.reconciliation import ChainReconciliationRun, StakeSyncRun  # noqa: F401
+from app.models.abuse import AbuseFlag, AbuseHold, AbuseReport  # noqa: F401
+from app.models.byoc import ByocImageDenylist, ByocImageScan  # noqa: F401  (U8)
 
 # ADR-0005: Proof-of-Privacy
 from app.models.privacy import (
@@ -102,6 +119,7 @@ from app.models.privacy import (
 __all__ = [
     "LinkedWallet",
     "TokenDeposit",
+    "Withdrawal",
     "Role",
     "UserStatus",
     "User",

@@ -84,7 +84,9 @@ from app.schemas.provider import (
     HeartbeatRequest,
     HeartbeatResponse,
 )
+from app.schemas.inference import StreamChunkRequest, StreamChunkResponse
 from app.services import billing
+from app.services import stream_relay
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
 from app.services.leases import (
@@ -342,7 +344,14 @@ async def heartbeat(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid heartbeat body"
         )
 
-    if payload.availability in {"online", "maintenance", "offline"}:
+    # The OWNER's choice sticks: a machine the host put in maintenance (or took offline after it had
+    # been seen) must not be flipped back to online by the next heartbeat of a still-running agent,
+    # or it would keep receiving jobs. The first heartbeat after enrollment (no heartbeat yet) is what
+    # brings a new machine from its initial "offline" to "online". Only the owner PATCH leaves these.
+    owner_hold = machine.availability == "maintenance" or (
+        machine.availability == "offline" and machine.last_heartbeat_at is not None
+    )
+    if payload.availability in {"online", "maintenance", "offline", "throttled"} and not owner_hold:
         machine.availability = payload.availability
     machine.last_heartbeat_at = utcnow()
     # Keep attestation state (the pending challenge nonce) across heartbeats: they arrive every
@@ -357,6 +366,16 @@ async def heartbeat(
 # ---------------------------------------------------------------------------
 # Agent job protocol (machine HMAC auth) — Phase 4
 # ---------------------------------------------------------------------------
+def _claim_gpu_count(job: Job) -> int:
+    """limits.gpu_count in the claim: 0 for a CPU-only Kit job (its stored gpu_count 1 is only a billing slot), so the
+    agent starts the container without --gpus; the job's own count for everything else."""
+    if getattr(job, "spec_v2", None):
+        from app.services import scheduler_v2
+
+        return scheduler_v2.runtime_gpu_count(job)
+    return job.gpu_count
+
+
 def _parse_body(raw_body: bytes, schema):
     try:
         return schema.model_validate(json.loads(raw_body or b"{}"))
@@ -477,9 +496,23 @@ async def claim_job(
         result_public_key = (job.data_policy or {}).get("result_public_key")
         job_input = {}  # the platform never hands out plaintext input for a private job
 
-    mv = await get_model_version(db, job.model)
-    # The image built for THIS machine's GPU runtime (a CUDA image does not run on an AMD GPU).
-    image_digest = await image_for_runtime(db, mv, await gpu_runtime_of_machine(db, machine.id) if job.gpu_count else None)
+    spec_v2 = getattr(job, "spec_v2", None)
+    if spec_v2:
+        # U7/U3: a Kit job runs the Kit's own digest-pinned image (re-verified at submit and at scheduling);
+        # it is not in the model registry, so there is no per-runtime lookup.
+        image_digest = spec_v2.get("kit_image")
+        if spec_v2.get("byoc") is not None:
+            # U8: re-check the denylist and scan at claim; a bad image never starts.
+            from app.services.byoc import claim_denied_reason
+
+            denied = await claim_denied_reason(db, job)
+            if denied is not None:
+                await _fail_claimed_job(db, request, job, now, denied)
+                return Response(status_code=status.HTTP_204_NO_CONTENT)
+    else:
+        mv = await get_model_version(db, job.model)
+        # The image built for THIS machine's GPU runtime (a CUDA image does not run on an AMD GPU).
+        image_digest = await image_for_runtime(db, mv, await gpu_runtime_of_machine(db, machine.id) if job.gpu_count else None)
 
     grant_exp = grant_expiry()
     upload_token = make_upload_grant(str(job.id), grant_exp)
@@ -490,18 +523,23 @@ async def claim_job(
     )
     await db.flush()
 
-    return ClaimResponse(
+    payload = ClaimResponse(
         job_id=job.id,
         workload_type=job.workload_type,
         model=job.model,
         input=job_input,
         execution_mode=job.execution_mode,
         isolation_tier=getattr(job, "isolation_tier", "container") or "container",
+        network_policy=(
+            None
+            if (getattr(job, "isolation_tier", None) or "container").lower() in PRIVACY_TIERS
+            else getattr(job, "network_policy", None)
+        ),
         limits=ClaimLimits(
             max_runtime_seconds=job.max_runtime_seconds,
             memory_mb=2048,
             cpus="1.0",
-            gpu_count=job.gpu_count,
+            gpu_count=_claim_gpu_count(job),
         ),
         image_digest=image_digest,
         artifact_upload=ArtifactUploadGrant(
@@ -514,7 +552,25 @@ async def claim_job(
         result_public_key=result_public_key,
         key_attestation_required=key_attestation_nonce is not None,
         key_attestation_nonce=key_attestation_nonce,
+        stream_sealed=bool(is_private and (job.data_policy or {}).get("stream_sealed") and settings.PRIVACY_STREAMING_ENABLED),
     ).model_dump(mode="json")
+    # U3: the v2 plan rides on the claim only for a v2 job; a v1 claim is byte-for-byte what it was.
+    from app.api.routers.agent_v2 import build_claim_v2
+
+    v2_plan = await build_claim_v2(db, job)
+    if v2_plan is not None:
+        payload["v2"] = v2_plan
+        # U13: a multi-node member gets its rendezvous (master address, rank); without it the job is refused, not started.
+        from app.services import multi_node
+
+        is_member, rendezvous = await multi_node.rendezvous_for_job(db, job)
+        if is_member and rendezvous is None:
+            await _fail_claimed_job(db, request, job, now, "rendezvous_unavailable")
+            await db.commit()  # persist the failure: the HTTPException below makes get_db roll back anything uncommitted
+            raise HTTPException(status_code=409, detail="rendezvous_unavailable")
+        if rendezvous is not None:
+            payload["rendezvous"] = rendezvous
+    return payload
 
 
 async def _fail_claimed_job(db: AsyncSession, request: Request, job: Job, now: dt.datetime, code: str) -> None:
@@ -644,6 +700,34 @@ async def _post_terminal_hooks(
             )
 
 
+@router.post("/jobs/{job_id}/stream", response_model=StreamChunkResponse)
+async def job_stream_chunk(
+    job_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> StreamChunkResponse:
+    """B2: one ordered token chunk for a customer's open SSE stream (machine-signed)."""
+    machine, raw_body = await authenticate_machine(request, db)
+    body: StreamChunkRequest = _parse_body(raw_body, StreamChunkRequest)
+    job = await _owned_running_job(db, machine, job_id)
+    if job.status != fsm.RUNNING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="job_not_running")
+    is_private_job = (getattr(job, "isolation_tier", None) or "open").lower() in PRIVACY_TIERS
+    if is_private_job and not (settings.PRIVACY_STREAMING_ENABLED and settings.privacy_active and (job.data_policy or {}).get("stream_sealed")):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="streaming_not_supported_for_private")
+    if is_private_job != (body.sealed is not None) or (is_private_job and body.text):
+        # U18: a private job relays only sealed envelopes, and a normal job never does (no plaintext into a sealed stream).
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="stream_sealed_mismatch")
+    try:
+        if is_private_job:
+            accepted, next_seq = stream_relay.accept_sealed_chunk(str(job.id), body.seq, body.sealed, body.final)
+        else:
+            accepted, next_seq = stream_relay.accept_chunk(str(job.id), body.seq, body.text, body.final)
+    except stream_relay.StreamSequenceError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"stream_sequence_error:{exc.reason}")
+    return StreamChunkResponse(ok=True, accepted=accepted, next_seq=next_seq)
+
+
 @router.post("/jobs/{job_id}/result", response_model=JobResultResponse)
 async def job_result(
     job_id: uuid.UUID,
@@ -655,6 +739,12 @@ async def job_result(
     # Locked: the status read below decides whether money is captured, so it must
     # not race a concurrent cancel (which releases the same hold).
     job = await _owned_running_job(db, machine, job_id, lock=True)
+
+    # A late result for a job the platform cancelled (customer cancel, multi-node rank-failure sibling cancel, service
+    # replica start timeout) is refused cleanly: nothing is stored and billing is not touched (the hold was already
+    # released). The agent treats this 409 as final.
+    if job.status == fsm.CANCELLED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="job_not_running")
 
     # Idempotent: a repeated result for an already-terminal job returns the same status.
     if job.status in fsm.TERMINAL_STATES:
@@ -673,6 +763,17 @@ async def job_result(
         job.metrics = merged
 
     if body.status == "success":
+        if getattr(job, "kit_id", None) is not None:
+            from app.services import service_runtime as _service_runtime
+
+            # No-op unless per_request mode + replica. Never raises; on failure the job is marked settlement_pending and is
+            # NOT settled here (no silent uptime billing): the worker sweep retries, then settles via the capped fallback.
+            metering_ok = await _service_runtime.meter_or_defer(db, job, now)
+            if not metering_ok:
+                await fsm.transition(db, job, fsm.VERIFYING, reason="metering_pending", actor="agent")
+                await release_job_reservation(db, job, now)
+                await db.flush()
+                return JobResultResponse(job_id=job.id, status=job.status)
         await fsm.transition(db, job, fsm.VERIFYING, reason="result_received", actor="agent")
 
         if is_private:
@@ -793,6 +894,14 @@ async def job_result(
                     invoice = await billing.settle_job(db, job)
                     async with safe_hook(db, "verification.shadow_sample"):
                         await verification_service.maybe_create_shadow_job(db, job)
+                    async with safe_hook(db, "verification.kit_reference"):
+                        from app.services import kit_verification_run as _kvr
+
+                        await _kvr.maybe_schedule_kit_reference(db, job)
+                    async with safe_hook(db, "unit_quotes.record_actual"):
+                        from app.services import unit_quotes as _unit_quotes
+
+                        await _unit_quotes.record_actual_for_job(db, job)
                 elif job.shadow_of_job_id is not None:
                     async with safe_hook(db, "verification.resolve_redundancy"):
                         await verification_service.resolve_redundancy(db, job, body.output or {})

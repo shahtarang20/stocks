@@ -1,0 +1,53 @@
+groups:
+  - name: computecoin
+    rules:
+      - alert: ApiMetricsDown
+        expr: up{job="computecoin-api"} == 0
+        for: 3m
+        labels: {severity: critical}
+        annotations: {summary: "ComputeCoin API metrics endpoint is not scrapeable"}
+      - alert: QueueDepthHigh
+        expr: computecoin_ops_queue_depth > 100
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "More than 100 jobs queued for 10 minutes"}
+      - alert: ClaimLatencyHigh
+        expr: computecoin_ops_claim_latency_seconds{stat="avg"} > 120
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "Average creation-to-start latency above 2 minutes"}
+      - alert: JobFailuresElevated
+        expr: computecoin_ops_jobs_failed_window > 20
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "Many failed or timed-out jobs in the last window"}
+      - alert: NoOnlineMachines
+        expr: computecoin_ops_machines{availability="online"} == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "No online machines"}
+      - alert: ManyThrottledMachines
+        expr: computecoin_ops_machines{availability="throttled"} > 0.3 * sum(computecoin_ops_machines)
+        for: 15m
+        labels: {severity: warning}
+        annotations: {summary: "More than 30% of machines are throttled"}
+      - alert: StakeSyncStale
+        expr: computecoin_ops_stake_sync_seconds_since_ok > 1800 or computecoin_ops_stake_sync_seconds_since_ok < 0
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "Stake sync has not succeeded recently (or never)"}
+      - alert: ChainReconciliationStale
+        expr: computecoin_ops_chain_recon_seconds_since_ok > 3600 or computecoin_ops_chain_recon_seconds_since_ok < 0
+        for: 10m
+        labels: {severity: critical}
+        annotations: {summary: "Chain reconciliation has not succeeded recently (or never)"}
+      - alert: AbuseFlagsOpen
+        expr: computecoin_ops_abuse_flags_open > 0
+        for: 30m
+        labels: {severity: warning}
+        annotations: {summary: "Abuse flags awaiting admin review"}
+      - alert: LedgerImbalance
+        expr: computecoin_ledger_imbalance_minor != 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "Ledger debits and credits differ (legacy /metrics endpoint must also be scraped)"}

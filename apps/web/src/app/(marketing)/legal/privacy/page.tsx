@@ -4,7 +4,7 @@ import { Prose } from "@/components/content";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
-  description: "Phase 1 preview privacy policy for ComputeCoin.",
+  description: "Preview privacy policy for ComputeCoin.",
 };
 
 export default function PrivacyPage() {
@@ -13,11 +13,17 @@ export default function PrivacyPage() {
       <PageHero
         eyebrow="Legal"
         title="Privacy Policy"
-        description="How the Phase 1 preview handles your data. A plain-language placeholder, not final legal terms."
+        description="How the preview handles your data. A plain-language placeholder, not final legal terms."
       />
       <div className="container space-y-8 py-12">
+        <div className="max-w-3xl rounded-md border border-border bg-surface px-4 py-3 text-sm">
+          <p className="font-medium">In short</p>
+          <p className="mt-1 text-muted-foreground">
+            We keep your email address and a scrambled form of your password. We use cookies only to keep you signed in. We do not sell your personal data. This is a plain-language placeholder, not final legal terms.
+          </p>
+        </div>
         <Prose>
-          <p className="text-xs">Last updated: Phase 1 preview.</p>
+          <p className="text-xs">Last updated: preview version.</p>
           <h2>Data we collect</h2>
           <p>
             For accounts, we process your email address and a hashed password

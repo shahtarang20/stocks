@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { LogOut, Settings, User } from "lucide-react";
+import { HelpCircle, LogOut, User } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export function UserMenu() {
@@ -42,12 +42,12 @@ export function UserMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link href="/dashboard/settings">
-            <User className="h-4 w-4" /> Profile
+            <User className="h-4 w-4" /> Account settings
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/dashboard/settings">
-            <Settings className="h-4 w-4" /> Settings
+          <Link href="/help">
+            <HelpCircle className="h-4 w-4" /> Help and glossary
           </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />

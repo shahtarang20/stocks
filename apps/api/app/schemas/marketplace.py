@@ -63,9 +63,10 @@ class MarketplaceListOut(BaseModel):
 class QuoteCreate(BaseModel):
     machine_id: uuid.UUID
     workload_type: str = Field(min_length=1, max_length=64)
-    estimated_minutes: int = Field(gt=0)
-    gpu_count: int = Field(default=1, ge=1)
-    max_authorized_spend: decimal.Decimal | None = None
+    estimated_minutes: int = Field(gt=0, le=525_600)
+    gpu_count: int = Field(default=1, ge=1, le=64)
+    # max_digits bounds the exponent too: "1e400" used to overflow Decimal arithmetic (HTTP 500).
+    max_authorized_spend: decimal.Decimal | None = Field(default=None, max_digits=24)
 
 
 class QuoteBreakdownOut(BaseModel):

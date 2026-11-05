@@ -1,0 +1,12 @@
+{
+  "icc": false,
+  "no-new-privileges": true,
+  "userland-proxy": false,
+  "live-restore": false,
+  "iptables": true,
+  "ip6tables": true,
+  "log-driver": "local",
+  "log-opts": {"max-size": "10m", "max-file": "3"},
+  "default-ulimits": {"nofile": {"Name": "nofile", "Hard": 4096, "Soft": 4096}, "core": {"Name": "core", "Hard": 0, "Soft": 0}},
+  "default-runtime": "runc"
+}

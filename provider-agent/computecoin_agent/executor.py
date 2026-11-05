@@ -21,8 +21,15 @@ DockerExecutor
   jobs, the NVIDIA toolkit) is actually available on the host.
 * Builds a HARDENED ``docker run`` argv:
     - image pinned by ``@sha256:`` digest (never a mutable tag);
-    - ``--network none`` by default (an egress allowlist is only added when the
-      workload profile explicitly requires it);
+    - ``--network none`` by default. A job that declares a validated
+      ``network_policy`` ({"egress": ["host:port", ...]}, B5) instead runs on a
+      per-job ``--internal`` docker network (no route out) next to a pinned egress
+      proxy (``egress_proxy_image``, @sha256: digest, configurable) that is the only
+      thing with a route out and allows ONLY the listed host:port (HTTPS via CONNECT);
+      the job gets HTTPS_PROXY/HTTP_PROXY. Proxy and network are removed when the job
+      ends and denied attempts (proxy log lines containing "DENIED") go into the job
+      log. Privacy-tier jobs never get network. If the proxy image is not configured
+      the job is refused, never run with wider network;
     - ``--read-only`` root filesystem PLUS a dedicated writable ``--tmpfs`` and a
       per-job output dir that is NOT a bind of any host-sensitive path;
     - ``--cap-drop ALL``;
@@ -49,8 +56,10 @@ import abc
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -59,6 +68,32 @@ from typing import Any, Callable, Optional
 # --------------------------------------------------------------------------- #
 # Errors
 # --------------------------------------------------------------------------- #
+def check_multinode_firewall(network: str, runner: Optional[Callable[[list[str]], str]] = None) -> Optional[str]:
+    """U13 runtime self-check, the agent-side equivalent of ``scripts/setup-multinode-net.sh --verify``: the group network
+    must exist with Internal=false AND the firewall rule marker ``computecoin-multinode:<network>`` must be present in
+    nftables or the iptables DOCKER-USER chain. Returns None when fine, else a short reason. Any failure to inspect is a
+    failure (fail closed). ``runner(argv) -> stdout`` is injectable for tests; it raises on a non-zero exit."""
+    def _run(argv: list[str]) -> str:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=15, check=True).stdout
+
+    run = runner or _run
+    try:
+        internal = run(["docker", "network", "inspect", "-f", "{{.Internal}}", network]).strip().lower()
+    except Exception as exc:  # noqa: BLE001
+        return f"cannot inspect docker network {network}: {type(exc).__name__}"
+    if internal != "false":
+        return f"docker network {network} is internal (or unknown state {internal!r})"
+    marker = f"computecoin-multinode:{network}"
+    for argv in (["nft", "list", "ruleset"], ["iptables", "-w", "-S", "DOCKER-USER"]):
+        try:
+            # whole-marker match: the marker of network "a" must not be satisfied by the rules of network "ab"
+            if re.search(re.escape(marker) + r"(?![A-Za-z0-9_.-])", run(argv)):
+                return None
+        except Exception:  # noqa: BLE001 - try the next backend
+            continue
+    return f"firewall rule marker {marker} not found in nftables or DOCKER-USER"
+
+
 class ExecutorError(RuntimeError):
     """Base class for executor failures."""
 
@@ -139,9 +174,29 @@ class JobSpec:
     isolation_tier: str = "container"
     encrypted_input: Optional[dict[str, Any]] = None
     result_public_key: Optional[str] = None
+    stream_sealed: bool = False  # U18: seal each streamed chunk to result_public_key (private chat stream)
+    # U18: a private fan-out part run by private_kit.py. Only this flag lets a privacy tier use the read-only input
+    # mounts, and they are RAM-backed; the network is still refused for every privacy tier.
+    private_kit: bool = False
     # Set by the private-job flow after the keys are fetched for a job-bound verdict (never from the claim).
     wrapped_shares: Optional[list[dict[str, Any]]] = None
     verdict_id: Optional[str] = None
+    # B5: {"egress": ["host:port", ...]} or None (= no network).
+    network_policy: Optional[dict[str, Any]] = None
+    # U3 (agent runtime v2). All empty/None for a v1 job, which then runs exactly as before.
+    # v2: the claim's plan; mounts: [{"source","target","readonly"}] staged by runtime_v2;
+    # extra_env: environment the runtime adds (input/cache/checkpoint dirs, resume flag).
+    v2: Optional[dict[str, Any]] = None
+    mounts: list[dict[str, Any]] = field(default_factory=list)
+    extra_env: dict[str, str] = field(default_factory=dict)
+    output_dir: Optional[str] = None  # v2: the host dir bound at /out (runtime_v2 collects outputs from it)
+    # U13: the claim's multi-node rendezvous block (None = single node); gpu_device_ids is set by the executor's allocator.
+    rendezvous: Optional[dict[str, Any]] = None
+    gpu_device_ids: Optional[list[int]] = None
+    # Called by the executor with the host output dir once it exists (JobMonitor tails stream/progress files there).
+    on_output_dir: Optional[Callable[[str], None]] = None
+    # U13: set by the job monitor when the API reports the job cancelled; the executor then stops the container.
+    cancel_event: Optional[threading.Event] = None
 
     @classmethod
     def from_claim(cls, data: dict[str, Any]) -> "JobSpec":
@@ -156,6 +211,10 @@ class JobSpec:
             isolation_tier=data.get("isolation_tier") or "container",
             encrypted_input=data.get("encrypted_input"),
             result_public_key=data.get("result_public_key"),
+            stream_sealed=bool(data.get("stream_sealed")),
+            network_policy=data.get("network_policy"),
+            v2=data.get("v2") if isinstance(data.get("v2"), dict) else None,
+            rendezvous=data.get("rendezvous") if isinstance(data.get("rendezvous"), dict) else None,
         )
 
 
@@ -176,6 +235,18 @@ class Executor(abc.ABC):
 def validate_output(workload_type: str, output: dict[str, Any]) -> bool:
     if workload_type == "text-generation":
         return isinstance(output.get("text"), str)
+    if workload_type == "embeddings":
+        vectors = output.get("embeddings")
+        return (
+            isinstance(vectors, list)
+            and len(vectors) > 0
+            and all(
+                isinstance(v, list)
+                and len(v) > 0
+                and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
+                for v in vectors
+            )
+        )
     if workload_type == "batch-inference":
         items = output.get("items")
         if not isinstance(items, list):
@@ -408,6 +479,23 @@ def _subprocess_runner(argv: list[str], output_dir: str) -> DockerRunResult:  # 
     )
 
 
+_FORBIDDEN_TARGET_PREFIXES = ("/proc", "/sys", "/dev", "/etc", "/out", "/tmp", "/run", "/var/run", "/root", "/boot")
+
+
+def check_mount_target(target: str) -> None:
+    """A container path a v2 mount may use: absolute, normalised, no dots, never a system or output path."""
+    parts = target.split("/")
+    if (
+        not target.startswith("/")
+        or target == "/"
+        or any(p in ("..", ".") for p in parts)
+        or "//" in target
+        or any(c in target for c in (",", "\n", "\x00", "="))
+        or any(target == f or target.startswith(f + "/") for f in _FORBIDDEN_TARGET_PREFIXES)
+    ):
+        raise ExecutorError(f"unsafe container mount target: {target!r}")
+
+
 class DockerExecutor(Executor):
     """Hardened container executor (only with a pinned image digest + docker).
 
@@ -447,6 +535,14 @@ class DockerExecutor(Executor):
         nvml_module: Any = None,
         output_root: Optional[str] = None,
         clock: Callable[[], float] = time.monotonic,
+        egress_proxy_image: Optional[str] = None,
+        thermal_guard: Any = None,
+        thermal_poll_seconds: float = 2.0,
+        gpu_allocator: Any = None,  # U13: GpuAllocator for this host's NVIDIA GPUs (None = whole-count --gpus as before)
+        multinode_network: Optional[str] = None,  # U13: operator-created internal docker network for multi-node jobs
+        cluster_addr: Optional[str] = None,  # U13: this host's private cluster address (rank 0 publishes on it ONLY)
+        multinode_network_firewalled: bool = False,  # U13: operator attestation (agent config), default refuse
+        multinode_firewall_check: Optional[Callable[[str], Optional[str]]] = None,  # runtime self-check, None = ok
     ) -> None:
         from .isolation import (
             probe_confidential_computing,
@@ -469,10 +565,52 @@ class DockerExecutor(Executor):
         self._nvml_module = nvml_module
         self._output_root = output_root
         self._clock = clock
+        self._egress_proxy_image = egress_proxy_image
+        self._thermal_guard = thermal_guard
+        self._thermal_poll_seconds = thermal_poll_seconds
+        self._gpu_allocator = gpu_allocator
+        self._multinode_network = (multinode_network or "").strip() or None
+        self._cluster_addr = (cluster_addr or "").strip() or None
+        self._multinode_firewalled = bool(multinode_network_firewalled)
+        self._multinode_firewall_check = multinode_firewall_check or check_multinode_firewall
 
         # Resolved on the first GPU job (_resolve_gpu), not per construction: a CPU job never
         # pays for GPU detection.
         self._gpu_vendor = gpu_vendor.lower().strip() if gpu_vendor else None
+
+    def _rank_network_args(self, rdv: dict[str, Any], job_id: str) -> list[str]:
+        """U13 (ADR-0003 addendum, rank-0 reachability). Rank 0's container must LISTEN where the other ranks dial:
+        ``master_addr`` (the API sets it to rank 0's host ``cluster_addr``). So rank 0 joins the group network with a
+        stable ``--network-alias`` and publishes the rendezvous port ONLY on this host's cluster_addr
+        (``--publish <cluster_addr>:<port>:<port>``), never 0.0.0.0 and never a public address. Fail closed on any
+        mismatch: a rank whose master_addr is not a literal private address, or a rank 0 whose host has no matching
+        cluster_addr, is refused instead of started unreachable. Other ranks publish nothing."""
+        import ipaddress
+
+        def _private(v: Any) -> Optional[str]:
+            try:
+                ip = ipaddress.ip_address(str(v))
+            except ValueError:
+                return None
+            if not ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast:
+                return None
+            return str(ip)
+
+        master = _private(rdv.get("master_addr"))
+        if master is None:
+            raise ExecutorError("multi-node master_addr must be a literal private address; refusing")
+        if int(rdv.get("node_rank", -1)) != 0:
+            return []
+        own = _private(self._cluster_addr) if self._cluster_addr else None
+        if own is None:
+            raise ExecutorError("multi-node rank 0 but no valid cluster_addr is configured on this host; refusing")
+        if own != master:
+            raise ExecutorError("multi-node master_addr does not match this host's cluster_addr; refusing")
+        port = int(rdv.get("master_port", 0))
+        if not (1024 <= port <= 65535):
+            raise ExecutorError("multi-node master_port out of range; refusing")
+        alias = "cc-rank0-" + re.sub(r"[^a-zA-Z0-9_.-]", "", str(job_id))[:40]
+        return ["--network-alias", alias, "--publish", f"{own}:{port}:{port}"]
 
     def _resolve_gpu(self) -> str:
         """The vendor of this host's GPUs, and for AMD each GPU's own render node, from detection
@@ -493,14 +631,119 @@ class DockerExecutor(Executor):
                 self._render_nodes = [g.render_node for g in gpus if g.gpu_vendor == "amd" and g.render_node]
         return self._gpu_vendor
 
+    # -- B5 egress allowlist helpers ----------------------------------------- #
+    PROXY_PORT = 3128
+
+    @staticmethod
+    def _egress_list(job_spec: JobSpec) -> list[str]:
+        policy = job_spec.network_policy
+        if not policy:
+            return []
+        egress = policy.get("egress") if isinstance(policy, dict) else None
+        if not isinstance(egress, list):
+            raise ExecutorError("network_policy must be {'egress': [...]}")
+        return [str(e) for e in egress]
+
+    @staticmethod
+    def _net_name(job_spec: JobSpec) -> str:
+        return f"ccoin-net-{job_spec.job_id}"
+
+    @staticmethod
+    def _proxy_name(job_spec: JobSpec) -> str:
+        return f"ccoin-proxy-{job_spec.job_id}"
+
+    def _proxy_image(self) -> str:
+        image = self._egress_proxy_image
+        if image is None:
+            try:
+                from .config import AgentConfig
+
+                image = AgentConfig.load().egress_proxy_image
+            except Exception:
+                image = None
+        if not image or "@sha256:" not in image:
+            raise HardwareUnavailableError(
+                "job needs network egress but no egress proxy image pinned by @sha256: digest is "
+                "configured (egress_proxy_image); refusing rather than widening the network"
+            )
+        return image
+
+    def _proxy_url(self, job_spec: JobSpec) -> str:
+        return f"http://{self._proxy_name(job_spec)}:{self.PROXY_PORT}"
+
+    def _setup_egress(self, job_spec: JobSpec, egress: list[str], output_dir: str) -> None:
+        """Create the internal network and start the proxy (the only member with a route out)."""
+        net, proxy = self._net_name(job_spec), self._proxy_name(job_spec)
+        image = self._proxy_image()
+        steps = [
+            ["docker", "network", "create", "--internal", net],
+            [
+                "docker", "run", "-d", "--rm", "--name", proxy, "--network", net,
+                "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--user", self.NONROOT_USER, "--pids-limit", "64", "--memory", "128m",
+                "-e", f"COMPUTECOIN_EGRESS_ALLOW={','.join(egress)}",
+                "-e", f"COMPUTECOIN_PROXY_PORT={self.PROXY_PORT}",
+                image,
+            ],
+            # The proxy joins the default bridge as well: it alone can reach out.
+            ["docker", "network", "connect", "bridge", proxy],
+        ]
+        for step in steps:
+            res = self._runner(step, output_dir)
+            if res.returncode != 0:
+                raise ExecutorError(f"egress setup failed at '{' '.join(step[:3])}': {(res.stderr or '').strip()[:200]}")
+
+    def _teardown_egress(self, job_spec: JobSpec, output_dir: str) -> list[str]:
+        """Collect denied-attempt log lines, then remove proxy and network (best effort, never raises)."""
+        denied: list[str] = []
+        proxy, net = self._proxy_name(job_spec), self._net_name(job_spec)
+        try:
+            res = self._runner(["docker", "logs", proxy], output_dir)
+            for line in _split_lines((res.stdout or "") + "\n" + (res.stderr or "")):
+                if "DENIED" in line:
+                    denied.append(f"[egress] {line.strip()[:300]}")
+        except Exception:
+            pass
+        for step in (["docker", "rm", "-f", proxy], ["docker", "network", "rm", net]):
+            try:
+                self._runner(step, output_dir)
+            except Exception:
+                pass
+        return denied[:200]
+
     # -- argv construction (pure; the core of the hardening contract) -------- #
     def build_argv(self, job_spec: JobSpec, output_dir: str) -> list[str]:
+        prefix, image, suffix = self.build_argv_parts(job_spec, output_dir)
+        return [*prefix, image, *suffix]
+
+    def build_argv_parts(self, job_spec: JobSpec, output_dir: str) -> tuple[list[str], str, list[str]]:
+        """Same hardened argv as build_argv, as (prefix_args, image, suffix_args): the image position is explicit, so
+        callers (sessions) can insert flags or a command override without assuming the image is the last element."""
         if not job_spec.image_digest or "@sha256:" not in job_spec.image_digest:
             raise ExecutorError(
                 "DockerExecutor requires an image pinned by @sha256: digest"
             )
 
         limits = job_spec.limits or {}
+        byoc = None
+        if job_spec.v2 and job_spec.v2.get("byoc") is not None:
+            # U8 BYOC: the byoc block is re-validated here; its limits replace the claim's, its tier is forced.
+            from .byoc import ByocError, parse_byoc
+
+            try:
+                byoc = parse_byoc(job_spec.v2)
+            except ByocError as exc:
+                raise ExecutorError(f"invalid BYOC block: {exc}")
+            if byoc.image != job_spec.image_digest:
+                raise ExecutorError("BYOC image does not match the claim image")
+            limits = {
+                **limits, "memory_mb": byoc.memory_mb, "cpus": byoc.cpus, "pids_limit": byoc.pids_limit,
+                "gpu_count": byoc.gpu_count,
+                "max_runtime_seconds": min(int(limits.get("max_runtime_seconds", byoc.max_runtime_seconds or self.DEFAULT_TIMEOUT_SECONDS)),
+                                           byoc.max_runtime_seconds or self.DEFAULT_TIMEOUT_SECONDS),
+            }
+            if (job_spec.isolation_tier or "container").lower() in ("sealed", "sealed_pro", "confidential"):
+                raise ExecutorError("BYOC is not offered on privacy tiers")
         memory_mb = int(limits.get("memory_mb", 2048))
         cpus = str(limits.get("cpus", "1.0"))
         gpu_count = int(limits.get("gpu_count", 0) or 0)
@@ -508,6 +751,33 @@ class DockerExecutor(Executor):
         timeout_s = int(
             limits.get("max_runtime_seconds", self.DEFAULT_TIMEOUT_SECONDS)
         )
+
+        egress = self._egress_list(job_spec)
+        if egress and (job_spec.isolation_tier or "container").lower() in ("sealed", "sealed_pro", "confidential"):
+            raise ExecutorError("privacy-tier jobs never get network access")
+        # U13 / ADR-0003 addendum: a multi-node rank (claim has `rendezvous`) joins ONLY the operator-created internal
+        # group network (no route out). Fail closed: no configured network, a privacy tier or an egress policy = refuse.
+        if job_spec.rendezvous is not None:
+            if (job_spec.isolation_tier or "container").lower() in ("sealed", "sealed_pro", "confidential"):
+                raise ExecutorError("privacy-tier jobs never get network access (multi-node refused)")
+            if egress:
+                raise ExecutorError("multi-node jobs cannot declare network egress")
+            if not self._multinode_network:
+                raise ExecutorError("multi-node job but no multinode_network is configured on this host; refusing")
+            # ADR-0003 U13: the group network is NOT --internal (needed for --publish), so its confinement is the host
+            # firewall. Refuse unless the operator attested it AND the runtime self-check finds it in place.
+            if not self._multinode_firewalled:
+                raise ExecutorError(
+                    "multinode_firewall_not_attested: set multinode_network_firewalled = true only after "
+                    "scripts/setup-multinode-net.sh --verify printed OK; refusing")
+            problem = self._multinode_firewall_check(self._multinode_network)
+            if problem:
+                raise ExecutorError(f"multinode_firewall_check_failed: {problem}; refusing")
+            job_network = self._multinode_network
+            net_extra = self._rank_network_args(job_spec.rendezvous, job_spec.job_id)
+        else:
+            net_extra = []
+            job_network = self._net_name(job_spec) if egress else "none"  # no egress by default (B5: internal net + proxy)
 
         argv: list[str] = [
             "timeout",
@@ -518,7 +788,8 @@ class DockerExecutor(Executor):
             "--rm",
             # --- isolation / hardening ---
             "--network",
-            "none",            # no egress by default
+            job_network,
+            *net_extra,  # U13: rank 0 only: --network-alias and --publish restricted to cluster_addr
             "--read-only",     # read-only rootfs
             "--cap-drop",
             "ALL",             # drop all Linux capabilities
@@ -550,6 +821,28 @@ class DockerExecutor(Executor):
             "-e",
             f"COMPUTECOIN_WORKLOAD_TYPE={job_spec.workload_type}",
         ]
+        if job_spec.mounts or job_spec.extra_env:
+            if (job_spec.isolation_tier or "container").lower() in ("sealed", "sealed_pro", "confidential") and not job_spec.private_kit:
+                # No staging mounts on a privacy tier. The only environment allowed is the job monitor's sealed-stream
+                # pointers (paths inside /out, a RAM-backed dir): without them a private chat could never stream.
+                if job_spec.mounts or not set(job_spec.extra_env) <= {"COMPUTECOIN_STREAM", "COMPUTECOIN_PROGRESS"}:
+                    raise ExecutorError("privacy-tier jobs do not use the v2 staging mounts")
+            for m in job_spec.mounts:
+                source, target = str(m["source"]), str(m["target"])
+                check_mount_target(target)
+                if "," in source or "\n" in source or not os.path.isabs(source):
+                    raise ExecutorError("invalid mount source")
+                spec = f"type=bind,source={source},target={target}"
+                argv += ["--mount", spec + (",readonly" if m.get("readonly", True) else "")]
+            for key, value in sorted(job_spec.extra_env.items()):
+                if "=" in key or "\n" in key or "\n" in value:
+                    raise ExecutorError("invalid environment entry")
+                argv += ["-e", f"{key}={value}"]
+        if egress:
+            proxy_url = self._proxy_url(job_spec)
+            for key in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+                argv += ["-e", f"{key}={proxy_url}"]
+            argv += ["-e", f"NO_PROXY="]
 
         # --- Phase 8: Isolation Tier Enforcement ---
         from .isolation import (
@@ -557,9 +850,11 @@ class DockerExecutor(Executor):
             TIER_CONTAINER,
             TIER_GVISOR,
             TIER_MICROVM,
+            TIER_SEALED,
+            TIER_SEALED_PRO,
         )
 
-        tier = (job_spec.isolation_tier or TIER_CONTAINER).lower()
+        tier = byoc.tier if byoc is not None else (job_spec.isolation_tier or TIER_CONTAINER).lower()
 
         vendor = self._resolve_gpu() if gpu_count > 0 else (self._gpu_vendor or "nvidia")
         # D5: AMD GPU jobs support container isolation only in v1
@@ -569,6 +864,7 @@ class DockerExecutor(Executor):
                 "Workload cannot be silently downgraded."
             )
 
+        nccl_applied = False
         # GPU only when requested AND the driver/toolkit is present.
         if gpu_count > 0:
             if vendor == "amd":
@@ -589,7 +885,33 @@ class DockerExecutor(Executor):
                         "GPU job requires the NVIDIA container toolkit, which is "
                         "unavailable on this host"
                     )
-                argv += build_gpu_argv("nvidia", gpu_count)
+                if gpu_count > 1 and job_spec.gpu_device_ids:
+                    # U13: explicit device set chosen by the agent's allocator, private IPC with a bounded --shm-size
+                    # (ADR-0003 forbids --ipc=host), NCCL env for one host or the multi-node rendezvous.
+                    from .gpu_alloc import GpuAllocationError, nccl_env, nvidia_gpus_args, shm_size_mb
+
+                    if len(job_spec.gpu_device_ids) != gpu_count:
+                        raise ExecutorError("gpu device set does not match gpu_count")
+                    try:
+                        argv += nvidia_gpus_args(job_spec.gpu_device_ids)
+                        argv += ["--shm-size", f"{shm_size_mb(memory_mb, limits)}m"]
+                        for key, value in sorted(nccl_env(gpu_count, job_spec.rendezvous).items()):
+                            argv += ["-e", f"{key}={value}"]
+                        nccl_applied = True
+                    except GpuAllocationError as exc:
+                        raise ExecutorError(str(exc)) from exc
+                else:
+                    argv += build_gpu_argv("nvidia", gpu_count)
+
+        if job_spec.rendezvous is not None and not nccl_applied:
+            # U13: the rendezvous variables are needed for any multi-node rank, also with one GPU per node.
+            from .gpu_alloc import GpuAllocationError, nccl_env
+
+            try:
+                for key, value in sorted(nccl_env(max(gpu_count, 1), job_spec.rendezvous).items()):
+                    argv += ["-e", f"{key}={value}"]
+            except GpuAllocationError as exc:
+                raise ExecutorError(str(exc)) from exc
 
         if tier == TIER_GVISOR:
             if not self._gvisor_available():
@@ -612,12 +934,50 @@ class DockerExecutor(Executor):
                     "Workload cannot be silently downgraded."
                 )
             argv += ["--runtime", "kata-qemu-sev"]
-        elif tier != TIER_CONTAINER:
+        elif tier not in (TIER_CONTAINER, TIER_SEALED, TIER_SEALED_PRO):
+            # sealed / sealed_pro: the host itself is the sealed VM (verified by attestation); the job runs in the
+            # same hardened container. Everything else is refused, never silently downgraded.
             raise ExecutorError(f"Unsupported isolation_tier: {job_spec.isolation_tier!r}")
 
         # The pinned image is the LAST positional before the (implicit) entrypoint.
-        argv.append(job_spec.image_digest)
-        return argv
+        if byoc is not None:
+            # no swap, no shared IPC; never privileged / host namespaces / devices (none of these flags exist here)
+            argv += ["--memory-swap", f"{byoc.memory_mb}m", "--ipc", "none"]
+            for key, value in sorted(byoc.env.items()):
+                argv += ["-e", f"{key}={value}"]
+            if byoc.command:
+                argv += ["--entrypoint", byoc.command[0]]
+            return argv, job_spec.image_digest, [*byoc.command[1:], *byoc.args]
+        return argv, job_spec.image_digest, []
+
+    def _thermal_watch(self, container: str, output_dir: str, stop: "threading.Event", tripped: list[float]) -> None:
+        """Poll the GPU temperature while the job runs; at the hard stop, kill the container."""
+        from .thermal import HARD_STOP
+
+        guard = self._thermal_guard
+        while not stop.wait(self._thermal_poll_seconds):
+            try:
+                temp = guard.read_max_temp()
+                if guard.evaluate(temp) == HARD_STOP and temp is not None:
+                    tripped.append(temp)
+                    self._runner(["docker", "kill", container], output_dir)
+                    return
+            except Exception:
+                continue  # a broken sensor never stops a job; None never triggers
+
+    def _cancel_watch(self, container: str, output_dir: str, stop: "threading.Event", cancel_event: "threading.Event",
+                      cancelled: list[bool]) -> None:
+        """U13: when the job monitor sees the API cancelled this job, kill exactly this container."""
+        while not stop.is_set():
+            if cancel_event.wait(1.0):
+                if stop.is_set():
+                    return
+                cancelled.append(True)
+                try:
+                    self._runner(["docker", "kill", container], output_dir)
+                except Exception:
+                    pass
+                return
 
     def run(self, job_spec: JobSpec) -> ExecutionResult:
         if job_spec.execution_mode != "hardware":
@@ -635,7 +995,7 @@ class DockerExecutor(Executor):
 
         start = self._clock()
         created_tmp = False
-        output_dir = self._output_root
+        output_dir = job_spec.output_dir or self._output_root
         if output_dir is None:
             output_dir = tempfile.mkdtemp(prefix="ccoin-job-")
             created_tmp = True
@@ -644,6 +1004,11 @@ class DockerExecutor(Executor):
             os.chmod(output_dir, 0o777)
         except OSError:
             pass
+        if job_spec.on_output_dir is not None:
+            try:
+                job_spec.on_output_dir(output_dir)
+            except Exception:
+                pass  # monitoring is best-effort
 
         # Materialize input.json inside output_dir for container reading
         input_path = os.path.join(output_dir, "input.json")
@@ -671,10 +1036,105 @@ class DockerExecutor(Executor):
                 },
             )
 
+        allocated: list[int] = []
+        gpus_wanted = int((job_spec.limits or {}).get("gpu_count", 0) or 0)
+        if self._gpu_allocator is not None and gpus_wanted > 1 and not job_spec.gpu_device_ids:
+            try:
+                allocated = self._gpu_allocator.acquire(gpus_wanted)
+            except Exception as exc:  # no free device set: fail the attempt, never share cards
+                return ExecutionResult(
+                    status="failed", execution_mode=self.execution_mode,
+                    metrics={"duration_seconds": 0.0, "max_memory_mb": None, "gpu_util_pct": None},
+                    logs=[f"[hardware] {exc}"], output_schema_valid=False,
+                    error={"code": "gpu_unavailable", "message": str(exc)},
+                )
+            job_spec.gpu_device_ids = allocated
+        try:
+            return self._run_allocated(job_spec, output_dir, start, created_tmp)
+        finally:
+            if allocated:
+                self._gpu_allocator.release(allocated)
+
+    def _run_allocated(self, job_spec: JobSpec, output_dir: str, start: float, created_tmp: bool) -> ExecutionResult:
         argv = self.build_argv(job_spec, output_dir)
         logs = [f"[hardware] docker run for job {job_spec.job_id}"]
-        run_result = self._runner(argv, output_dir)
+        egress = self._egress_list(job_spec)
+        container_name = f"ccoin-job-{job_spec.job_id}"
+        # Always named: the wall-clock `timeout --signal=KILL` only kills the docker CLI, never the container, so the
+        # name is needed to stop it afterwards (and by the thermal / cancel watchdogs).
+        argv = [*argv[: argv.index("--rm") + 1], "--name", container_name, *argv[argv.index("--rm") + 1 :]]
+        run_result: Optional[DockerRunResult] = None
+        stop_event = threading.Event()
+        thermal_tripped: list[float] = []
+        cancelled: list[bool] = []
+        cancel_watchdog = None
+        watchdog = None
+        try:
+            if egress:
+                try:
+                    self._setup_egress(job_spec, egress, output_dir)
+                except ExecutorError as exc:
+                    self._teardown_egress(job_spec, output_dir)
+                    return ExecutionResult(
+                        status="failed",
+                        execution_mode=self.execution_mode,
+                        metrics={"duration_seconds": 0.0, "max_memory_mb": None, "gpu_util_pct": None},
+                        logs=logs + [f"[egress] {exc}"],
+                        output_schema_valid=False,
+                        error={"code": "egress_setup_failed", "message": str(exc)},
+                    )
+                logs.append(f"[egress] allowlist: {', '.join(egress)} (everything else denied)")
+            if self._thermal_guard is not None:
+                watchdog = threading.Thread(
+                    target=self._thermal_watch,
+                    args=(container_name, output_dir, stop_event, thermal_tripped),
+                    daemon=True,
+                )
+                watchdog.start()
+            if job_spec.cancel_event is not None:
+                cancel_watchdog = threading.Thread(
+                    target=self._cancel_watch,
+                    args=(container_name, output_dir, stop_event, job_spec.cancel_event, cancelled),
+                    daemon=True,
+                )
+                cancel_watchdog.start()
+            run_result = self._runner(argv, output_dir)
+        finally:
+            if run_result is None or run_result.returncode != 0:
+                # timeout (137) / cancelled / crashed client: the container may still be running; stop and remove it.
+                try:
+                    self._runner(["docker", "rm", "-f", container_name], output_dir)
+                except Exception:
+                    pass
+            stop_event.set()
+            if watchdog is not None:
+                watchdog.join(timeout=5)
+            if cancel_watchdog is not None:
+                cancel_watchdog.join(timeout=5)
+            if egress:
+                logs.extend(self._teardown_egress(job_spec, output_dir))
         duration = max(0.0, self._clock() - start)
+
+        if thermal_tripped:
+            # B6: a thermal stop is reported failed so the customer is not charged and the job can fail over.
+            return ExecutionResult(
+                status="failed",
+                execution_mode=self.execution_mode,
+                metrics={"duration_seconds": round(duration, 6), "max_memory_mb": None, "gpu_util_pct": None},
+                logs=logs + [f"[thermal] GPU reached {thermal_tripped[0]:.0f} C (hard stop); container stopped"],
+                output_schema_valid=False,
+                error={"code": "thermal_shutdown", "message": f"GPU temperature {thermal_tripped[0]:.0f} C reached the hard stop"},
+            )
+
+        if cancelled:
+            return ExecutionResult(
+                status="failed",
+                execution_mode=self.execution_mode,
+                metrics={"duration_seconds": round(duration, 6), "max_memory_mb": None, "gpu_util_pct": None},
+                logs=logs + ["[cancel] the job was cancelled by the API; container stopped"],
+                output_schema_valid=False,
+                error={"code": "cancelled", "message": "job cancelled; container stopped"},
+            )
 
         if run_result.returncode != 0:
             return ExecutionResult(
@@ -697,10 +1157,22 @@ class DockerExecutor(Executor):
         # alone is NOT proof of useful work -- we require a parseable output.
         output_path = os.path.join(output_dir, "output.json")
         try:
-            with open(output_path, "rb") as fh:
-                raw = fh.read()
+            # The job controls everything in this dir: never follow a planted symlink (host-file exfiltration) and
+            # never read an unbounded file into the agent's memory.
+            raw = _read_job_file(output_path, MAX_OUTPUT_JSON_BYTES)
             output = json.loads(raw)
         except (OSError, ValueError) as exc:
+            if job_spec.v2 is not None:
+                # v2: outputs are the Kit's declared files, collected and hashed by runtime_v2;
+                # output.json is optional. (A declared required output that is missing fails there.)
+                return ExecutionResult(
+                    status="success",
+                    output={},
+                    execution_mode=self.execution_mode,
+                    metrics={"duration_seconds": round(duration, 6), "max_memory_mb": None, "gpu_util_pct": None},
+                    logs=logs + _split_lines(run_result.stdout),
+                    output_schema_valid=False,
+                )
             return ExecutionResult(
                 status="failed",
                 execution_mode=self.execution_mode,
@@ -774,6 +1246,28 @@ class DockerExecutor(Executor):
             artifacts=[artifact],
             output_schema_valid=schema_ok,
         )
+
+
+MAX_OUTPUT_JSON_BYTES = 128 * 1024 * 1024
+
+
+def _read_job_file(path: str, max_bytes: int) -> bytes:
+    """Read a file the (untrusted) job wrote: regular files only, symlinks refused (O_NOFOLLOW), size capped.
+    Raises OSError for a symlink, a non-regular file or an oversized file."""
+    import stat as _stat
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)  # ELOOP on a symlink; O_NONBLOCK so a planted FIFO cannot hang the agent
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not _stat.S_ISREG(st.st_mode):
+            raise OSError(f"{os.path.basename(path)} is not a regular file")
+        if st.st_size > max_bytes:
+            raise OSError(f"{os.path.basename(path)} exceeds {max_bytes} bytes")
+        data = fh.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise OSError(f"{os.path.basename(path)} exceeds {max_bytes} bytes")
+    return data
 
 
 def _split_lines(text: str) -> list[str]:

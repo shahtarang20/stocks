@@ -54,6 +54,17 @@ def job_id_to_bytes32(job_id: uuid.UUID) -> str:
     return "0x" + h.hex()
 
 
+def machine_id_to_bytes32(machine_id: uuid.UUID) -> str:
+    """Deterministically convert a machine UUID to the vault's bytes32 machine id.
+
+    The ``computecoin-machine:`` domain prefix keeps machine ids from ever colliding with
+    job ids (``job_id_to_bytes32`` hashes the bare UUID string). Providers register this value
+    in ``ComputeStakeVault.registerMachine``.
+    """
+    h = keccak(text="computecoin-machine:" + str(machine_id))
+    return "0x" + h.hex()
+
+
 _NETWORK_NAMES = {
     31337: "Local Hardhat / Dev EVM (Cancun)",
     56: "BNB Smart Chain",

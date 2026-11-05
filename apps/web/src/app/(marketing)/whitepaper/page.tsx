@@ -14,8 +14,8 @@ export const metadata: Metadata = {
 
 const STATUS: Array<[string, string]> = [
   ["Web console, REST API, Python and TypeScript SDKs", "Built, in developer preview"],
-  ["Provider agent (NVIDIA GPUs only)", "Built. Reported hardware is self-reported (\"Detected\"), not independently verified"],
-  ["Job execution", "Container runner implemented. Not yet validated on real GPU hardware; jobs are simulated by default"],
+  ["Host agent (the program on a host's computer). Works with NVIDIA and AMD graphics cards", "Built. The AMD part is new and has not been tried on a real AMD card yet. Hardware details are reported by the computer itself, not checked by ComputeCoin"],
+  ["Job execution", "The container runner is built. It has not been tested on real GPU hardware yet. Jobs run in practice mode (simulated) by default"],
   ["Customer credits and payments", "Credits are test credits. Stripe test-mode rail built; live payments not enabled"],
   ["COMPUTE token contract (ERC-20)", "Built and unit-tested. Not audited"],
   ["Settlement (escrow) contract", "Built and unit-tested. Not audited"],
@@ -39,7 +39,7 @@ export default function WhitepaperPage() {
       <PageHero
         eyebrow="Technical Whitepaper v1.1"
         title="ComputeCoin: AI compute, settled on-chain"
-        description="A marketplace connecting NVIDIA GPU owners with developers, with optional on-chain escrow in the COMPUTE token. This page separates what is built from what is not."
+        description="A marketplace connecting people who own graphics cards (GPUs) with people who need them, with optional on-chain escrow in the COMPUTE token. This page separates what is built from what is not."
       />
 
       <div className="container space-y-12 py-12">
@@ -51,22 +51,33 @@ export default function WhitepaperPage() {
           </p>
         </div>
 
+        <div role="note" className="rounded-md border border-border bg-surface px-4 py-3 text-sm">
+          <p className="font-medium">In plain words</p>
+          <p className="text-muted-foreground">
+            This page is the technical paper. You do not need it to rent or share a computer. The short
+            version: hosts share computers with graphics cards, customers pay by the second for jobs, and
+            credits are test credits today. There is also a coin called COMPUTE, which is still on a test
+            network and has no money value. For simple explanations of the words used here, see the{" "}
+            <Link href="/help" className="text-primary underline underline-offset-2">help and glossary</Link>.
+          </p>
+        </div>
+
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <Card>
             <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-primary/10 text-brand-primary">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Cpu className="h-5 w-5" />
               </span>
-              <CardTitle className="text-base">NVIDIA GPU marketplace</CardTitle>
+              <CardTitle className="text-base">GPU marketplace</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              Providers run an agent on their GPUs; customers submit containerised jobs and are metered per second.
+              Hosts run an agent on their computers; customers send jobs and are billed per second of run time.
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-primary/10 text-brand-primary">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Coins className="h-5 w-5" />
               </span>
               <CardTitle className="text-base">$COMPUTE token</CardTitle>
@@ -79,7 +90,7 @@ export default function WhitepaperPage() {
 
           <Card>
             <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-primary/10 text-brand-primary">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <ShieldCheck className="h-5 w-5" />
               </span>
               <CardTitle className="text-base">On-chain escrow</CardTitle>
@@ -95,8 +106,7 @@ export default function WhitepaperPage() {
           <Prose>
             <h2>1. Summary</h2>
             <p>
-              AI teams rent GPUs from a few large clouds at high margins, while independent data centres and
-              workstation owners leave capacity idle. ComputeCoin connects the two. Job scheduling and metering run
+              Many people rent GPUs from a few large cloud companies, while others own graphics cards that sit idle. ComputeCoin connects the two. Job scheduling and metering run
               off-chain for speed. An optional on-chain escrow settles payments in the <strong>$COMPUTE</strong>{" "}
               token on BNB Smart Chain.
             </p>
@@ -129,13 +139,13 @@ export default function WhitepaperPage() {
                 in which debits equal credits.
               </li>
               <li>
-                <strong>Providers:</strong> <code>computecoin-agent</code> detects NVIDIA GPUs through NVML, sends
-                signed heartbeats every 30 seconds, and runs workloads in a locked-down container. A machine that
-                misses heartbeats for 90 seconds is marked offline.
+                <strong>Hosts:</strong> <code>computecoin-agent</code> detects NVIDIA and AMD GPUs, sends
+                signed check-in messages (heartbeats) every 30 seconds, and runs jobs in a locked-down container. A
+                computer that misses check-ins for 90 seconds is marked offline.
               </li>
               <li>
-                <strong>Quotes and reservations:</strong> a quote fixes the price for a short window (120 seconds by
-                default). Accepting it reserves funds; completion captures the metered cost, failure releases the
+                <strong>Quotes and reservations:</strong> a quote fixes the price for a short time (120 seconds by
+                default). Accepting it sets credits aside; completion captures the metered cost, failure releases the
                 hold.
               </li>
             </ul>
@@ -234,7 +244,7 @@ export default function WhitepaperPage() {
                 can change the platform signer and fee treasury.
               </li>
               <li><strong>Operator trust:</strong> metering and voucher signing are run by the platform.</li>
-              <li><strong>Execution risk:</strong> real-GPU execution is unvalidated; jobs are simulated in this preview.</li>
+              <li><strong>Execution risk:</strong> running jobs on real GPUs has not been tested yet; jobs are practice runs (simulated) in this preview.</li>
               <li><strong>Market risk:</strong> a token can lose all of its value; liquidity may be thin and prices volatile.</li>
               <li><strong>Regulatory risk:</strong> the legal treatment of tokens differs by country and is not yet reviewed.</li>
             </ul>
@@ -252,11 +262,11 @@ export default function WhitepaperPage() {
           <div className="mt-10 flex flex-wrap gap-4 border-t border-border pt-6">
             <Button asChild>
               <Link href="/marketplace/gpus">
-                Explore Marketplace <ArrowRight className="ml-2 h-4 w-4" />
+                See computers for rent <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
             <Button asChild variant="outline">
-              <Link href="/register">Join Developer Preview</Link>
+              <Link href="/register">Join the preview</Link>
             </Button>
           </div>
         </div>

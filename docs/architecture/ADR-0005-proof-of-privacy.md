@@ -12,7 +12,7 @@ formats; TPM AK enrolment (MakeCredential / ActivateCredential) is built, and th
 (enrolment, quote, hardware verdict) is tested on a software TPM (swtpm), not yet on physical TPMs
 (checklist F5). SEV-SNP, Intel TDX (DCAP + Intel collateral) and NVIDIA CC (SPDM) verifiers, and the
 Confidential CPU+GPU pairing, are built from the published formats and tested on synthetic evidence
-only; revocation (CRL/OCSP), the TDX-module identity and NVIDIA RIM parsing are not built. Guardian
+only; CRL/OCSP revocation (Intel, AMD, NVIDIA), the TDX-module identity and NVIDIA RIM parsing are now coded (P2, fail closed, collateral trusted by signature to pinned roots) but have no recorded real-vendor collateral yet (R8), so their formats remain unverified. Guardian
 key sets can be pinned by a published fingerprint (SDK and website). Also not built: the Sealed OS image, DB-stake sync with the vault, an audit of
 ComputeStakeVault. Owner approval is still needed for the decisions in section 12.
 Date: 2026-10-28. Supersedes the "Residual risk: provider-side confidentiality" note in

@@ -102,6 +102,86 @@ class AgentConfig(BaseSettings):
     tpm_pcrs: list[int] = [0, 1, 2, 3, 4, 5, 6, 7]
     # Optional unpacked tpm2-tools tree (<root>/usr/bin, <root>/usr/lib/...) instead of the system one.
     tpm_tools_root: Optional[str] = None
+    # ---- Confidential tier (P4): CPU TEE + NVIDIA CC GPU evidence, see computecoin_agent.tee.
+    tee_cpu: Optional[str] = None  # "tdx" | "sev_snp"
+    nvidia_cc: bool = False  # GPU is in confidential-computing mode and its evidence is sent
+    nvidia_attest_cmd: list[str] = []  # NVIDIA evidence tool command line
+    tee_snp_product: Optional[str] = None  # AMD KDS product: Milan | Genoa | Turin
+    tee_cache_dir: Optional[str] = None  # cached VCEK/ASK or Intel collateral files
+
+    @field_validator("tee_cpu", mode="before")
+    @classmethod
+    def _check_tee_cpu(cls, value: Any) -> Optional[str]:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        flavor = str(value).strip().lower()
+        if flavor not in ("tdx", "sev_snp"):
+            raise ValueError("tee_cpu must be 'tdx' or 'sev_snp'")
+        return flavor
+
+    # ---- B6 GPU thermal capping (degrees C). At the cap: stop claiming, report "throttled";
+    # below resume: claim again; at the hard stop: stop the running container (thermal_shutdown).
+    gpu_temp_cap_c: float = 85.0
+    gpu_temp_resume_c: float = 80.0
+    gpu_temp_hard_stop_c: float = 95.0
+    # Optional board power limit in watts, applied only when the agent is permitted to (never fails enrolment).
+    gpu_power_limit_w: Optional[float] = None
+    # ---- B5 egress proxy image, pinned by digest (repo/name@sha256:...). Unset = jobs with a
+    # network_policy are refused on this host (no network is never silently widened).
+    egress_proxy_image: Optional[str] = None
+    # ---- U3 agent runtime v2 (OWNER DECISIONS: defaults are conservative, see U3 design note).
+    # Per-kit read-only host cache of models/assets, content-addressed, LRU-evicted. 0 disables it.
+    cache_dir: Optional[str] = None  # default ~/.computecoin/cache
+    cache_max_bytes: int = 20 * 1024**3
+    work_dir: Optional[str] = None  # staged inputs, checkpoints, outputs (default: system temp)
+    checkpoint_min_interval_seconds: int = 60
+    checkpoint_max_bytes: int = 10 * 1024**3
+    # ---- U18 private Kit jobs: RAM-only (tmpfs) directory for decrypted inputs and outputs. Unset = /dev/shm, then
+    # /run/user/<uid>; a directory that is not tmpfs/ramfs is refused (no fallback to disk).
+    private_ram_dir: Optional[str] = None
+    # ---- U14 Windows VM tier (OWNER go/no-go, default off). A VM claim is run only when this is true AND the host
+    # advertises vfio_gpu (vm_runner.advertise()). Needs `vm_work_dir` space for the image and its overlay.
+    windows_vm_enabled: bool = False
+    # ---- CPU-only Kits (resource_defaults.gpu_count 0). Operator opt-in: when true the heartbeat health block carries
+    # ``cpu_capable: true`` so the platform may place a CPU-only Kit job here. Such a job runs without --gpus.
+    cpu_only_kits_enabled: bool = False
+    # ---- U13 multi-node (OWNER DECISION, see ADR-0003 addendum). Name of the internal docker network the operator
+    # created with scripts/setup-multinode-net.sh. Unset = a multi-node rank is refused on this host (no network).
+    multinode_network: Optional[str] = None
+    # Operator ATTESTATION that the group network is non-internal AND confined by host firewall rules installed by
+    # scripts/setup-multinode-net.sh (checked with its --verify). Default false: multi-node ranks are refused.
+    multinode_network_firewalled: bool = False
+    # Benchmark responder + prober (netbench.py). Off by default; needs the machine to have a datacenter_group.
+    netbench_enabled: bool = False
+    # This host's private cluster address (literal IP). The benchmark responder binds ONLY here.
+    cluster_addr: Optional[str] = None
+
+    @field_validator("cache_max_bytes", "checkpoint_max_bytes")
+    @classmethod
+    def _non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be >= 0")
+        return value
+
+    @field_validator("gpu_temp_hard_stop_c")
+    @classmethod
+    def _check_thermal_order(cls, value: float, info) -> float:
+        cap = info.data.get("gpu_temp_cap_c")
+        resume = info.data.get("gpu_temp_resume_c")
+        if resume is not None and cap is not None and not resume < cap:
+            raise ValueError("gpu_temp_resume_c must be below gpu_temp_cap_c")
+        if cap is not None and not cap < value:
+            raise ValueError("gpu_temp_cap_c must be below gpu_temp_hard_stop_c")
+        return value
+
+    @field_validator("egress_proxy_image")
+    @classmethod
+    def _check_proxy_image(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        if "@sha256:" not in value:
+            raise ValueError("egress_proxy_image must be pinned by @sha256: digest")
+        return value.strip()
 
     def tpm(self):
         """A ``Tpm2`` for the configured TPM, or None when no TPM is configured."""

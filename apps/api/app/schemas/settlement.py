@@ -99,26 +99,26 @@ class RefundVoucherResponse(BaseModel):
 class ConfirmSettlementTxRequest(BaseModel):
     job_id: uuid.UUID
     settle_tx_hash: str = Field(min_length=64, max_length=66)
-    block_number: int | None = None
+    block_number: int | None = Field(default=None, ge=0, le=2**53)
     claimed_amount_units: str | None = None
 
 
 class ConfirmRefundTxRequest(BaseModel):
     job_id: uuid.UUID
     refund_tx_hash: str = Field(min_length=64, max_length=66)
-    block_number: int | None = None
+    block_number: int | None = Field(default=None, ge=0, le=2**53)
     claimed_amount_units: str | None = None
 
 
 class RecordOnChainTxRequest(BaseModel):
-    chain_id: int
+    chain_id: int = Field(ge=0, le=2**53)
     tx_hash: str = Field(min_length=64, max_length=66)
     tx_type: str
     sender_address: str = Field(min_length=42, max_length=42)
     recipient_address: str | None = None
     amount_units: str | None = None
     token_symbol: str = "COMPUTE"
-    block_number: int | None = None
+    block_number: int | None = Field(default=None, ge=0, le=2**53)
     job_id: uuid.UUID | None = None
     metadata_json: dict[str, Any] | None = None
 

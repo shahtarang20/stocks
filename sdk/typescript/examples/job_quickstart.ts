@@ -66,12 +66,12 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  console.log(`created job ${job.id} (status: ${job.status})`);
+  console.log(`created job ${job.job_id} (status: ${job.status})`);
   if (job.execution_mode) console.log(`execution_mode: ${job.execution_mode}`);
 
   // 2. Poll to a terminal state (completed/failed/cancelled/timed_out).
   try {
-    job = await client.waitForJob(job.id, { poll: 2, timeout: 300 });
+    job = await client.waitForJob(job.job_id, { poll: 2, timeout: 300 });
   } catch (err) {
     console.log("timed out waiting for the job:", (err as Error).message);
     return;
@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   }
 
   // 3. List artifacts and get a signed download URL for the first one.
-  const artifacts = await client.getJobArtifacts(job.id);
+  const artifacts = await client.getJobArtifacts(job.job_id);
   console.log(`\n${artifacts.length} artifact(s):`);
   for (const art of artifacts) {
     console.log(
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
   }
   const first = artifacts[0];
   if (first) {
-    const dl = await client.getArtifactDownloadUrl(job.id, first.artifact_id);
+    const dl = await client.getArtifactDownloadUrl(job.job_id, first.artifact_id);
     console.log(`\ndownload URL (expires ${dl.expires_at}): ${dl.url}`);
   }
 }

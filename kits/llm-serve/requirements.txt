@@ -1,0 +1,5 @@
+# Pinned, NOT yet checked against PyPI or the base image (L4). Freeze with hashes in CI.
+# torch comes from the pinned CUDA base image; vLLM pins its own torch, so prefer a vLLM-based BASE_IMAGE and leave this
+# file with only the extras. The torch-from-base-image line is a marker the Dockerfile strips.
+torch-from-base-image
+vllm==0.8.5

@@ -152,7 +152,7 @@ def _build_html_template(title: str, preheader: str, body_html: str, cta_url: st
 
 async def send_verification_email(to_email: str, token: str, user_name: str | None = None) -> bool:
     """Send email verification link to user."""
-    verify_url = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?token={token}"
+    verify_url = f"{settings.frontend_base_url}/verify-email?token={token}"
     greeting = f"Hi {user_name}," if user_name else "Welcome to ComputeCoin,"
 
     title = "Verify your email address"
@@ -186,7 +186,7 @@ This link will expire in {settings.EMAIL_VERIFICATION_TTL_SECONDS // 3600} hours
 
 async def send_password_reset_email(to_email: str, token: str, user_name: str | None = None) -> bool:
     """Send password reset link to user."""
-    reset_url = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={token}"
+    reset_url = f"{settings.frontend_base_url}/reset-password?token={token}"
     greeting = f"Hi {user_name}," if user_name else "Hello,"
 
     title = "Reset your password"

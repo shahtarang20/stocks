@@ -294,37 +294,38 @@ async def test_inference_routing_amd_image_and_skip_logging(client, caplog):
     # Create only an AMD machine
     amd_m = await _machine(customer, f"amd-inf-{uuid.uuid4().hex[:6]}", "rocm")
 
-    # 1) Model has CUDA_IMG but no ROCm image: AMD machine skipped with logged reason "no_image"
+    from app.services.inference import _find_eligible_machine
+
+    async def _routed():
+        async with sm() as s:
+            mv_row = (await s.execute(select(ModelVersion).where(ModelVersion.version_tag == inf_model))).scalar_one()
+            return await _find_eligible_machine(s, "text-generation", model_version=mv_row)
+
+    # 1) Model has CUDA_IMG but no ROCm image: the AMD machine is skipped with the logged reason "no_image".
+    # A hardware model never falls back to a simulated answer, so with no eligible machine the request
+    # fails closed with 503 (no fabricated result, nothing queued, nothing billed).
     caplog.clear()
     resp = await client.post(
         "/v1/chat/completions",
         headers=headers,
         json={"model": inf_model, "messages": [{"role": "user", "content": "hello"}]},
     )
-    assert resp.status_code == 200
-    # The AMD machine was skipped because no ROCm image exists for this model
+    assert resp.status_code == 503
+    assert "no_eligible_provider" in resp.text
+    assert any("scheduler skip (no_image)" in record.message and str(amd_m) in record.message for record in caplog.records)
+    caplog.clear()
+    machine, image = await _routed()
+    assert machine is None and image is None
     assert any("inference skip (no_image)" in record.message and str(amd_m) in record.message for record in caplog.records)
-    # Since no machine was eligible, response proceeded as simulated fallback without machine
-    assert resp.json()["computecoin"]["machine_id"] is None
-    assert resp.json()["computecoin"]["image_digest"] is None
 
-    # 2) Now add ROCm image to model
+    # 2) Now add ROCm image to model: inference routing picks the AMD machine and the ROCm image.
     async with sm() as s:
         mv_row = (await s.execute(select(ModelVersion).where(ModelVersion.version_tag == inf_model))).scalar_one()
         s.add(ModelVersionImage(model_version_id=mv_row.id, gpu_runtime="rocm", image_digest=ROCM_IMG))
         await s.commit()
-
-    # Now inference routes to the AMD machine and uses the ROCm image!
-    caplog.clear()
-    resp2 = await client.post(
-        "/v1/chat/completions",
-        headers=headers,
-        json={"model": inf_model, "messages": [{"role": "user", "content": "hello again"}]},
-    )
-    assert resp2.status_code == 200
-    data2 = resp2.json()
-    assert data2["computecoin"]["machine_id"] == str(amd_m)
-    assert data2["computecoin"]["image_digest"] == ROCM_IMG
+    machine, image = await _routed()
+    assert machine is not None and machine.id == amd_m
+    assert image == ROCM_IMG
 
 
 @pytest.mark.asyncio

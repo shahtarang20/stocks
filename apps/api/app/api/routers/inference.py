@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -32,7 +33,7 @@ from app.schemas.inference import (
     InferenceErrorDetail,
     InferenceErrorResponse,
 )
-from app.services.inference import InferenceError, run_chat_completion, run_embedding
+from app.services.inference import InferenceError, open_chat_stream, run_chat_completion, run_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ def _enforce_inference_rate_limit(user_id: str) -> None:
     responses={
         400: {"model": InferenceErrorResponse},
         404: {"model": InferenceErrorResponse},
+        504: {"model": InferenceErrorResponse},
         429: {"model": InferenceErrorResponse},
         503: {"model": InferenceErrorResponse},
     },
@@ -81,6 +83,13 @@ async def create_chat_completion(
 ) -> ChatCompletionResponse:
     _enforce_inference_rate_limit(str(current_user.id))
     try:
+        if request.stream:
+            events = await open_chat_stream(db, request, current_user.id)
+            return StreamingResponse(
+                events,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )  # type: ignore[return-value]
         return await run_chat_completion(db, request, current_user.id)
     except InferenceError as exc:
         logger.warning(

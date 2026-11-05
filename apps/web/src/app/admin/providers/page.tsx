@@ -6,6 +6,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -35,8 +36,8 @@ export default function AdminProvidersPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Providers"
-        description="All registered provider machines visible in the marketplace. Data is live from GET /v1/marketplace/machines."
+        title="Hosts"
+        description="Every host computer that is online and priced in the marketplace right now. Use this list to check what is available. The list updates by itself."
         action={
           <Button variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
@@ -59,7 +60,7 @@ export default function AdminProvidersPage() {
             <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
               <AlertCircle className="h-8 w-8 text-danger" />
               <p className="text-sm text-muted-foreground">
-                {query.error instanceof ApiError ? query.error.message : "Failed to load providers"}
+                {query.error instanceof ApiError ? query.error.message : "We could not load the hosts. Select Try again."}
               </p>
               <Button variant="outline" onClick={() => query.refetch()}>
                 <RefreshCw /> Try again
@@ -70,9 +71,9 @@ export default function AdminProvidersPage() {
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
               <Server className="h-8 w-8 text-muted-foreground" />
-              <h3 className="font-semibold">No machines online</h3>
+              <h3 className="font-semibold">No computers online</h3>
               <p className="text-sm text-muted-foreground">
-                No provider machines are currently online and priced in the marketplace.
+                No host computers are online and priced right now. Computers show up here after a host connects one and sets a price.
               </p>
             </CardContent>
           </Card>
@@ -81,15 +82,26 @@ export default function AdminProvidersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Machine ID</TableHead>
-                  <TableHead>Vendor</TableHead>
+                  <TableHead>Computer</TableHead>
+                  <TableHead>GPU brand</TableHead>
                   <TableHead>GPU</TableHead>
-                  <TableHead>VRAM</TableHead>
+                  <TableHead>
+                    GPU memory
+                    <HelpTip term="GPU memory">The memory on the graphics card. Bigger jobs need more of it.</HelpTip>
+                  </TableHead>
                   <TableHead>Region</TableHead>
-                  <TableHead>Price/hr</TableHead>
-                  <TableHead>Verification</TableHead>
-                  <TableHead>Last heartbeat</TableHead>
-                  <TableHead>Slots</TableHead>
+                  <TableHead>Price per hour</TableHead>
+                  <TableHead>
+                    Hardware check
+                    <HelpTip term="hardware check">
+                      Self-reported means the computer said so itself. Speed tested and Checked mean ComputeCoin tested or verified it.
+                    </HelpTip>
+                  </TableHead>
+                  <TableHead>Last seen</TableHead>
+                  <TableHead>
+                    Free spots
+                    <HelpTip term="free spots">How many more jobs this computer can take now, out of how many it can run at once.</HelpTip>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -128,7 +140,11 @@ export default function AdminProvidersPage() {
                             : "neutral"
                         }
                       >
-                        {m.verification_status ?? "detected"}
+                        {m.verification_status === "verified"
+                          ? "Checked"
+                          : m.verification_status === "benchmarked"
+                          ? "Speed tested"
+                          : "Self-reported"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">

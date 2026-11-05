@@ -9,7 +9,7 @@ export function PageHero({
 }) {
   return (
     <div className="border-b border-border bg-surface/30">
-      <div className="container py-14">
+      <div className="container py-10 sm:py-14">
         {eyebrow ? (
           <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-primary">
             {eyebrow}

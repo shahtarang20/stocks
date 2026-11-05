@@ -323,6 +323,10 @@ def post_result(
         timeout=timeout,
         timestamp=timestamp,
     )
+    if resp.status_code == 409:
+        # job_not_running: the platform cancelled/ended this job (customer cancel, a failed sibling rank, a replica start
+        # timeout). Final: never retried, nothing more is sent, and the API did not touch billing.
+        return resp
     if resp.status_code != 200:
         raise JobRunnerError(f"result submission failed: HTTP {resp.status_code}")
     return resp
@@ -382,17 +386,90 @@ def build_result_body(
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
+MAX_PRIVATE_CHAT_MESSAGES = 512
+
+
+def normalize_private_chat_input(data: Any) -> dict[str, Any]:
+    """Decrypted private chat input contract: {"prompt": str, "messages": [{"role","content"}], "max_tokens"?, "temperature"?}.
+
+    ``messages`` is preferred; a bare ``prompt`` becomes one user message; ``prompt`` is re-rendered as "role: content" when
+    missing. Raises ValueError with a fixed text (never quoting the data: the decrypted input is private)."""
+    if not isinstance(data, dict):
+        raise ValueError("private chat input must be an object")
+    raw = data.get("messages")
+    msgs: list[dict[str, str]] = []
+    if isinstance(raw, list) and raw:
+        if len(raw) > MAX_PRIVATE_CHAT_MESSAGES:
+            raise ValueError("too many chat messages")
+        for m in raw:
+            if not isinstance(m, dict) or not isinstance(m.get("content"), str):
+                raise ValueError("each chat message needs string role and content")
+            role = m.get("role", "user")
+            if not isinstance(role, str) or not role:
+                raise ValueError("each chat message needs string role and content")
+            msgs.append({"role": role, "content": m["content"]})
+    else:
+        prompt = data.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            raise ValueError("private chat input needs messages or a non-empty prompt")
+        msgs = [{"role": "user", "content": prompt}]
+    out: dict[str, Any] = {"messages": msgs}
+    prompt = data.get("prompt")
+    out["prompt"] = prompt if isinstance(prompt, str) and prompt else "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
+    mt = data.get("max_tokens")
+    if mt is not None:
+        if isinstance(mt, bool) or not isinstance(mt, int) or mt < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        out["max_tokens"] = mt
+    temp = data.get("temperature")
+    if temp is not None:
+        if isinstance(temp, bool) or not isinstance(temp, (int, float)) or not 0 <= temp <= 2:
+            raise ValueError("temperature must be a number between 0 and 2")
+        out["temperature"] = temp
+    return out
+
+
 def _run_private(
     spec: JobSpec,
     session: AttestationSession,
     machine_id: str,
     capabilities: Any,
     executor_selector: Callable[..., Executor],
+    stream_monitor: Any = None,
+    kit_ctx: Any = None,
 ) -> ExecutionResult:
-    """Unwrap the Data Key in RAM, run the workload on the decrypted input, seal the output."""
+    """Unwrap the Data Key in RAM, run the workload on the decrypted input, seal the output.
+
+    ``kit_ctx`` (a :class:`~computecoin_agent.private_kit.PrivateKitContext`): a private Kit job (U18). The Kit container
+    runs on RAM-backed staging with no network and its outputs are sealed before they leave the host."""
     captured_metrics: dict[str, Any] = {}
 
     def workload_runner(decrypted_input: dict[str, Any]) -> dict[str, Any]:
+        if kit_ctx is not None:
+            from .private_kit import run_private_kit
+
+            try:
+                return run_private_kit(spec, decrypted_input, kit_ctx, executor_selector, capabilities)
+            finally:
+                captured_metrics.update(kit_ctx.metrics)
+        # Opportunistic RAM-only output dir (holds input.json and, for sealed streaming, the stream pipe). With no RAM
+        # dir the run keeps its old behaviour, except that a sealed stream is then switched off (never a plaintext file).
+        from .private_kit import PrivateKitError, ram_workdir, wipe_dir
+
+        ram: Optional[str] = None
+        try:
+            ram = ram_workdir(f"ccoin-priv-{spec.job_id[:8]}-")
+        except PrivateKitError:
+            ram = None
+        try:
+            return _run_workload(decrypted_input, ram)
+        finally:
+            if ram is not None:
+                wipe_dir(ram)
+
+    def _run_workload(decrypted_input: dict[str, Any], ram: Optional[str]) -> dict[str, Any]:
+        if spec.workload_type == "text-generation":
+            decrypted_input = normalize_private_chat_input(decrypted_input)
         sub_spec = JobSpec(
             job_id=spec.job_id,
             workload_type=spec.workload_type,
@@ -403,8 +480,19 @@ def _run_private(
             limits=spec.limits,
             isolation_tier=spec.isolation_tier,
         )
+        if ram is not None:
+            sub_spec.output_dir = ram
         sub_executor = executor_selector(sub_spec, capabilities)
-        exec_res = sub_executor.run(sub_spec)
+        monitor = stream_monitor if ram is not None else None  # no RAM dir: no stream, rather than a plaintext file
+        if monitor is not None:  # U18: sealed streaming; the monitor seals every chunk before it leaves
+            sub_spec.on_output_dir = monitor.set_output_dir
+            sub_spec.extra_env = {**sub_spec.extra_env, **monitor.env}
+            monitor.start()
+        try:
+            exec_res = sub_executor.run(sub_spec)
+        finally:
+            if monitor is not None:
+                monitor.stop()
         if exec_res.status != "success":
             raise RuntimeError(
                 exec_res.error.get("message", "workload failed")
@@ -426,6 +514,7 @@ def _run_private(
             encrypted_input=spec.encrypted_input,
             wrapped_shares=spec.wrapped_shares,
             workload_runner_fn=workload_runner,
+            scratch_dir=kit_ctx.ram_dir if kit_ctx is not None else None,
         )
         result = ExecutionResult(
             status="success",
@@ -439,14 +528,18 @@ def _run_private(
             wipe_receipt=sealed_res.wipe_receipt,
         )
     except Exception as exc:
+        from .private_kit import PrivateKitError
+
         result = ExecutionResult(
             status="failed",
             execution_mode=spec.execution_mode,
             metrics={"duration_seconds": round(time.monotonic() - started, 3)},
             logs=[],
             output_schema_valid=False,
-            # Generic on purpose: an exception text could quote the decrypted input.
-            error={"code": "sealed_execution_error", "message": f"sealed execution failed ({type(exc).__name__})"},
+            # Generic on purpose: an exception text could quote the decrypted input. A PrivateKitError code is a fixed
+            # identifier chosen by this agent (never derived from the data), so it may be reported.
+            error={"code": exc.code if isinstance(exc, PrivateKitError) else "sealed_execution_error",
+                   "message": f"sealed execution failed ({type(exc).__name__})"},
         )
     return result
 
@@ -495,6 +588,28 @@ def _run_private_claim(
     if missing:
         return _failed_private(spec, "private_claim_incomplete", f"private claim is missing {', '.join(missing)}")
 
+    # U18: a private Kit job (fan-out part). Only the minimal private plan is accepted, and the RAM-only work dir must
+    # exist BEFORE any key is released (no RAM dir = refuse; plaintext never falls back to disk).
+    kit_ctx: Any = None
+    if spec.v2 is not None:
+        from .private_kit import PrivateKitContext, PrivateKitError, parse_private_plan, ram_workdir
+        from .runtime_v2 import V2Api
+
+        try:
+            kit_plan = parse_private_plan(spec.v2)
+            from .config import AgentConfig
+
+            try:
+                ram_base = AgentConfig.load().private_ram_dir
+            except Exception:
+                ram_base = None
+            kit_ctx = PrivateKitContext(
+                kit_plan, ram_workdir(f"ccoin-pk-{spec.job_id[:8]}-", ram_base),
+                V2Api(base_url, machine_id, machine_secret, transport=transport, timeout=timeout), transport=transport,
+            )
+        except PrivateKitError as exc:
+            return _failed_private(spec, exc.code, "the private Kit plan was refused on this host")
+
     session: Optional[AttestationSession] = None
     try:
         try:
@@ -513,21 +628,70 @@ def _run_private_claim(
             transport=transport, timestamp=timestamp, timeout=timeout,
         )
         job_spec = dataclasses.replace(spec, wrapped_shares=shares, verdict_id=verdict["verdict_id"])
-        return _run_private(job_spec, session, machine_id, capabilities, executor_selector)
+        monitor = None
+        if spec.stream_sealed and spec.workload_type == "text-generation":
+            try:
+                from .jobmonitor import JobMonitor
+
+                monitor = JobMonitor(base_url, machine_id, machine_secret, spec.job_id, stream=True,
+                                     transport=transport, seal_to=spec.result_public_key)
+            except Exception:
+                monitor = None  # streaming is best-effort; the sealed final result still arrives
+        return _run_private(job_spec, session, machine_id, capabilities, executor_selector, stream_monitor=monitor, kit_ctx=kit_ctx)
     finally:
         if session is not None:
             session.wipe()
+        if kit_ctx is not None:
+            from .private_kit import wipe_dir
+
+            wipe_dir(kit_ctx.ram_dir)
+
+
+def _make_monitor(
+    base_url: str, machine_id: str, machine_secret: str, spec: JobSpec, transport: Any
+) -> Any:
+    """U19/B2: a JobMonitor for a real (hardware, non-private) job; None otherwise or on any error."""
+    if spec.execution_mode != "hardware":
+        return None
+    try:
+        from .jobmonitor import JobMonitor
+
+        import threading
+
+        spec.cancel_event = threading.Event()  # U13: the monitor sets it when the API cancelled the job
+        return JobMonitor(
+            base_url, machine_id, machine_secret, spec.job_id,
+            stream=spec.workload_type == "text-generation", transport=transport,
+            cancel_event=spec.cancel_event,
+            # U16: BYOC containers (named ccoin-job-<id> by the executor) get process-name / I/O sampling.
+            byoc_container=f"ccoin-job-{spec.job_id}" if (spec.v2 or {}).get("byoc") is not None else None,
+        )
+    except Exception:
+        return None
 
 
 def _run_open(
     spec: JobSpec,
     capabilities: Any,
     executor_selector: Callable[..., Executor],
+    monitor: Any = None,
 ) -> ExecutionResult:
-    """Run a non-private job on its plaintext input; executor errors become a failed result."""
+    """Run a non-private job on its plaintext input; executor errors become a failed result.
+
+    ``monitor`` (a :class:`~computecoin_agent.jobmonitor.JobMonitor`, hardware jobs only) reports
+    progress / GPU util / VRAM and streams ordered token chunks while the executor runs.
+    """
     executor = executor_selector(spec, capabilities)
     try:
-        result = executor.run(spec)
+        if monitor is not None:
+            spec.on_output_dir = monitor.set_output_dir
+            spec.extra_env = {**spec.extra_env, **monitor.env}
+            monitor.start()
+        try:
+            result = executor.run(spec)
+        finally:
+            if monitor is not None:
+                monitor.stop()
     except HardwareUnavailableError as exc:
         result = ExecutionResult(
             status="failed",
@@ -558,6 +722,66 @@ def _run_open(
             error={"code": "executor_error", "message": str(exc)},
         )
     return result
+
+
+def _run_v2(
+    base_url: str,
+    machine_id: str,
+    machine_secret: str,
+    spec: JobSpec,
+    capabilities: Any,
+    executor_selector: Callable[..., Executor],
+    *,
+    transport: Any = None,
+    timestamp: Optional[int] = None,
+    timeout: float = 60.0,
+) -> tuple[ExecutionResult, list[dict[str, Any]]]:
+    """U3: a job whose claim carries a v2 plan (staged inputs, host cache, checkpoints, data-plane outputs)."""
+    from .config import AgentConfig
+    from .runtime_v2 import V2Api, context_from_config, run_v2
+
+    try:
+        config = AgentConfig.load()
+    except Exception:
+        config = AgentConfig()
+
+    def beat() -> None:
+        post_heartbeat(base_url, machine_id, machine_secret, spec.job_id, progress=None, metrics=None,
+                       transport=transport, timestamp=timestamp, timeout=timeout)
+
+    api = V2Api(base_url, machine_id, machine_secret, transport=transport, timeout=timeout)
+    ctx = context_from_config(config, api, transport=transport, heartbeat=beat)
+    mon = _make_monitor(base_url, machine_id, machine_secret, spec, transport)
+    return run_v2(spec, ctx, lambda s: _run_open(s, capabilities, executor_selector, mon))
+
+
+def _run_vm(
+    base_url: str,
+    machine_id: str,
+    machine_secret: str,
+    spec: JobSpec,
+    *,
+    transport: Any = None,
+    timestamp: Optional[int] = None,
+    timeout: float = 60.0,
+) -> tuple[ExecutionResult, list[dict[str, Any]]]:
+    """U14: a claim whose v2 block says ``mode: "vm"``. Runs only with ``windows_vm_enabled`` on this agent and a host that
+    advertises vfio_gpu; otherwise it is reported failed (never run as an ordinary Kit job)."""
+    from .config import AgentConfig
+    from .runtime_v2 import V2Api, context_from_config, run_vm_v2
+
+    try:
+        config = AgentConfig.load()
+    except Exception:
+        config = AgentConfig()
+
+    def beat() -> None:
+        post_heartbeat(base_url, machine_id, machine_secret, spec.job_id, progress=None, metrics=None,
+                       transport=transport, timestamp=timestamp, timeout=timeout)
+
+    api = V2Api(base_url, machine_id, machine_secret, transport=transport, timeout=timeout)
+    ctx = context_from_config(config, api, transport=transport, heartbeat=beat)
+    return run_vm_v2(spec, ctx, windows_vm_enabled=bool(getattr(config, "windows_vm_enabled", False)))
 
 
 def run_one(
@@ -602,6 +826,7 @@ def run_one(
 
     spec = JobSpec.from_claim(claim)
     grant = claim.get("artifact_upload") or {}
+    v2_descriptors: Optional[list[dict[str, Any]]] = None
     is_private = spec.isolation_tier in ("sealed", "sealed_pro", "confidential")
 
     if is_private:
@@ -615,8 +840,24 @@ def run_one(
                 # The backend already failed (and refunded) the job; there is nothing to report.
                 return {"claimed": True, "job_id": spec.job_id, "status": "failed", "error": exc.code}
             result = _failed_private(spec, exc.code, "the job's keys were not released to this host")
+    elif spec.v2 is not None and isinstance(spec.v2.get("service"), dict):
+        from .service_agent import run_service  # U11: a long-running service replica, not a batch run
+
+        result = run_service(base_url, machine_id, machine_secret, spec, transport=transport)
+    elif spec.v2 is not None and spec.v2.get("mode") == "vm":
+        result, v2_descriptors = _run_vm(
+            base_url, machine_id, machine_secret, spec, transport=transport, timestamp=timestamp, timeout=timeout,
+        )
+    elif spec.v2 is not None:
+        result, v2_descriptors = _run_v2(
+            base_url, machine_id, machine_secret, spec, capabilities, executor_selector,
+            transport=transport, timestamp=timestamp, timeout=timeout,
+        )
     else:
-        result = _run_open(spec, capabilities, executor_selector)
+        result = _run_open(
+            spec, capabilities, executor_selector,
+            _make_monitor(base_url, machine_id, machine_secret, spec, transport),
+        )
 
     # Stream logs (best-effort; a logging failure must not sink the receipt).
     # ADR-0005 & WP3 Checkpoint 3.2: Plaintext logs are dropped for private jobs.
@@ -652,15 +893,15 @@ def run_one(
         pass
 
     # Upload artifacts via the signed grant (only when we actually have one).
-    descriptors: list[dict[str, Any]] = []
-    if grant.get("url") and grant.get("token"):
+    descriptors: list[dict[str, Any]] = list(v2_descriptors or [])  # v2 outputs already went through the data plane
+    if spec.v2 is None and grant.get("url") and grant.get("token"):
         for artifact in result.artifacts:
             descriptors.append(
                 upload_artifact(grant, artifact, base_url=base_url, transport=transport, timeout=timeout)
             )
 
     body = build_result_body(result, descriptors)
-    post_result(
+    posted = post_result(
         base_url,
         machine_id,
         machine_secret,
@@ -670,6 +911,8 @@ def run_one(
         timestamp=timestamp,
         timeout=timeout,
     )
+    if getattr(posted, "status_code", 200) == 409:
+        return {"claimed": True, "job_id": spec.job_id, "status": "cancelled", "result_refused": "job_not_running"}
     return {"claimed": True, "job_id": spec.job_id, "status": result.status}
 
 
@@ -687,8 +930,17 @@ def poll_loop(
     timeout: float = 60.0,
     attestation_session: Optional[AttestationSession] = None,
     attestation_manager: Any = None,
+    thermal_guard: Any = None,
+    egress_proxy_image: Optional[str] = None,
+    multinode_network: Optional[str] = None,
+    multinode_network_firewalled: bool = False,
+    cluster_addr: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Run the claim->execute->result loop a bounded number of times.
+
+    ``thermal_guard`` (B6, a :class:`computecoin_agent.thermal.ThermalGuard`): while the GPU is at
+    or above its cap no job is claimed (``{"claimed": False, "throttled": True}``) until it cools
+    below the resume temperature; a running container is stopped at the hard stop.
 
     ``iterations <= 0`` loops until interrupted; a positive value runs exactly
     that many claim attempts (what tests use, with an injected ``transport`` and
@@ -697,8 +949,45 @@ def poll_loop(
     """
     results: list[dict[str, Any]] = []
     i = 0
+    extra: dict[str, Any] = {}
+    # U13: one allocator shared by every job on this host so concurrent multi-GPU jobs get disjoint
+    # --gpus "device=..." sets. Only NVIDIA hosts with more than one GPU need it; detection failure means none.
+    gpu_allocator: Any = None
+    try:
+        from .gpu_alloc import GpuAllocator
+        from .hardware import detect_gpus
+
+        _gpus, _ = detect_gpus()
+        if len(_gpus) > 1 and all(getattr(g, "gpu_vendor", "nvidia") == "nvidia" for g in _gpus):
+            gpu_allocator = GpuAllocator(len(_gpus))
+    except Exception:  # noqa: BLE001 - detection must never stop the claim loop
+        gpu_allocator = None
+    if thermal_guard is not None or egress_proxy_image is not None or multinode_network or gpu_allocator is not None:
+        from .executor import DockerExecutor
+
+        def _selector(spec: JobSpec, caps: Any = None) -> Executor:
+            return select_executor(
+                spec,
+                caps,
+                docker_executor_factory=lambda: DockerExecutor(
+                    thermal_guard=thermal_guard, egress_proxy_image=egress_proxy_image,
+                    multinode_network=multinode_network, multinode_network_firewalled=multinode_network_firewalled,
+                    gpu_allocator=gpu_allocator, cluster_addr=cluster_addr,
+                ),
+            )
+
+        extra["executor_selector"] = _selector
     while iterations <= 0 or i < iterations:
         try:
+            if thermal_guard is not None and not thermal_guard.may_claim():
+                summary = {"claimed": False, "throttled": True}
+                results.append(summary)
+                if emit is not None:
+                    emit(i, summary)
+                i += 1
+                if iterations <= 0 or i < iterations:
+                    sleeper(interval)
+                continue
             summary = run_one(
                 base_url,
                 machine_id,
@@ -708,6 +997,7 @@ def poll_loop(
                 timeout=timeout,
                 attestation_session=attestation_manager.current() if attestation_manager is not None else attestation_session,
                 hardware=getattr(attestation_manager, "hardware", None),
+                **extra,
             )
         except Exception as exc:  # transient: record and keep polling
             summary = {"claimed": False, "error": str(exc)}

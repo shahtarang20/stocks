@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "slug": "llm-serve",
+  "version": "1.0.0",
+  "name": "LLM serving (vLLM, OpenAI-compatible)",
+  "description": "Serves one baked open-weights LLM with vLLM behind an OpenAI-compatible HTTP server, meant to run as a U11 Service replica (port 8000, health path /health). Licences: see kits/llm-serve/README.md.",
+  "category": "inference",
+  "image": "ghcr.io/computecoin/kit-llm-serve@sha256:PENDING",
+  "mode": "service",
+  "service": {"port": 8000, "health_path": "/health", "max_concurrency": 8},
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "inputs": [],
+  "outputs": [],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 24,
+    "min_compute_capability": "8.0",
+    "cpu": 8,
+    "ram_gb": 32,
+    "disk_gb": 60
+  },
+  "billing_hints": {
+    "unit": "gpu_second",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "exact",
+    "sample_fraction": 0,
+    "min_samples": 0,
+    "thresholds": {},
+    "owner_decision": "OWNER DECISION: a Service replica streams no batch result to compare, so redundancy sampling is off (sample_fraction 0). How, or whether, LLM serving is verified (for example canary prompts at temperature 0 compared by embedding cosine) is undecided."
+  }
+}

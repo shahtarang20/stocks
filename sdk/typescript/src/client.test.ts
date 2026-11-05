@@ -32,7 +32,7 @@ describe("ComputeCoinClient", () => {
     const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl });
     const pair = await client.login("a@b.com", "pw");
 
-    expect(captured.url).toBe("https://api.test/v1/auth/login");
+    expect(captured.url).toBe("https://api.test/auth/login");
     expect(captured.body).toEqual({ email: "a@b.com", password: "pw" });
     expect(pair.access_token).toBe("acc");
   });
@@ -708,5 +708,56 @@ describe("ComputeCoinClient billing (Phase 5)", () => {
     expect(typeof earnings.available).toBe("string");
     expect(earnings.recent[0]!.amount).toBe("1.35");
     expect(earnings.recent[0]!.direction).toBe("credit");
+  });
+
+  it("types and returns the job as the API sends it (job_id, output, cancel_requested)", async () => {
+    const fetchImpl = mockFetch((url) => {
+      if (url.endsWith("/cancel")) return { status: 200, body: { job_id: "j1", status: "cancelled", cancel_requested: true } };
+      return {
+        status: 200,
+        body: { job_id: "j1", workload_type: "text-generation", model: "m", input: {}, status: "completed", gpu_count: 1, output: { text: "hi" } },
+      };
+    });
+    const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl });
+    const job = await client.getJob("j1");
+    // Compile-time contract (tsc covers this file): the API field is job_id and the result is on `output`.
+    expect(job.job_id).toBe("j1");
+    expect(job.output?.["text"]).toBe("hi");
+    expect((await client.cancelJob("j1")).cancel_requested).toBe(true);
+  });
+
+  it("exposes the one-time API key secret (the API calls it api_key) as key", async () => {
+    const fetchImpl = mockFetch(() => ({
+      status: 201,
+      body: { id: "k1", project_id: "p1", prefix: "cc_live_ab", api_key: "cc_live_abSECRET" },
+    }));
+    const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl, accessToken: "t" });
+    const key = await client.createApiKey("p1", "n");
+    expect(key.key).toBe("cc_live_abSECRET");
+  });
+
+  it("reads the paginated ledger envelope", async () => {
+    const entry = { entry_id: "e", transaction_id: "t", kind: "hold", direction: "debit", amount: "0.14", currency: "USDC_CREDITS" };
+    const fetchImpl = mockFetch(() => ({ status: 200, body: { items: [entry], page: 1, page_size: 50, total: 1 } }));
+    const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl, accessToken: "t" });
+    const led = await client.getLedger();
+    expect(led).toHaveLength(1);
+    expect(led[0]!.amount).toBe("0.14");
+  });
+
+  it("renders structured error bodies as readable text with a string code (no [object Object])", async () => {
+    const fetchImpl = mockFetch((url) =>
+      url.endsWith("/a")
+        ? { status: 404, body: { detail: { error: { message: "Model 'x' not found", code: "model_not_found" } } } }
+        : { status: 422, body: { detail: [{ type: "too_short", msg: "too short" }] } },
+    );
+    const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl });
+    const e404 = await client.getJob("a").catch((e) => e);
+    expect(e404).toBeInstanceOf(EndpointNotAvailableError);
+    expect(String(e404.message)).not.toContain("[object Object]");
+    const e422 = await client.getJob("b").catch((e) => e);
+    expect(e422).toBeInstanceOf(ValidationError);
+    expect(e422.code).toBeUndefined();
+    expect(String(e422.message)).toContain("too short");
   });
 });

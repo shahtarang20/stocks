@@ -1,0 +1,23 @@
+{
+  "_comment": "Decrypted input contract of a private chat job. Both SDK builders must produce exactly `expected` (compact sorted-key JSON, ASCII-escaped).",
+  "cases": [
+    {
+      "name": "system_user_with_params",
+      "messages": [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Hi"}],
+      "max_tokens": 64,
+      "temperature": 0.5,
+      "expected": "{\"max_tokens\":64,\"messages\":[{\"content\":\"Be brief.\",\"role\":\"system\"},{\"content\":\"Hi\",\"role\":\"user\"}],\"prompt\":\"system: Be brief.\\nuser: Hi\",\"temperature\":0.5}"
+    },
+    {
+      "name": "unicode_and_quotes_no_params",
+      "messages": [{"role": "user", "content": "héllo \"q\" 日本"}],
+      "expected": "{\"messages\":[{\"content\":\"h\\u00e9llo \\\"q\\\" \\u65e5\\u672c\",\"role\":\"user\"}],\"prompt\":\"user: h\\u00e9llo \\\"q\\\" \\u65e5\\u672c\"}"
+    },
+    {
+      "name": "integral_temperature",
+      "messages": [{"role": "user", "content": "x"}],
+      "temperature": 1.0,
+      "expected": "{\"messages\":[{\"content\":\"x\",\"role\":\"user\"}],\"prompt\":\"user: x\",\"temperature\":1}"
+    }
+  ]
+}

@@ -387,7 +387,9 @@ async def oidc_callback(
                 ip=client_ip(request), resource_type="sso_connection",
                 resource_id=str(connection.id), reason="privileged_account_refused",
             )
-            await db.flush()
+            # Commit BEFORE raising: SsoError is an HTTPException, so get_db rolls the session back and a
+            # flush alone would silently drop this security audit row.
+            await db.commit()
             raise SsoError("sso_privileged_account_refused", status.HTTP_403_FORBIDDEN)
         if await get_membership(db, connection.org_id, user.id) is None:
             await record_audit(
@@ -395,7 +397,7 @@ async def oidc_callback(
                 ip=client_ip(request), resource_type="sso_connection",
                 resource_id=str(connection.id), reason="identity_not_linked_to_org",
             )
-            await db.flush()
+            await db.commit()  # persist the audit row; the HTTPException below rolls back anything uncommitted
             raise SsoError("sso_identity_not_linked", status.HTTP_403_FORBIDDEN)
     if user is None:
         # Just-in-time provisioning. The password hash is a random value the

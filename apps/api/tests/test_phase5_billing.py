@@ -559,3 +559,32 @@ async def test_well_formed_money_amounts_are_accepted(client, ok, credited):
     r = await client.post("/v1/billing/credits/purchase", json={"amount": ok}, headers=auth_headers(cust))
     assert r.status_code == 200, r.text
     assert round(float(r.json()["balance"]) - before, 2) == float(credited)
+
+
+# ===========================================================================
+# 7c. QA host/admin: a refund the provider can no longer fund (earnings already paid out / held in a payout)
+#     is a clean 409, never a 500, and moves no money.
+# ===========================================================================
+async def test_refund_when_provider_earnings_already_paid_out_is_409_not_500(client):
+    await seed_echo_model()
+    m = await create_listable_machine(client, "p-rfpo@x.com", hostname="rfpo")
+    cust = await _customer(client, "c-rfpo@x.com")
+    job_id = await _run_job_to_completion(client, cust, m)  # provider earns 1.50
+    admin = await _admin(client, "admin-rfpo@x.com")
+    # The provider requests ALL of it out (held in payout_pending).
+    po = await client.post("/v1/provider/payouts", json={"amount": "1.50"}, headers=auth_headers(m["access"]))
+    assert po.status_code == 201, po.text
+    before = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()
+
+    refund = await client.post(
+        "/v1/admin/refunds",
+        json={"job_id": job_id, "amount": "1.00", "reason": "goodwill"},
+        headers=auth_headers(admin),
+    )
+    assert refund.status_code == 409, refund.text
+    assert refund.json()["detail"] == "insufficient_provider_earnings"
+
+    after = (await client.get("/v1/billing/account", headers=auth_headers(cust))).json()
+    assert after["available"] == before["available"]  # nothing moved
+    recon = (await client.get("/v1/admin/reconciliation", headers=auth_headers(admin))).json()
+    assert recon["balanced"] is True and recon["imbalance"] == "0.00"

@@ -44,6 +44,8 @@ npm install
 | Variable                   | Default                 | Description                          |
 | -------------------------- | ----------------------- | ------------------------------------ |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | Base URL of the FastAPI backend.     |
+| `NEXT_PUBLIC_DATA_PLANE_ORIGIN` | (none) | Build time. Object-store origin(s), space separated, that the browser may PUT upload parts to (added to the CSP `connect-src`). |
+| `NEXT_PUBLIC_SESSION_PROXY_ORIGIN` | (none) | Separate origin that serves this app for the session web view. |
 
 ## Develop
 

@@ -41,6 +41,8 @@ ACCOUNT_TYPES = (
     "external",
     "holding",
     "payout_pending",
+    "withdrawal_pending",  # B1: credits held while a token withdrawal is in flight
+    "paid_out",  # B1: credits paid out as on-chain tokens (platform-side, credit-normal)
 )
 OWNER_TYPES = ("customer", "provider", "platform", "external", "holding")
 

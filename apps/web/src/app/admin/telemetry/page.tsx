@@ -20,6 +20,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -114,8 +115,8 @@ export default function AdminTelemetryPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Telemetry & Fleet Health"
-        description="Real-time GPU time-series telemetry, thermal & memory metrics, power consumption, and operational threshold alerts."
+        title="Computer health"
+        description="Live temperature, memory and power readings from host computers. Look for open alerts below, pick a computer to see its details, and mark each alert as seen or fixed."
         action={
           <Button
             variant="outline"
@@ -138,7 +139,7 @@ export default function AdminTelemetryPage() {
         <Card className="relative overflow-hidden border-border/60 bg-gradient-to-br from-card to-card/50">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Active Telemetry GPUs
+              Graphics cards reporting
             </CardTitle>
             <Cpu className="h-4 w-4 text-primary" />
           </CardHeader>
@@ -150,7 +151,7 @@ export default function AdminTelemetryPage() {
                 <span className="text-2xl font-bold tracking-tight">
                   {stats?.active_gpus ?? 0}
                 </span>
-                <span className="text-xs text-muted-foreground">reporting online</span>
+                <span className="text-xs text-muted-foreground">online now</span>
               </div>
             )}
           </CardContent>
@@ -160,7 +161,7 @@ export default function AdminTelemetryPage() {
         <Card className="relative overflow-hidden border-border/60 bg-gradient-to-br from-card to-card/50">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Fleet Avg Utilization
+              Average GPU use
             </CardTitle>
             <Activity className="h-4 w-4 text-info" />
           </CardHeader>
@@ -187,7 +188,7 @@ export default function AdminTelemetryPage() {
         <Card className="relative overflow-hidden border-border/60 bg-gradient-to-br from-card to-card/50">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Avg Core Temp / Power
+              Average heat and power
             </CardTitle>
             <Thermometer className="h-4 w-4 text-warning" />
           </CardHeader>
@@ -200,13 +201,13 @@ export default function AdminTelemetryPage() {
                   <span className="text-2xl font-bold tracking-tight">
                     {stats?.fleet_avg_temp_c ?? 0}°C
                   </span>
-                  <span className="ml-1 text-xs text-muted-foreground">thermal avg</span>
+                  <span className="ml-1 text-xs text-muted-foreground">average heat</span>
                 </div>
                 <div className="text-right">
                   <div className="text-sm font-semibold text-foreground">
                     {stats?.fleet_total_power_kw ?? 0} kW
                   </div>
-                  <div className="text-xs text-muted-foreground">total draw</div>
+                  <div className="text-xs text-muted-foreground">total power use</div>
                 </div>
               </div>
             )}
@@ -217,7 +218,7 @@ export default function AdminTelemetryPage() {
         <Card className="relative overflow-hidden border-border/60 bg-gradient-to-br from-card to-card/50">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Operational Alerts
+              Open alerts
             </CardTitle>
             <ShieldAlert className="h-4 w-4 text-danger" />
           </CardHeader>
@@ -242,18 +243,51 @@ export default function AdminTelemetryPage() {
         </Card>
       </div>
 
+      {/* B6: machines whose agent reports a thermal throttle (no new jobs are scheduled to them) */}
+      {machines.some((m) => m.availability === "throttled") ? (
+        <Card className="mt-6 border-warning/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base font-semibold">
+              <Flame className="h-4 w-4 text-warning" />
+              Computers that are too hot
+              <Badge variant="warning">{machines.filter((m) => m.availability === "throttled").length}</Badge>
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              These computers paused because their graphics card got too hot. No new jobs go to them until they cool down and report online again.
+            </p>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {machines
+              .filter((m) => m.availability === "throttled")
+              .map((m) => (
+                <button
+                  key={m.machine_id}
+                  type="button"
+                  onClick={() => setSelectedMachineId(m.machine_id)}
+                  className="rounded-md border border-border/60 px-2 py-1 font-mono text-xs hover:bg-muted"
+                >
+                  {m.hostname} ({m.machine_id.slice(0, 8)}…)
+                </button>
+              ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Operational Alerts Management Table */}
       <Card className="mt-6">
         <CardHeader className="border-b border-border/40 pb-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-base font-semibold">Live Operational Alerts</CardTitle>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle className="text-base font-semibold">Open alerts</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Automated threshold violations for GPU temperatures (&gt;85°C) and memory saturation (&gt;95%).
+                Alerts appear when a graphics card goes above 85°C or its memory is more than 95% full. Mark an alert as seen when you start looking, and as fixed when it is solved.
               </p>
             </div>
-            <Badge variant={alerts.filter((a) => a.status === "active").length > 0 ? "danger" : "outline"}>
-              {alerts.filter((a) => a.status === "active").length} Open Alerts
+            <Badge
+              className="shrink-0 whitespace-nowrap"
+              variant={alerts.filter((a) => a.status === "active").length > 0 ? "danger" : "outline"}
+            >
+              {alerts.filter((a) => a.status === "active").length} open
             </Badge>
           </div>
         </CardHeader>
@@ -267,19 +301,22 @@ export default function AdminTelemetryPage() {
           ) : alerts.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               <CheckCircle2 className="mx-auto mb-2 h-6 w-6 text-success" />
-              All monitored machines are operating within normal thermal and resource envelopes.
+              No alerts. All computers are running within normal heat and memory limits. Nothing to do.
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Severity</TableHead>
-                  <TableHead>Type</TableHead>
+                  <TableHead>Kind</TableHead>
                   <TableHead>Message</TableHead>
-                  <TableHead>Metric / Limit</TableHead>
+                  <TableHead>
+                    Reading / limit
+                    <HelpTip term="reading and limit">The first number is what the computer reported. The second is the level that sets off the alert.</HelpTip>
+                  </TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Reported</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-right">What to do</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -316,7 +353,7 @@ export default function AdminTelemetryPage() {
                           onClick={() => ackMut.mutate(alert.id)}
                           disabled={ackMut.isPending}
                         >
-                          Ack
+                          Mark as seen
                         </Button>
                       ) : null}
                       {alert.status !== "resolved" ? (
@@ -326,10 +363,10 @@ export default function AdminTelemetryPage() {
                           onClick={() => resolveMut.mutate(alert.id)}
                           disabled={resolveMut.isPending}
                         >
-                          Resolve
+                          Mark as fixed
                         </Button>
                       ) : (
-                        <span className="text-xs text-muted-foreground">Resolved</span>
+                        <span className="text-xs text-muted-foreground">Fixed</span>
                       )}
                     </TableCell>
                   </TableRow>
@@ -345,22 +382,23 @@ export default function AdminTelemetryPage() {
         <CardHeader className="border-b border-border/40 pb-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle className="text-base font-semibold">Node Hardware Telemetry Explorer</CardTitle>
+              <CardTitle className="text-base font-semibold">Computer details</CardTitle>
               <p className="text-xs text-muted-foreground">
-                High-frequency stream rollups with 1-minute bucketed aggregations.
+                Readings sent by the selected computer, grouped by minute.
               </p>
             </div>
             {machines.length > 0 ? (
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Node:</span>
+                <label htmlFor="admin-telemetry-computer" className="text-xs text-muted-foreground">Computer:</label>
                 <select
+                  id="admin-telemetry-computer"
                   value={selectedMachineId}
                   onChange={(e) => setSelectedMachineId(e.target.value)}
                   className="rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
                 >
                   {machines.map((m) => (
                     <option key={m.machine_id} value={m.machine_id}>
-                      {m.hostname} ({m.machine_id.slice(0, 8)}…)
+                      {m.hostname} ({m.machine_id.slice(0, 8)}…){m.availability === "throttled" ? " - throttled" : ""}
                     </option>
                   ))}
                 </select>
@@ -371,7 +409,7 @@ export default function AdminTelemetryPage() {
         <CardContent className="p-6">
           {!selectedMachineId ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
-              No registered provider nodes found. Enroll a machine agent to begin streaming telemetry.
+              No computers yet. When a host connects a computer, its readings show up here.
             </div>
           ) : machineTelemetryQuery.isLoading ? (
             <div className="space-y-4">
@@ -384,25 +422,25 @@ export default function AdminTelemetryPage() {
               {machineTelemetry?.current ? (
                 <div className="mb-6 grid gap-4 rounded-lg border border-border/60 bg-muted/20 p-4 sm:grid-cols-4">
                   <div>
-                    <div className="text-xs text-muted-foreground">Current GPU Utilization</div>
+                    <div className="text-xs text-muted-foreground">GPU use right now</div>
                     <div className="mt-1 text-xl font-bold font-mono">
                       {machineTelemetry.current.gpu_util_pct ?? 0}%
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">Current Temperature</div>
+                    <div className="text-xs text-muted-foreground">Heat right now</div>
                     <div className="mt-1 text-xl font-bold font-mono text-warning">
                       {machineTelemetry.current.temp_c ?? 0}°C
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">VRAM In Use</div>
+                    <div className="text-xs text-muted-foreground">GPU memory in use</div>
                     <div className="mt-1 text-xl font-bold font-mono">
                       {machineTelemetry.current.mem_used_mb ?? 0} MB
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">Power Draw</div>
+                    <div className="text-xs text-muted-foreground">Power use</div>
                     <div className="mt-1 text-xl font-bold font-mono text-primary">
                       {machineTelemetry.current.power_w ?? 0} W
                     </div>
@@ -412,20 +450,20 @@ export default function AdminTelemetryPage() {
 
               {/* Time-series rollups */}
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                1-Minute Aggregated Buckets
+                Readings by minute
               </div>
               {machineTelemetry?.points && machineTelemetry.points.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Time (UTC)</TableHead>
-                      <TableHead>Avg GPU Util</TableHead>
-                      <TableHead>Max GPU Util</TableHead>
-                      <TableHead>Avg Temp</TableHead>
-                      <TableHead>Max Temp</TableHead>
-                      <TableHead>Avg Memory</TableHead>
-                      <TableHead>Avg Power</TableHead>
-                      <TableHead>Samples</TableHead>
+                      <TableHead>Average GPU use</TableHead>
+                      <TableHead>Highest GPU use</TableHead>
+                      <TableHead>Average heat</TableHead>
+                      <TableHead>Highest heat</TableHead>
+                      <TableHead>Average memory</TableHead>
+                      <TableHead>Average power</TableHead>
+                      <TableHead>Readings</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -433,6 +471,7 @@ export default function AdminTelemetryPage() {
                       <TableRow key={i}>
                         <TableCell className="font-mono text-xs">
                           {new Date(pt.timestamp).toLocaleTimeString([], {
+                            timeZone: "UTC",
                             hour: "2-digit",
                             minute: "2-digit",
                             second: "2-digit",
@@ -465,7 +504,7 @@ export default function AdminTelemetryPage() {
                 </Table>
               ) : (
                 <div className="p-8 text-center text-sm text-muted-foreground">
-                  No telemetry stream recorded for this node in the current time window.
+                  No recent readings from this computer. Check that the host has the agent running.
                 </div>
               )}
             </div>

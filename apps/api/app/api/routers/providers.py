@@ -45,6 +45,7 @@ from app.services.attestation_nonce import (
 )
 from app.services.attestation_verifier import AttestationVerifierError, verify_machine_evidence
 from app.services.audit import record_audit
+from app.services.provider_pricing import PricingPolicyError, validate_asking_price
 from app.services.provider import (
     get_owned_machine,
     get_provider_by_user,
@@ -280,7 +281,12 @@ async def update_machine(
             )
         machine.availability = body.availability
     if body.asking_price_per_hour is not None:
-        machine.asking_price_per_hour = body.asking_price_per_hour
+        try:
+            machine.asking_price_per_hour = validate_asking_price(body.asking_price_per_hour)
+        except PricingPolicyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.code
+            ) from exc
     if body.max_concurrent_jobs is not None:
         machine.max_concurrent_jobs = body.max_concurrent_jobs
     if body.region is not None:

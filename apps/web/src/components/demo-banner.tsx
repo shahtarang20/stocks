@@ -23,9 +23,9 @@ export function DemoBanner({
     >
       <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <p>
-        <span className="font-semibold text-warning">DEMO MODE — </span>
+        <span className="font-semibold text-warning">Demo data: </span>
         {children ??
-          "synthetic data, not live infrastructure. These rows are hand-authored placeholders and do not represent real availability, benchmarks, or utilization."}
+          "this is example data, not real computers. It does not show what is really available, how fast anything is, or how busy the network is."}
       </p>
     </div>
   );

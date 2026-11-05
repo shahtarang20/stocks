@@ -1,0 +1,83 @@
+name: Sealed OS image
+
+# Builds the Sealed OS image twice from the same inputs and fails if the image hashes differ
+# (P5 reproducibility). Production keys are never here: the build uses throw-away TEST keys, so the
+# hash proves reproducibility of the content, not the identity of a release (release builds sign
+# with the HSM key and publish through os/sealed/scripts/publish_image.py).
+
+on:
+  pull_request:
+    paths: ["os/sealed/**", "provider-agent/**", ".github/workflows/sealed-image.yml"]
+  workflow_dispatch:
+    inputs:
+      boot_test:
+        description: "Also run the QEMU + swtpm boot test"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sealed-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SNAPSHOT_DATE: "20260101T000000Z"   # pins every Debian package; bump deliberately
+  SOURCE_DATE_EPOCH: "1767225600"      # 2026-01-01T00:00:00Z
+  MKOSI_VERSION: "25.3"                # TODO(verify-docs): pin to the version the image definition was checked with
+
+jobs:
+  reproducible-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build tools (job-local, not system-wide)
+        run: |
+          python -m venv "$RUNNER_TEMP/tools"
+          "$RUNNER_TEMP/tools/bin/pip" install "mkosi==${MKOSI_VERSION}" cryptography
+          echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends efitools sbsigntool systemd-ukify erofs-utils cryptsetup-bin dosfstools mtools
+      - name: Allow unprivileged user namespaces (runner AppArmor)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Test keys
+        run: os/sealed/scripts/gen-test-keys.sh "$RUNNER_TEMP/keys"
+      - name: Agent dependency lock (generated once when not committed; both builds use the same file)
+        run: |
+          if [ ! -f os/sealed/agent-requirements.lock ]; then os/sealed/scripts/make-lock.sh; fi
+          cp os/sealed/agent-requirements.lock "$RUNNER_TEMP/agent-requirements.lock"
+      - name: Build 1
+        run: |
+          SEALED_KEYS_DIR="$RUNNER_TEMP/keys" os/sealed/scripts/build.sh
+          cp os/sealed/out/image-hash.txt "$RUNNER_TEMP/hash1.txt"
+          cp os/sealed/out/expected-pcrs.json "$RUNNER_TEMP/pcrs1.json"
+      - name: Build 2 (same inputs, clean tree)
+        run: |
+          rm -rf os/sealed/out os/sealed/mkosi.cache
+          SEALED_KEYS_DIR="$RUNNER_TEMP/keys" os/sealed/scripts/build.sh
+          cp os/sealed/out/image-hash.txt "$RUNNER_TEMP/hash2.txt"
+          cp os/sealed/out/expected-pcrs.json "$RUNNER_TEMP/pcrs2.json"
+      - name: Compare
+        run: |
+          echo "build 1: $(cat "$RUNNER_TEMP/hash1.txt")"
+          echo "build 2: $(cat "$RUNNER_TEMP/hash2.txt")"
+          cmp "$RUNNER_TEMP/hash1.txt" "$RUNNER_TEMP/hash2.txt" || { echo "image is NOT reproducible"; exit 1; }
+          cmp "$RUNNER_TEMP/pcrs1.json" "$RUNNER_TEMP/pcrs2.json" || { echo "predicted PCRs differ between builds"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sealed-image-test-build
+          path: |
+            os/sealed/agent-requirements.lock
+            os/sealed/out/expected-pcrs.json
+            os/sealed/out/image-hash.txt
+            os/sealed/out/computecoin-sealed.manifest
+      - name: Boot test (QEMU + swtpm)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.boot_test }}
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf swtpm swtpm-tools tpm2-tools
+          pip install -e apps/api -e provider-agent pytest
+          COMPUTECOIN_SEALED_BOOT_TEST=1 COMPUTECOIN_SEALED_KEYS_DIR="$RUNNER_TEMP/keys" pytest -q tests/e2e/test_sealed_image_boot.py

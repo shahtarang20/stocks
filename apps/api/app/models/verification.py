@@ -31,7 +31,7 @@ from sqlalchemy.types import JSON
 from app.db.base import Base, utcnow
 
 # Checked-varchar vocabularies (portable Enum — see app/models/model_registry.py).
-VERIFICATION_KINDS = ("challenge", "redundant", "model_identity")
+VERIFICATION_KINDS = ("challenge", "redundant", "model_identity", "kit_output")
 REDUNDANCY_STATUSES = ("pending", "running", "matched", "mismatched", "inconclusive")
 
 
@@ -83,7 +83,7 @@ class VerificationResult(Base):
         nullable=True,
         index=True,
     )
-    # challenge | redundant | model_identity
+    # challenge | redundant | model_identity | kit_output
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     expected_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

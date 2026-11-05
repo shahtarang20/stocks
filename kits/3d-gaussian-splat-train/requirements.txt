@@ -1,0 +1,6 @@
+# Pinned, NOT yet checked against PyPI or the base image (L4). Freeze with hashes in CI.
+# torch/torchvision come from the pinned CUDA base image.
+torch-from-base-image
+gsplat==1.4.0
+numpy==2.2.2
+Pillow==11.1.0

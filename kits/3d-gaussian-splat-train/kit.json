@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "slug": "3d-gaussian-splat-train",
+  "version": "1.0.0",
+  "name": "3D Gaussian splatting training",
+  "description": "Trains a 3D Gaussian splat from a photo set (optionally running COLMAP first) with the gsplat library and writes the trained model and validation renders. Licences: see kits/3d-gaussian-splat-train/README.md.",
+  "category": "3d-reconstruction",
+  "image": "ghcr.io/computecoin/kit-3d-gaussian-splat-train@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "iterations": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000,
+        "default": 7000
+      },
+      "run_colmap": {
+        "type": "boolean",
+        "default": true
+      },
+      "colmap_matcher": {
+        "type": "string",
+        "enum": [
+          "exhaustive",
+          "sequential"
+        ],
+        "default": "exhaustive"
+      },
+      "sh_degree": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3,
+        "default": 3
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+        "default": 0
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "dataset",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "model",
+      "path": "/out/model"
+    },
+    {
+      "name": "preview",
+      "path": "/out/preview"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 16,
+    "min_compute_capability": "7.0",
+    "cpu": 8,
+    "ram_gb": 32,
+    "disk_gb": 50
+  },
+  "billing_hints": {
+    "unit": "image",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "psnr_ssim",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "Training is not deterministic across GPU models (CUDA atomics in the rasteriser). Verification compares held-out validation renders by PSNR/SSIM with bounds set from benchmark data (U5.3); the ADR method (re-run of a sample, metric compare) is approximated this way."
+  }
+}

@@ -15,19 +15,19 @@ export function billingErrorMessage(err: unknown): string {
   const code = apiErrorCode(err);
   switch (code) {
     case "insufficient_credits":
-      return "Not enough credits for this amount. Buy more simulated credits and try again.";
+      return "You do not have enough credits for this. Add more credits on the Credits and billing page, then try again.";
     case "insufficient_earnings":
-      return "The requested payout exceeds your available earnings.";
+      return "You asked to take out more than you have earned. Enter a smaller amount, or wait until more jobs finish.";
     case "no_charge_to_refund":
-      return "There is no settled charge to refund for this job or invoice.";
+      return "There is no finished charge to refund for this job or invoice.";
     case "invalid_amount":
-      return "Enter a valid decimal amount greater than zero.";
+      return "Enter an amount greater than zero, like 5.00.";
     case "job_not_settled":
-      return "This job has not settled yet — it can only be disputed after it completes.";
+      return "This job has not finished and been paid for yet. You can open a dispute after it is done.";
     case "dispute_exists":
-      return "A dispute is already open for this job.";
+      return "A dispute is already open for this job. You can follow it on the Disputes page.";
     case "email_not_verified":
-      return "Verify your email address first. Use the banner at the top of the page to resend the link.";
+      return "Please confirm your email address first. Use the button at the top of the page to get a new link.";
     default:
       if (err instanceof ApiError && err.message) {
         // Never show a raw snake_case API code to a user.
@@ -35,7 +35,7 @@ export function billingErrorMessage(err: unknown): string {
           ? err.message.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) + "."
           : err.message;
       }
-      return "Something went wrong. Please try again.";
+      return "Something went wrong. Please try again in a moment.";
   }
 }
 
@@ -56,6 +56,37 @@ export function invoiceStatusVariant(status: string): BadgeVariant {
       return "neutral";
     default:
       return "default";
+  }
+}
+
+/** Plain label for an invoice status. */
+export function invoiceStatusText(status: string | null | undefined): string {
+  switch (status) {
+    case "paid":
+    case "settled":
+      return "Paid";
+    case "refunded":
+      return "Refunded";
+    case "not_charged":
+      return "Not charged";
+    default:
+      return humanizeStatus(status);
+  }
+}
+
+/** Plain label for a dispute status. */
+export function disputeStatusText(status: string | null | undefined): string {
+  switch (status) {
+    case "open":
+      return "Open";
+    case "under_review":
+      return "We are reviewing it";
+    case "resolved":
+      return "Resolved";
+    case "rejected":
+      return "Not accepted";
+    default:
+      return humanizeStatus(status);
   }
 }
 

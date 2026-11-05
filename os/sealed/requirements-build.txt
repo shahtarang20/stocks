@@ -1,0 +1,4 @@
+# Build-time tools for the sealed image's dependency lock (never installed into the image).
+# Used by scripts/make-lock.sh in a job-local venv.
+# TODO(verify-docs): confirm this pip-tools version resolves provider-agent/pyproject.toml on Python 3.12.
+pip-tools==7.4.1

@@ -127,6 +127,10 @@ async def create_refund(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except ledger.InsufficientFunds:
+        # The provider's earnings were already paid out or held in a payout: the refund would drive the account
+        # negative. The ledger refuses (nothing is written); answer 409, never a 500.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="insufficient_provider_earnings")
     refund.transaction_id = txn.id
     if invoice is not None:
         invoice.status = "refunded"
@@ -263,6 +267,8 @@ async def resolve_dispute(
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        except ledger.InsufficientFunds:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="insufficient_provider_earnings")
         refund.transaction_id = txn.id
         dispute.refund_amount_minor = amount_minor
         # A refunded dispute is one the provider lost. Reputation is reporting,

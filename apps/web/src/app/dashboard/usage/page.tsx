@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, BarChart3, RefreshCw } from "lucide-react";
+import { BarChart3, RefreshCw } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,16 +24,16 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatDuration } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
+import { ErrorState, RelativeTime } from "@/components/console/bits";
 import { shortId } from "@/lib/jobs";
 
 function SummaryStat({ label, value }: { label: string; value: string }) {
   return (
     <Card>
-      <CardContent className="p-5">
-        <p className="text-sm text-muted-foreground">{label}</p>
+      <CardContent className="p-4 sm:p-5">
+        <p className="text-xs text-muted-foreground sm:text-sm">{label}</p>
         {/* Decimal strings shown verbatim — never parseFloat. */}
-        <p className="mt-1 font-mono text-2xl font-bold tabular-nums">{value}</p>
+        <p className="mt-1 truncate font-mono text-xl font-bold tabular-nums sm:text-2xl">{value}</p>
       </CardContent>
     </Card>
   );
@@ -64,7 +64,7 @@ export default function UsagePage() {
     <>
       <ConsolePageHeader
         title="Usage"
-        description="Per-job metered usage from the billing service — estimated vs actual cost, tracked separately. Amounts are simulated credits, shown verbatim."
+        description="How much time each job used and what it cost. The estimate is our guess before the job runs. The actual cost is what you were charged when it finished. Amounts are in test credits."
         action={
           <Button
             variant="outline"
@@ -79,7 +79,7 @@ export default function UsagePage() {
 
       {query.isLoading ? (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-3 gap-3 sm:gap-4">
             {Array.from({ length: 3 }).map((_, i) => (
               <Card key={i}>
                 <CardContent className="space-y-2 p-5">
@@ -98,46 +98,36 @@ export default function UsagePage() {
           </Card>
         </div>
       ) : query.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load usage</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {query.error instanceof ApiError
-                ? query.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => query.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your usage"
+          message={query.error instanceof ApiError ? query.error.message : undefined}
+          onRetry={() => query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-3 gap-3 sm:gap-4">
             <SummaryStat
-              label="Total spend"
+              label="Credits spent"
               value={summary?.total_spend ?? summary?.total_actual ?? "0.00"}
             />
             <SummaryStat
-              label="Estimated total"
+              label="Estimated cost, all jobs"
               value={summary?.total_estimated ?? "0.00"}
             />
             <SummaryStat
-              label="Jobs metered"
+              label="Jobs counted"
               value={String(summary?.job_count ?? records.length)}
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            {currency} · {CREDITS_LABEL}. Estimated and actual are tracked
-            separately; a failed or cancelled job is never charged.
+            {currency === "USDC_CREDITS" ? CREDITS_LABEL : `${currency} · ${CREDITS_LABEL}`}.
+            The estimate and the actual cost are kept apart. A failed or cancelled job is never charged.
           </p>
 
           <Card>
             <CardHeader>
-              <CardTitle>Per-job usage</CardTitle>
+              <CardTitle>Usage for each job</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {records.length === 0 ? (
@@ -145,10 +135,9 @@ export default function UsagePage() {
                   <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
                     <BarChart3 className="h-6 w-6" />
                   </span>
-                  <h3 className="font-semibold">No usage recorded yet</h3>
+                  <h3 className="font-semibold">No usage yet</h3>
                   <p className="max-w-md text-sm text-muted-foreground">
-                    Once a job completes and settles, its metered duration and
-                    actual cost appear here.
+                    When a job finishes, you will see here how long it ran and what it cost. To get started, start a job from the Jobs page.
                   </p>
                 </div>
               ) : (
@@ -156,9 +145,9 @@ export default function UsagePage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Job</TableHead>
-                      <TableHead className="text-right">Duration</TableHead>
-                      <TableHead className="text-right">Estimated</TableHead>
-                      <TableHead className="text-right">Actual</TableHead>
+                      <TableHead className="text-right">Time used</TableHead>
+                      <TableHead className="text-right">Estimate</TableHead>
+                      <TableHead className="text-right">Charged</TableHead>
                       <TableHead>When</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -169,6 +158,7 @@ export default function UsagePage() {
                           {r.job_id ? (
                             <Link
                               href={`/dashboard/jobs/${r.job_id}`}
+                              title={r.job_id}
                               className="font-mono text-xs text-primary hover:underline"
                             >
                               {shortId(r.job_id)}
@@ -187,7 +177,7 @@ export default function UsagePage() {
                           {r.actual_cost ?? "—"}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {r.created_at ? formatRelativeTime(r.created_at) : "—"}
+                          <RelativeTime iso={r.created_at} />
                         </TableCell>
                       </TableRow>
                     ))}

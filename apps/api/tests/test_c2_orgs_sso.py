@@ -792,6 +792,21 @@ async def test_oidc_cannot_adopt_an_existing_account_outside_the_org(client, sso
     cb = await _complete_callback(client, conn_id, idp)
     assert cb.status_code == 403, cb.text
     assert cb.json()["detail"] == "sso_identity_not_linked"
+    await _assert_sso_refusal_audited("identity_not_linked_to_org")
+
+
+async def _assert_sso_refusal_audited(reason: str) -> None:
+    """The refusal is an HTTPException (the session is rolled back); its audit row must still have been committed."""
+    from sqlalchemy import select
+
+    from app.db.session import get_sessionmaker
+    from app.models.system import AuditLog
+
+    async with get_sessionmaker()() as db:
+        rows = (await db.execute(
+            select(AuditLog).where(AuditLog.action == "sso.login", AuditLog.outcome == "failure", AuditLog.reason == reason)
+        )).scalars().all()
+    assert rows, f"no committed sso.login failure audit row with reason {reason}"
 
 
 @pytest.mark.asyncio
@@ -813,6 +828,7 @@ async def test_oidc_refuses_to_federate_a_platform_administrator(client, sso_env
     cb = await _complete_callback(client, conn_id, idp)
     assert cb.status_code == 403, cb.text
     assert cb.json()["detail"] == "sso_privileged_account_refused"
+    await _assert_sso_refusal_audited("privileged_account_refused")
 
 
 # ---------------------------------------------------------------------------

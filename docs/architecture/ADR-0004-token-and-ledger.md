@@ -1,6 +1,6 @@
 # ADR-0004: How COMPUTE tokens and the platform ledger relate
 
-Status: **phase 1 built (wallet link, balance view). Stage 1 of the bridge (deposits only) is built and OFF by default; it needs the owner decisions in section 5 before it is switched on. Withdrawals are not built.**
+Status: **phase 1 built (wallet link, balance view). Stage 1 of the bridge (deposits only) is built and OFF by default; it needs the owner decisions in section 5 before it is switched on. Withdrawals (B1) are written but OFF and not run: see B1-withdrawals-design.md; they need owner approval.**
 
 ## 1. Context
 

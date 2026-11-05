@@ -1,0 +1,57 @@
+{
+  "kit": "comfyui-workflow-runner",
+  "schema": 1,
+  "purpose": "U12: smoke test of comfyui-workflow-runner on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models; the fleet is the owner's decision.",
+  "fixture": {
+    "how": "OWNER supplies a small fixed-seed workflow that uses only allowlisted nodes and baked models",
+    "input_name": "workflow",
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {
+      "timeout_seconds": 300
+    }
+  },
+  "limits": {
+    "max_seconds": 600
+  },
+  "checks": [
+    {
+      "id": "exit_zero",
+      "expect": "container exit code 0 and output.json ok=true"
+    },
+    {
+      "id": "outputs",
+      "expect": "at least one image in outputs/ for the fixture workflow"
+    },
+    {
+      "id": "node_allowlist",
+      "expect": "a workflow with an unlisted class_type is refused with invalid_input before the server starts"
+    },
+    {
+      "id": "path_escape",
+      "expect": "a workflow input containing ../ is refused with invalid_input"
+    },
+    {
+      "id": "cross_gpu",
+      "expect": "fixed-seed outputs of different GPU models pass the perceptual verification"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds per unit",
+    "peak vram",
+    "sha256 of every output"
+  ]
+}

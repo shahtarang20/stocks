@@ -15,8 +15,10 @@ export interface Project {
 
 export interface ApiKey {
   id: string;
-  /** Full key is only present once, at creation. */
+  /** Full key is only present once, at creation. The API returns it as `api_key`; {@link ComputeCoinClient.createApiKey}
+   * also exposes it as `key`. */
   key?: string;
+  api_key?: string;
   prefix: string;
   name?: string;
 }
@@ -46,6 +48,48 @@ export interface ClientOptions {
   apiKey?: string;
   /** Inject a custom fetch (e.g. for tests). Defaults to global fetch. */
   fetch?: typeof fetch;
+  /** Fingerprint of the guardian set ComputeCoin publishes out of band; private jobs refuse any other set. */
+  guardianPin?: string;
+  /** Also refuse private jobs when no `guardianPin` is set. */
+  requireGuardianPin?: boolean;
+}
+
+export interface PrivacyVerifierKey {
+  verifier_public_key?: string;
+  guardians: Record<string, string>;
+  threshold: number;
+}
+
+export interface ChatCompletionCreateParams {
+  model: string;
+  messages: ChatMessage[];
+  stream?: boolean;
+  /** `sealed`, `sealed_pro` or `confidential` makes the call private (messages encrypted here, stream sealed). */
+  isolation_tier?: string;
+  /** Must equal the platform's PRIVACY_STREAM_PAD_BYTES (default 256; 0 = unpadded). */
+  padBytes?: number;
+  guardians?: Record<string, string>;
+  threshold?: number;
+  [extra: string]: unknown;
+}
+
+export interface SubmitPrivateFanoutParams {
+  spec: Record<string, unknown>;
+  /** One plaintext per part, built with `buildPrivateKitInput`. Count must equal the fan-out's part count. */
+  parts: Array<{ inputs: Record<string, { b64: string } | { text: string }>; params: Record<string, unknown> }>;
+  isolationTier?: "sealed" | "sealed_pro" | "confidential";
+  guardians?: Record<string, string>;
+  threshold?: number;
+  projectId?: string;
+  machineId?: string;
+  requiredGpuRuntime?: string;
+  idempotencyKey?: string;
+}
+
+export interface PrivateFanoutSubmission {
+  fanout: Record<string, unknown>;
+  /** One per part, same order. Not stored anywhere else: they open each part's sealed output. */
+  resultPrivateKeys: string[];
 }
 
 // -- Phase 3: marketplace / quotes / reservations ------------------------- //
@@ -169,7 +213,10 @@ export interface RetryPolicy {
 }
 
 export interface Job {
-  id: string;
+  /** The API (JobOut) names the id `job_id`. */
+  job_id: string;
+  /** @deprecated never sent by the API; use `job_id`. */
+  id?: string;
   customer_id?: string;
   project_id?: string;
   workload_type: string;
@@ -198,6 +245,10 @@ export interface Job {
   final_cost?: string | null;
   error_code?: string | null;
   error_message?: string | null;
+  /** The job result (null until completed) and the run metrics. */
+  output?: Record<string, unknown> | null;
+  metrics?: Record<string, unknown> | null;
+  cancel_requested?: boolean;
   created_at?: string;
   updated_at?: string;
   started_at?: string | null;
@@ -215,13 +266,15 @@ export interface CreateJobParams {
   max_cost: string;
   max_runtime_seconds: number;
   retry_policy?: RetryPolicy;
+  /** ROCm: isolation_tier container, or sealed/sealed_pro only on hosts proving a Sealed image (D5 pending); never confidential. */
   gpu_runtime?: "cuda" | "rocm" | "any";
   required_gpu_runtime?: "cuda" | "rocm" | "any";
 }
 
 /** One immutable row of the append-only job FSM history. */
 export interface JobEvent {
-  job_id: string;
+  /** Not sent by the API (the job is in the URL). */
+  job_id?: string;
   seq: number;
   from_state?: string | null;
   to_state: string;
@@ -254,6 +307,9 @@ export interface JobLogs {
 export interface CancelAck {
   job_id?: string;
   status?: string;
+  /** The API (JobCancelOut) sends `cancel_requested`. */
+  cancel_requested?: boolean;
+  /** @deprecated the old spelling, kept for compatibility. */
   cancellation_requested?: boolean;
 }
 
@@ -294,6 +350,8 @@ export interface LedgerEntry {
   amount: string;
   currency: string;
   reference?: string | null;
+  reference_type?: string | null;
+  reference_id?: string | null;
   created_at?: string;
 }
 

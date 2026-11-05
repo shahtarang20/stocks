@@ -11,6 +11,9 @@ from pydantic import BaseModel, EmailStr, Field
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=256)
+    # U16: explicit AUP acceptance (required only when AUP_REQUIRED=true).
+    accept_aup: bool = False
+    aup_version: str | None = Field(default=None, max_length=32)
 
 
 class RegisterResponse(BaseModel):

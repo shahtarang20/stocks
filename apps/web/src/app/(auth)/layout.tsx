@@ -16,15 +16,28 @@ export default function AuthLayout({
             <ThemeToggle />
             <Link
               href="/"
-              className="text-sm text-muted-foreground hover:text-foreground"
+              className="rounded-sm text-sm text-muted-foreground hover:text-foreground"
             >
               Back to site
             </Link>
           </div>
         </div>
       </header>
-      <main className="flex flex-1 items-center justify-center px-4 py-16">
-        <div className="w-full max-w-md">{children}</div>
+      <main id="main-content" tabIndex={-1} className="focus:outline-none flex flex-1 items-center justify-center px-4 py-10 sm:py-16">
+        <div className="w-full max-w-md">
+          {children}
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Read the{" "}
+            <Link href="/legal/terms" className="underline underline-offset-2 hover:text-foreground">
+              Terms
+            </Link>{" "}
+            and the{" "}
+            <Link href="/legal/privacy" className="underline underline-offset-2 hover:text-foreground">
+              Privacy notice
+            </Link>
+            .
+          </p>
+        </div>
       </main>
     </div>
   );

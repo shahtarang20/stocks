@@ -7,7 +7,9 @@ confidential-computing GPU (checklist F5) is required before this may back a ver
 Evidence (hex / PEM)::
 
     {"request": <hex GET_MEASUREMENTS request>, "response": <hex MEASUREMENTS response incl. signature>,
-     "certificate_chain": [<PEM device attestation cert>, <PEM intermediates>...]}
+     "certificate_chain": [<PEM device attestation cert>, <PEM intermediates>...],
+     "rims": [<driver RIM XML>, <VBIOS RIM XML>, ...],
+     "crls": [<CRL>, ...], "ocsp_responses": [<DER OCSP response>, ...]}
 
 Checks:
 1. the device certificate chain reaches a PINNED NVIDIA device root;
@@ -15,14 +17,21 @@ Checks:
    SHA-256(challenge nonce);
 3. the response is MEASUREMENTS; its ECDSA P-384 signature (r || s, 96 bytes, big-endian) covers
    request || response-without-signature (SPDM 1.1 L1/L2), made by the device certificate's key;
-4. every expected measurement (``{"<index>": hex}``, the golden values from NVIDIA's Reference
-   Integrity Manifests for this driver / VBIOS) equals the DMTF measurement block with that index.
-Not implemented: parsing and verifying NVIDIA's signed RIM files themselves (the golden values come
-from configuration), OCSP for the device chain, and SPDM 1.2+ signing contexts.
+4. revocation (P2, R5): every link of the device chain needs a current issuer-signed CRL or OCSP
+   response (``nvidia_certificate_revoked`` / ``nvidia_revocation_unknown``), see revocation.py;
+5. golden values (P2): ``rims`` are NVIDIA's signed SWID/XML Reference Integrity Manifests; each is
+   verified to a pinned root (rim.py) and EVERY measurement index it defines must equal one of its
+   listed alternatives in the signed SPDM blocks. No RIM means no verdict (``nvidia_rim_missing``).
+   Optional extra expectations (``{"<index>": hex}``) must also hold.
+Not implemented: SPDM 1.2+ signing contexts. RIM / OCSP formats are unverified against NVIDIA's
+current docs and real files (R7, R8); synthetic evidence only.
+``context["legacy_collateral_ok"]`` (tests only; never set by the service) tolerates a MISSING
+CRL/OCSP and a missing RIM, never a present bad one.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import struct
 from typing import Any
@@ -38,6 +47,8 @@ from app.services.hardware_attestation import (
     load_pem_certificate,
     verify_chain,
 )
+from app.services.hardware_attestation.revocation import check_path_revocation, parse_crls, parse_ocsp_responses
+from app.services.hardware_attestation.rim import compare_with_blocks, verify_rim
 
 SPDM_VERSION_11 = 0x11
 GET_MEASUREMENTS, MEASUREMENTS = 0xE0, 0x60
@@ -89,7 +100,12 @@ class NvidiaCCVerifier:
         chain = [load_pem_certificate(p, "NVIDIA device chain") for p in evidence.get("certificate_chain") or []]
         if not chain:
             raise _err("bad_certificate_chain", "no device certificate")
-        verify_chain(chain[0], chain[1:], root_certs, code="nvidia_bad_certificate_chain", now=(context or {}).get("now"))
+        now = (context or {}).get("now") or dt.datetime.now(dt.timezone.utc)
+        legacy = bool((context or {}).get("legacy_collateral_ok"))
+        path = verify_chain(chain[0], chain[1:], root_certs, code="nvidia_bad_certificate_chain", now=now)
+        crls = parse_crls(evidence.get("crls"), "nvidia")
+        ocsp_responses = parse_ocsp_responses(evidence.get("ocsp_responses"), "nvidia")
+        check_path_revocation(path, crls=crls, ocsp_responses=ocsp_responses, prefix="nvidia", now=now, allow_missing=legacy)
         device_key = chain[0].public_key()
         if not isinstance(device_key, ec.EllipticCurvePublicKey) or not isinstance(device_key.curve, ec.SECP384R1):
             raise _err("bad_key_type", "device attestation key must be ECDSA P-384")
@@ -126,6 +142,20 @@ class NvidiaCCVerifier:
         if response[4] != len(blocks):
             raise _err("malformed_evidence", "number of blocks does not match the header")
         measurements = {str(i): v.hex() for i, v in sorted(blocks.items())}
+        rims = evidence.get("rims")
+        if not isinstance(rims, list) or not rims:
+            if not legacy:
+                raise _err("rim_missing", "no signed Reference Integrity Manifest was supplied")
+            rims = []
+        reference: dict[int, list[str]] = {}
+        for rim_xml in rims:
+            for index, alts in verify_rim(
+                rim_xml, root_certs, now=now, crls=crls, ocsp_responses=ocsp_responses, allow_missing_revocation=legacy
+            ).items():
+                if index in reference:
+                    raise _err("bad_rim", f"measurement {index} is defined by more than one RIM")
+                reference[index] = alts
+        compare_with_blocks(reference, measurements)
         for k, v in (expected_measurements or {}).items():
             if measurements.get(str(k)) != str(v).lower():
                 raise _err("measurement_mismatch", f"measurement {k} differs from the reference value")

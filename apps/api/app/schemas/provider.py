@@ -6,7 +6,7 @@ import datetime as dt
 import decimal
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ class MachineDetailOut(MachineOut):
 class MachineUpdate(BaseModel):
     availability: str | None = None
     asking_price_per_hour: decimal.Decimal | None = None
-    max_concurrent_jobs: int | None = Field(default=None, ge=1)
+    max_concurrent_jobs: int | None = Field(default=None, ge=1, le=1024)  # Integer column
     region: str | None = Field(default=None, max_length=64)
     supported_workloads: list[str] | None = None
     supported_isolation_tiers: list[str] | None = None
@@ -101,21 +101,25 @@ class MachineUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Agent: enrollment
 # ---------------------------------------------------------------------------
+_INT32_MAX = 2**31 - 1  # Integer DB columns: an unbounded agent-supplied value would overflow on Postgres (HTTP 500)
+
+
 class GpuReport(BaseModel):
-    model: str | None = None
-    vram_mb: int = 0
-    cuda_version: str | None = None
-    gpu_vendor: str | None = None
-    gpu_runtime: str | None = None
-    gpu_runtime_version: str | None = None
+    model: str | None = Field(default=None, max_length=255)
+    vram_mb: int = Field(default=0, ge=0, le=_INT32_MAX)
+    # Column widths of hardware_inventory: a longer value would be a Postgres error (HTTP 500) at enrollment.
+    cuda_version: str | None = Field(default=None, max_length=64)
+    gpu_vendor: str | None = Field(default=None, max_length=32)
+    gpu_runtime: str | None = Field(default=None, max_length=32)
+    gpu_runtime_version: str | None = Field(default=None, max_length=64)
 
 
 class CapabilityReport(BaseModel):
     verification_status: str = "detected"
-    cpu_model: str | None = None
-    cpu_cores: int = 0
-    ram_mb: int = 0
-    disk_gb: int = 0
+    cpu_model: str | None = Field(default=None, max_length=255)
+    cpu_cores: int = Field(default=0, ge=0, le=_INT32_MAX)
+    ram_mb: int = Field(default=0, ge=0, le=_INT32_MAX)
+    disk_gb: int = Field(default=0, ge=0, le=_INT32_MAX)
     gpus: list[GpuReport] = Field(default_factory=list)
     supported_workloads: list[str] = Field(default_factory=list)
     isolation_tiers: list[str] = Field(default_factory=lambda: ["container"])
@@ -123,7 +127,7 @@ class CapabilityReport(BaseModel):
 
 class AgentEnrollRequest(BaseModel):
     enrollment_token: str
-    agent_version: str | None = None
+    agent_version: str | None = Field(default=None, max_length=64)
     hostname: str = Field(min_length=1, max_length=255)
     capability_report: CapabilityReport
 
@@ -139,8 +143,8 @@ class AgentEnrollResponse(BaseModel):
 # Agent: heartbeat
 # ---------------------------------------------------------------------------
 class HeartbeatCapabilitySummary(BaseModel):
-    gpu_count: int = 0
-    vram_mb: int = 0
+    gpu_count: int = Field(default=0, ge=0, le=1024)
+    vram_mb: int = Field(default=0, ge=0, le=_INT32_MAX)
 
 
 class HeartbeatHealth(BaseModel):
@@ -150,6 +154,35 @@ class HeartbeatHealth(BaseModel):
     gpu_util_pct: float | None = None
     mem_used_mb: int | None = None
     uptime_s: int = 0
+    # U7: Kits whose images this machine has cached ("slug@version"). Self-reported; ranking hint only.
+    kit_caches: list[str] | None = None
+    # U8: isolation runtimes the host can run ("gvisor", "microvm"). Self-reported; BYOC is placed only where listed.
+    isolation_runtimes: list[str] | None = None
+    # U14: the host can run a Windows VM with GPU passthrough (vm_runner.advertise()). Self-reported; only widens WHERE a
+    # customer's own VM may run. Anything but a real boolean is dropped (never truthy-coerced).
+    vfio_gpu: bool | None = None
+    # CPU-only Kits: the host opted in to run them (agent setting cpu_only_kits_enabled). Self-reported; it only widens
+    # WHERE a CPU-only Kit may run and is honoured only while CPU_ONLY_KITS_ENABLED is on.
+    cpu_capable: bool | None = None
+
+    @field_validator("vfio_gpu", "cpu_capable", mode="before")
+    @classmethod
+    def _sanitize_vfio_gpu(cls, v):
+        return v if isinstance(v, bool) else None
+
+    @field_validator("isolation_runtimes", mode="before")
+    @classmethod
+    def _sanitize_isolation_runtimes(cls, v):
+        if not isinstance(v, (list, tuple)):
+            return None if v is None else []
+        return sorted({x for x in v if x in ("gvisor", "microvm")})
+
+    @field_validator("kit_caches", mode="before")
+    @classmethod
+    def _sanitize_kit_caches(cls, v):
+        from app.services.scheduler_v2 import sanitize_kit_caches
+
+        return sanitize_kit_caches(v)
 
 
 class HeartbeatRequest(BaseModel):

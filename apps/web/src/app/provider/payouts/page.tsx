@@ -20,6 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CopyId, EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
 import {
   Dialog,
   DialogContent,
@@ -45,17 +47,15 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { billingErrorMessage, payoutStatusVariant, humanizeStatus } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
-import { shortId } from "@/lib/jobs";
 
 const amountSchema = z.object({
   amount: z
     .string()
     .trim()
     .refine((v) => /^\d+(\.\d{1,2})?$/.test(v), {
-      message: "Enter a decimal like 25.00",
+      message: "Enter an amount like 25.00.",
     })
-    .refine((v) => Number(v) > 0, { message: "Amount must be greater than zero" }),
+    .refine((v) => Number(v) > 0, { message: "The amount must be more than zero." }),
 });
 
 type AmountValues = z.infer<typeof amountSchema>;
@@ -71,6 +71,7 @@ function RequestPayoutDialog({
 }) {
   const { accessToken } = useAuth();
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const {
     register,
@@ -86,6 +87,7 @@ function RequestPayoutDialog({
     mutationFn: (values) =>
       api.requestPayout(accessToken as string, { amount: values.amount }),
     onSuccess: () => {
+      toast.success("Payout requested. A person will review it.");
       queryClient.invalidateQueries({ queryKey: ["payouts"] });
       queryClient.invalidateQueries({ queryKey: ["provider-earnings"] });
     },
@@ -105,8 +107,8 @@ function RequestPayoutDialog({
         <DialogHeader>
           <DialogTitle>Request a payout</DialogTitle>
           <DialogDescription>
-            Move available earnings out. {CREDITS_LABEL} — this is a simulated
-            payout, not a real transfer.
+            Ask to take some of your earnings out. {CREDITS_LABEL}. This is a practice
+            payout. No real money moves.
             {available ? (
               <>
                 {" "}
@@ -125,8 +127,8 @@ function RequestPayoutDialog({
                 <p className="font-medium text-foreground">Payout requested.</p>
                 <p className="mt-1 text-muted-foreground">
                   Amount <span className="font-mono">{mutation.data.amount}</span>{" "}
-                  — status {humanizeStatus(mutation.data.status)}. An operator
-                  authorizes the settlement.
+                  — status {humanizeStatus(mutation.data.status)}. An administrator
+                  needs to approve it. Check the Payouts page for updates.
                 </p>
               </div>
             </div>
@@ -151,19 +153,21 @@ function RequestPayoutDialog({
             ) : null}
 
             <div className="space-y-1.5">
-              <Label htmlFor="payout-amount">Amount</Label>
+              <Label htmlFor="payout-amount">How much do you want to take out?</Label>
               <Input
                 id="payout-amount"
                 inputMode="decimal"
                 placeholder="e.g. 25.00"
                 aria-invalid={Boolean(errors.amount)}
+                aria-describedby="payout-amount-help"
+                autoComplete="off"
                 {...register("amount")}
               />
               {errors.amount ? (
-                <p className="text-xs text-danger">{errors.amount.message}</p>
+                <p id="payout-amount-help" role="alert" className="text-xs text-danger">{errors.amount.message}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">
-                  A payout larger than your available earnings is rejected.
+                <p id="payout-amount-help" className="text-xs text-muted-foreground">
+                  You cannot ask for more than you have earned. Use numbers like 25.00.
                 </p>
               )}
             </div>
@@ -217,9 +221,9 @@ export default function ProviderPayoutsPage() {
     <>
       <ConsolePageHeader
         title="Payouts"
-        description="Request and track payouts of your available earnings. Amounts are simulated credits, shown verbatim."
+        description="Ask to take out your earnings and follow each request. You ask, an administrator approves. Amounts are test credits. Real bank payouts are not switched on yet."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               onClick={() => payoutsQuery.refetch()}
@@ -241,7 +245,7 @@ export default function ProviderPayoutsPage() {
         <Card>
           <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
             <div>
-              <p className="text-sm text-muted-foreground">Available to pay out</p>
+              <p className="text-sm text-muted-foreground">Ready to pay out</p>
               {earningsQuery.isLoading ? (
                 <Skeleton className="mt-1 h-8 w-28" />
               ) : (
@@ -255,53 +259,33 @@ export default function ProviderPayoutsPage() {
         </Card>
 
         {payoutsQuery.isLoading ? (
-          <Card>
-            <CardContent className="space-y-3 p-6">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </CardContent>
-          </Card>
+          <TableSkeleton rows={3} label="Loading payouts" />
         ) : payoutsQuery.isError ? (
-          <Card className="border-danger/40">
-            <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-                <AlertCircle className="h-5 w-5" />
-              </span>
-              <h3 className="font-semibold">Couldn&apos;t load payouts</h3>
-              <p className="max-w-md text-sm text-muted-foreground">
-                {payoutsQuery.error instanceof ApiError
-                  ? payoutsQuery.error.message
-                  : "An unexpected error occurred."}
-              </p>
-              <Button variant="outline" onClick={() => payoutsQuery.refetch()}>
-                <RefreshCw /> Try again
-              </Button>
-            </CardContent>
-          </Card>
+          <ErrorState
+            title="We could not load your payouts"
+            message={payoutsQuery.error instanceof ApiError ? payoutsQuery.error.message : undefined}
+            onRetry={() => payoutsQuery.refetch()}
+            retrying={payoutsQuery.isFetching}
+          />
         ) : payouts.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-                <Banknote className="h-6 w-6" />
-              </span>
-              <h3 className="font-semibold">No payouts yet</h3>
-              <p className="max-w-md text-sm text-muted-foreground">
-                Request a payout of your available earnings and track its status
-                here.
-              </p>
+          <EmptyState
+            icon={Banknote}
+            title="No payouts yet"
+            action={
               <Button onClick={() => setRequestOpen(true)}>
                 <Plus /> Request payout
               </Button>
-            </CardContent>
-          </Card>
+            }
+          >
+            You have not asked for a payout yet. When you have earnings, press Request payout. You can follow its status here.
+          </EmptyState>
         ) : (
           <Card>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Payout</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Request</TableHead>
+                  <TableHead className="text-right">Amount (credits)</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Requested</TableHead>
                 </TableRow>
@@ -309,8 +293,8 @@ export default function ProviderPayoutsPage() {
               <TableBody>
                 {payouts.map((p) => (
                   <TableRow key={p.payout_id}>
-                    <TableCell className="font-mono text-xs">
-                      {shortId(p.payout_id)}
+                    <TableCell>
+                      <CopyId id={p.payout_id} label="Copy payout id" />
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums font-medium">
                       {p.amount}
@@ -321,7 +305,7 @@ export default function ProviderPayoutsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {formatRelativeTime(p.created_at)}
+                      <RelativeTime iso={p.created_at} />
                     </TableCell>
                   </TableRow>
                 ))}

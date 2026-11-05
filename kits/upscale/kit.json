@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "slug": "upscale",
+  "version": "1.0.0",
+  "name": "Image upscaling (Real-ESRGAN)",
+  "description": "Upscales one image, or every image in a .zip, 2x or 4x with Real-ESRGAN weights loaded through the spandrel library. Licences: see kits/upscale/README.md.",
+  "category": "enhancement",
+  "image": "ghcr.io/computecoin/kit-upscale@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "model": {
+        "type": "string",
+        "enum": [
+          "realesrgan-x4plus",
+          "realesrgan-x4plus-anime"
+        ],
+        "default": "realesrgan-x4plus"
+      },
+      "scale": {
+        "type": "integer",
+        "enum": [
+          2,
+          4
+        ],
+        "default": 4
+      },
+      "tile": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1024,
+        "default": 512
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "source",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "images",
+      "path": "/out/upscaled"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 6,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 16,
+    "disk_gb": 20
+  },
+  "billing_hints": {
+    "unit": "image",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "perceptual",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "Deterministic fp32 inference differs only slightly across GPU models; defaults are conservative pending U5.3 benchmark data. Empty thresholds use the verify_plugins defaults."
+  }
+}

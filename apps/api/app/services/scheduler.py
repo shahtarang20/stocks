@@ -36,7 +36,7 @@ from app.models.provider import ProviderMachine
 from app.services import job_fsm as fsm
 from app.services import reputation as reputation_svc
 from app.services.billing import release_hold, reserve_for_job
-from app.services.gpu_runtime import ROCM_TIERS, is_gpu_compatible, job_gpu_runtime, machine_gpu_runtime, model_image_runtimes
+from app.services.gpu_runtime import ROCM_SEALED_TIERS, ROCM_TIERS, is_gpu_compatible, job_gpu_runtime, machine_gpu_runtime, model_image_runtimes
 
 logger = logging.getLogger(__name__)
 from app.services.ledger import InsufficientFunds
@@ -79,6 +79,10 @@ def _validate_input(workload_type: str, data: dict) -> None:
         if not isinstance(prompt, str) or not prompt:
             raise JobValidationError("invalid_input")
         if "max_tokens" in data and not isinstance(data["max_tokens"], int):
+            raise JobValidationError("invalid_input")
+    elif workload_type == "embeddings":
+        texts = data.get("input")
+        if not isinstance(texts, list) or not texts or not all(isinstance(t, str) for t in texts):
             raise JobValidationError("invalid_input")
     elif workload_type == "batch-inference":
         items = data.get("items")
@@ -199,20 +203,31 @@ def _machine_supports_tier_and_policy(m: ProviderMachine, job: Job) -> tuple[boo
 
 async def validate_job(db: AsyncSession, job: Job) -> None:
     """Run all VALIDATING checks. Raises JobValidationError on the first failure."""
-    # 1) Model approved + supports the workload.
-    mv = await get_model_version(db, job.model)
-    if (
-        mv is None
-        or mv.trust_status != "approved"
-        or job.workload_type not in (mv.supported_workloads or [])
-    ):
-        raise JobValidationError("model_not_supported")
+    # U7: a Job Spec v2 (Kit) job is checked against its signed Kit, not the model registry.
+    is_v2 = bool(getattr(job, "spec_v2", None))
+    if is_v2:
+        from app.services import scheduler_v2
 
-    # Record the honest execution mode derived from the model runtime.
-    job.execution_mode = "simulated" if mv.runtime == "simulated" else "hardware"
+        await scheduler_v2.validate_kit_job(db, job)
+        mv = None
+        job.execution_mode = "hardware"
+    else:
+        # 1) Model approved + supports the workload.
+        mv = await get_model_version(db, job.model)
+        if (
+            mv is None
+            or mv.trust_status != "approved"
+            or job.workload_type not in (mv.supported_workloads or [])
+        ):
+            raise JobValidationError("model_not_supported")
+
+        # Record the honest execution mode derived from the model runtime.
+        job.execution_mode = "simulated" if mv.runtime == "simulated" else "hardware"
 
     # 2) Input schema for the workload.
-    if (getattr(job, "isolation_tier", None) or "container") in ("sealed", "sealed_pro", "confidential"):
+    if is_v2:
+        pass  # Kit params were validated against the Kit's schema at submit (U1).
+    elif (getattr(job, "isolation_tier", None) or "container") in ("sealed", "sealed_pro", "confidential"):
         # The platform cannot read a private job's input; the sealed host validates it after
         # decrypting. Here we only require that it is there.
         if not getattr(job, "encrypted_input", None) or not getattr(job, "dk_shares", None):
@@ -223,8 +238,28 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
     # 3) GPU fit against a targeted machine (if specified).
     # D5: an AMD (ROCm) GPU job can only run in the container tier in v1; refuse it now rather
     # than queue a job no machine will ever accept.
-    if job.gpu_count and job_gpu_runtime(job) == "rocm" and (job.isolation_tier or "container").lower() not in ROCM_TIERS:
+    # A6: sealed / sealed_pro are allowed through here; is_gpu_compatible then requires the machine's
+    # verdict to name a Sealed image. Confidential (and gvisor / microvm) stay refused.
+    cpu_only = False
+    if is_v2:
+        from app.services import scheduler_v2 as _s2
+
+        cpu_only = _s2.is_cpu_only_job(job)  # CPU-only Kit: gpu_count 1 is a billing slot, not a GPU request
+    if (
+        job.gpu_count
+        and not cpu_only
+        and job_gpu_runtime(job) == "rocm"
+        and (job.isolation_tier or "container").lower() not in (*ROCM_TIERS, *ROCM_SEALED_TIERS)
+    ):
         raise JobValidationError(f"rocm_tier_{(job.isolation_tier or '').lower()}_unsupported", status.HTTP_409_CONFLICT)
+
+    if is_v2 and scheduler_v2_node_count(job) > 1 and not settings.MULTI_NODE_ENABLED:
+        raise JobValidationError("multi_node_disabled", status.HTTP_409_CONFLICT)  # U13: owner decision pending
+    if is_v2 and scheduler_v2_node_count(job) > 1 and (job.isolation_tier or "container").lower() in (
+        "sealed", "sealed_pro", "confidential"
+    ):
+        # U13: the group network gives a rank a network path; privacy tiers never get one and U18 does not cover it.
+        raise JobValidationError("multi_node_private_tier_refused", status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     target: ProviderMachine | None = None
     if job.machine_id is not None:
@@ -234,16 +269,24 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
         tier_ok, reason = _machine_supports_tier_and_policy(target, job)
         if not tier_ok:
             raise JobValidationError(reason or "isolation_tier_not_supported_by_machine", status.HTTP_409_CONFLICT)
-        target_images = await model_image_runtimes(db, mv) if job.execution_mode == "hardware" else None
-        gpu_ok, gpu_reason = is_gpu_compatible(job, target, target_images)
+        target_images = await model_image_runtimes(db, mv) if (job.execution_mode == "hardware" and not is_v2) else None
+        gpu_ok, gpu_reason = (True, None) if cpu_only else is_gpu_compatible(job, target, target_images)
         if not gpu_ok:
             if gpu_reason == "gpus":
                 raise JobValidationError("gpu_count_exceeds_machine")
             raise JobValidationError(gpu_reason or "gpu_incompatible", status.HTTP_409_CONFLICT)
+        if is_v2:
+            fit = scheduler_v2.machine_fit_reason(job, target)
+            if fit == "gpus":
+                raise JobValidationError("gpu_count_exceeds_machine")
+            if fit:
+                raise JobValidationError(f"machine_does_not_fit_{fit}", status.HTTP_409_CONFLICT)
 
     # 4) Estimated cost <= budget cap.
     if job.max_cost is not None:
         price = await _reference_price(db, job, target)
+        if price is not None and cpu_only:
+            price = _s2.quote_price_per_hour(job, price)
         if price is not None:
             fee_rate = await get_active_fee_rate(db)
             breakdown = compute_breakdown(
@@ -259,6 +302,12 @@ async def validate_job(db: AsyncSession, job: Job) -> None:
 # ---------------------------------------------------------------------------
 # Scheduling
 # ---------------------------------------------------------------------------
+def scheduler_v2_node_count(job: Job) -> int:
+    from app.services import scheduler_v2
+
+    return scheduler_v2.node_count_of(job)
+
+
 @dataclass
 class _Candidate:
     machine: ProviderMachine
@@ -279,25 +328,36 @@ async def _eligible_machines(
     result = await db.execute(query)
     candidates: list[_Candidate] = []
     images: Any = _UNSET  # runtimes the model has an image for; looked up once, for hardware GPU jobs
+    from app.services import scheduler_v2 as _s2
+
+    cpu_only_job = _s2.is_cpu_only_job(job)
     for m in result.scalars().all():
         if m.status == "deregistered" or m.asking_price_per_hour is None:
             logger.debug("scheduler skip (deregistered/unpriced): machine=%s", m.id)
+            continue
+        if m.availability == "throttled":
+            # B6: the agent reported GPU temperature at its cap; it resumes by reporting "online".
+            logger.debug("scheduler skip (throttled): machine=%s", m.id)
             continue
         if m.availability != "online" or derive_status(m, now) != "online":
             logger.debug("scheduler skip (offline): machine=%s avail=%s", m.id, m.availability)
             continue
         workloads = m.capability.supported_workloads if m.capability else []
-        if job.workload_type not in (workloads or []):
+        is_v2 = bool(getattr(job, "spec_v2", None))  # U7: a Kit is not a model workload
+        if not is_v2 and job.workload_type not in (workloads or []):
             logger.debug("scheduler skip (workload): machine=%s", m.id)
             continue
         # AMD support (D1/D4/D5): canonical is_gpu_compatible helper
         if images is _UNSET:
             images = (
                 await model_image_runtimes(db, await get_model_version(db, job.model))
-                if job.gpu_count and job.execution_mode == "hardware"
+                if job.gpu_count and job.execution_mode == "hardware" and not is_v2
                 else None
             )
-        gpu_ok, gpu_reason = is_gpu_compatible(job, m, images)
+        if is_v2 and cpu_only_job:
+            gpu_ok, gpu_reason = True, None  # CPU-only Kit: placement is decided by scheduler_v2.machine_fit_reason below
+        else:
+            gpu_ok, gpu_reason = is_gpu_compatible(job, m, images)
         if not gpu_ok:
             logger.debug("scheduler skip (%s): machine=%s", gpu_reason, m.id)
             continue
@@ -313,6 +373,13 @@ async def _eligible_machines(
         if policy_reason is not None:
             logger.debug("scheduler skip (%s): machine=%s", policy_reason, m.id)
             continue
+        if is_v2:
+            from app.services import scheduler_v2
+
+            fit_reason = scheduler_v2.machine_fit_reason(job, m)
+            if fit_reason is not None:
+                logger.debug("scheduler skip (v2 %s): machine=%s", fit_reason, m.id)
+                continue
         used = await active_reservation_slots(db, m.id, now)
         # Challenge / shadow (unbilled) jobs are pinned straight to a machine
         # without a ResourceReservation, so ``active_reservation_slots`` cannot
@@ -453,6 +520,10 @@ async def _create_quote_for_job(
 ) -> Quote:
     fee_rate = await get_active_fee_rate(db)
     price = decimal.Decimal(machine.asking_price_per_hour)
+    if getattr(job, "spec_v2", None):
+        from app.services import scheduler_v2
+
+        price = scheduler_v2.quote_price_per_hour(job, price)  # CPU-only Kit: fraction applied here, nowhere else
     breakdown = compute_breakdown(
         price_per_hour=price,
         estimated_minutes=job.estimated_minutes,
@@ -498,7 +569,22 @@ async def schedule_job(
     # Phase B3: persisted provider reputation outranks the raw completion rate.
     reputation = await reputation_svc.reputation_by_machine(db, machine_ids)
     scored = _score_candidates(candidates, reliability, reputation)
+    if getattr(job, "spec_v2", None):
+        from app.services import scheduler_v2
+
+        scored = scheduler_v2.rerank(job, scored)  # U7: cache affinity
     best, best_score, factors = scored[0]
+    node_group = None
+    if getattr(job, "spec_v2", None) and scheduler_v2_node_count(job) > 1:
+        # U13: multi-node only inside ONE approved datacenter_group with fresh, passing pairwise benchmarks; else wait.
+        from app.services import multi_node
+
+        picked = await multi_node.select_group(db, job, [c.machine for c, _, _ in scored], now)
+        if picked is None:
+            return False
+        node_group = picked
+        by_id = {c.machine.id: (c, sc, f) for c, sc, f in scored}
+        best, best_score, factors = by_id[picked[1][0].id]
 
     # Create the pricing snapshot, then HOLD the authorized amount BEFORE reserving
     # machine capacity (budget protection + no-overspend). The job is still QUEUED
@@ -550,6 +636,10 @@ async def schedule_job(
     )
     await fsm.transition(db, job, fsm.RESERVED, reason="reserved", actor="scheduler")
     await db.flush()
+    if node_group is not None:
+        from app.services import multi_node
+
+        await multi_node.create_group(db, job, node_group[0], node_group[1], schedule_job)
     # Best-effort nudge so a connected agent does not wait out its poll interval.
     # Imported lazily to keep the service layer free of a router-level import
     # cycle; push_job_available never raises and HTTP polling stays the source
@@ -589,9 +679,16 @@ async def run_scheduler(
         job.error_message = "job would exceed a configured spend limit"
         await db.flush()
         return False
+    from app.services import scheduler_v2 as _s2
+
+    if _s2.is_gang_job(job) and not _s2.wait_expired(job, now or utcnow()):
+        # U13: a multi-GPU / multi-node job with no fitting host WAITS (stays QUEUED, no attempt counted)
+        # until MULTI_GPU_MAX_WAIT_SECONDS has passed; only then does it fail no_provider below.
+        await db.flush()
+        return False
     job.attempts_made += 1
     max_retries = int((job.retry_policy or {}).get("max_retries", 0) or 0)
-    if job.attempts_made > max_retries:
+    if job.attempts_made > max_retries or _s2.is_gang_job(job):
         await fsm.transition(db, job, fsm.FAILED, reason="no_provider", actor="scheduler")
         job.error_code = "no_provider"
         job.error_message = "no eligible provider available"

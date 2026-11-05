@@ -40,12 +40,12 @@ A runnable version is in [`examples/quickstart.py`](examples/quickstart.py)
 
 | Method | Endpoint |
 | --- | --- |
-| `register(email, password)` | `POST /v1/auth/register` |
-| `login(email, password)` | `POST /v1/auth/login` |
-| `refresh(refresh_token)` | `POST /v1/auth/refresh` |
-| `list_projects()` | `GET /v1/projects` |
-| `create_project(name)` | `POST /v1/projects` |
-| `create_api_key(project_id, name)` | `POST /v1/projects/{id}/api-keys` |
+| `register(email, password)` | `POST /auth/register` |
+| `login(email, password)` | `POST /auth/login` |
+| `refresh(refresh_token)` | `POST /auth/refresh` |
+| `list_projects()` | `GET /projects` |
+| `create_project(name)` | `POST /projects` |
+| `create_api_key(project_id, name)` | `POST /projects/{id}/api-keys` |
 | `chat_completions(model, messages, ...)` | `POST /v1/chat/completions` |
 | `embeddings(model, input, ...)` | `POST /v1/embeddings` |
 | `search_machines(...)` | `GET /v1/marketplace/machines` (public) |
@@ -141,7 +141,7 @@ with ComputeCoinClient("https://api.computecoin.example") as client:
             max_cost="5.00",
             max_runtime_seconds=300,
             retry_policy={"max_retries": 1},
-            gpu_runtime="cuda",  # "cuda" | "rocm" | "any" (default: "cuda")
+            gpu_runtime="cuda",  # "cuda" | "rocm" | "any" (default: "cuda"). ROCm: isolation_tier container, or sealed/sealed_pro only on hosts proving a Sealed image (owner decision D5 pending); never confidential
             idempotency_key="my-job-1",
         )
     except ValidationError as exc:
@@ -216,6 +216,38 @@ success — no overspend, no fake top-up, no fake payout.
 Types added: `BillingAccount`, `LedgerEntry`, `UsageRecord`, `Usage`,
 `Invoice`/`InvoiceLineItem`, `Dispute`, `ProviderEarnings`, `Payout` — every
 money field is a `str`.
+
+## Private chat streaming and private Kit fan-out (U18)
+
+Both need a platform with privacy on (`PRIVACY_ENABLED`; private streaming also `PRIVACY_STREAMING_ENABLED`). With the
+streaming flag off the server answers `400 streaming_not_supported_for_private`, which is raised unchanged.
+
+```python
+# Private chat stream: messages are encrypted here, chunks come back sealed, you get decrypted text deltas.
+for delta in client.chat.completions.create(
+    model="llama-3-8b", messages=[{"role": "user", "content": "hi"}],
+    stream=True, isolation_tier="sealed",
+):
+    print(delta, end="")
+```
+
+Each chunk is opened with your (per-call) result private key and AAD `ccpp-v1|stream|<job_id>|<seq>|<final>`, then the
+`u32 big-endian length || text || zeros` padding frame is stripped (a length past the payload or a non-zero padding byte is
+an error). A stream without its final chunk raises `PrivateStreamError`. `pad_bytes=256` must equal the platform's
+`PRIVACY_STREAM_PAD_BYTES` (`0` = unpadded). Without a private `isolation_tier`, `stream=True` yields plain text deltas.
+
+```python
+from computecoin import build_private_kit_input
+
+parts = [build_private_kit_input({"image": open("a.png", "rb").read()}, {"scale": 2}),
+         build_private_kit_input({"image": open("b.png", "rb").read()}, {"scale": 2})]
+sub = client.submit_private_fanout(spec=fanout_spec, parts=parts, isolation_tier="sealed")
+sub.fanout                # the server's fan-out view
+sub.result_private_keys   # one per part, same order: KEEP THEM, they open each part's sealed output
+```
+
+The plaintext is `{"inputs": {name: {"b64": ...} | {"text": ...}}, "params": {...}}` (spec ccpp-v1.md, "Private Kit input").
+Every part gets its own Data Key, guardian shares and result keypair; the number of parts must equal the fan-out's part count.
 
 ## Endpoints not yet implemented
 

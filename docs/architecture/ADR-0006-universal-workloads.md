@@ -1,6 +1,6 @@
 # ADR-0006: Universal Workloads — run (almost) anything on ComputeCoin GPUs
 
-Status: **proposed, not built.** Date: 2026-10-27. Builds on [ADR-0003](ADR-0003-isolation.md)
+Status: **proposed; first implementation of its work packages (U1 to U19) exists in the working tree, uncommitted and not owner-approved (see each U-note's own status line).** Date: 2026-10-27. Builds on [ADR-0003](ADR-0003-isolation.md)
 (isolation) and [ADR-0005](ADR-0005-proof-of-privacy.md) (privacy tiers). Owner decisions in section 21.
 
 ---

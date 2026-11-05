@@ -32,14 +32,14 @@ export function LiveStatus() {
   const h = q.data;
   const row = (name: string, ok: boolean | null): { name: string; state: string; tone: Tone } => ({
     name,
-    state: ok === null ? "Checking…" : ok ? "Operational" : "Unavailable",
+    state: ok === null ? "Checking…" : ok ? "Working" : "Not working",
     tone: ok === null ? "neutral" : ok ? "success" : "danger",
   });
   const loading = q.isLoading;
   const rows = [
-    row("API", loading ? null : !unreachable && h?.status === "ok"),
-    row("Database", loading ? null : unreachable ? false : h?.db === "up"),
-    row("Cache and rate limiting", loading ? null : unreachable ? false : h?.redis === "up"),
+    row("ComputeCoin service", loading ? null : !unreachable && h?.status === "ok"),
+    row("Data storage", loading ? null : unreachable ? false : h?.db === "up"),
+    row("Speed and safety limits", loading ? null : unreachable ? false : h?.redis === "up"),
   ];
 
   return (
@@ -49,7 +49,7 @@ export function LiveStatus() {
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             {q.dataUpdatedAt ? `Checked ${new Date(q.dataUpdatedAt).toLocaleTimeString()}` : "Checking…"}
-            {h?.version ? ` · API v${h.version}` : ""}
+            {h?.version ? ` · version ${h.version}` : ""}
           </span>
           <Button variant="outline" size="sm" onClick={() => q.refetch()} disabled={q.isFetching}>
             <RefreshCw className={q.isFetching ? "animate-spin" : undefined} />
@@ -67,7 +67,7 @@ export function LiveStatus() {
       </ul>
       {unreachable ? (
         <p role="alert" className="border-t border-border px-5 py-3 text-sm text-danger">
-          The API could not be reached from your browser just now.
+          We could not reach the ComputeCoin service from your browser. Check your internet connection, then press Refresh. If it keeps failing, the service may be down.
         </p>
       ) : null}
     </div>

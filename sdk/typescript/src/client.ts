@@ -20,6 +20,7 @@ import type {
   BillingAccount,
   CancelAck,
   ChatCompletion,
+  ChatCompletionCreateParams,
   ChatMessage,
   ClientOptions,
   CreateJobParams,
@@ -36,6 +37,8 @@ import type {
   MarketplaceMachine,
   OpenDisputeParams,
   Payout,
+  PrivacyVerifierKey,
+  PrivateFanoutSubmission,
   Project,
   ProviderEarnings,
   PurchaseCreditsParams,
@@ -44,6 +47,7 @@ import type {
   RequestPayoutParams,
   Reservation,
   SearchMachinesParams,
+  SubmitPrivateFanoutParams,
   TokenPair,
   Usage,
   WaitForJobOptions,
@@ -60,17 +64,52 @@ const TERMINAL_JOB_STATES = new Set([
 
 export const DEFAULT_BASE_URL = "https://api.computecoin.example";
 
+/** A readable message from an error body: `detail` is a string for most errors, but an object
+ * (`{"error": {"message", "code"}}` for inference) or an array (request validation) for others. */
+function errorMessage(b: Record<string, unknown>): string {
+  const detail = b["detail"];
+  if (typeof detail === "string" && detail) return detail;
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const d = detail as Record<string, unknown>;
+    const err = d["error"] && typeof d["error"] === "object" ? (d["error"] as Record<string, unknown>) : d;
+    return typeof err["message"] === "string" && err["message"] ? err["message"] : JSON.stringify(detail);
+  }
+  if (detail) return JSON.stringify(detail);
+  return typeof b["message"] === "string" && b["message"] ? b["message"] : JSON.stringify(b);
+}
+
+/** The machine-readable reason (`insufficient_credits`, `budget_exceeded`...), always a string or undefined. */
+function errorCode(body: unknown, preferBodyCode = false): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as Record<string, unknown>;
+  const detail = b["detail"];
+  let fromDetail: unknown;
+  if (typeof detail === "string") fromDetail = detail;
+  else if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const d = detail as Record<string, unknown>;
+    const err = d["error"] && typeof d["error"] === "object" ? (d["error"] as Record<string, unknown>) : d;
+    fromDetail = err["code"];
+  }
+  const order = preferBodyCode ? [b["code"], fromDetail] : [fromDetail, b["code"]];
+  for (const c of order) if (typeof c === "string" && c) return c;
+  return undefined;
+}
+
 export class ComputeCoinClient {
   private readonly baseUrl: string;
   private accessToken: string | undefined;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
+  private readonly guardianPin: string | undefined;
+  private readonly requireGuardianPin: boolean;
 
   constructor(baseUrl: string = DEFAULT_BASE_URL, options: ClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.accessToken = options.accessToken;
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.guardianPin = options.guardianPin;
+    this.requireGuardianPin = options.requireGuardianPin ?? false;
     if (typeof this.fetchImpl !== "function") {
       throw new Error("No fetch implementation available; pass options.fetch.");
     }
@@ -133,7 +172,7 @@ export class ComputeCoinClient {
     try {
       body = await resp.json();
       const b = body as Record<string, unknown>;
-      message = (b["detail"] as string) ?? (b["message"] as string) ?? JSON.stringify(b);
+      message = errorMessage(b);
     } catch {
       body = undefined;
       message = resp.statusText;
@@ -149,43 +188,28 @@ export class ComputeCoinClient {
     }
     if (status === 401 || status === 403) throw new AuthenticationError(status, message, body);
     if (status === 402) {
-      let code: string | undefined;
-      if (body && typeof body === "object") {
-        const b = body as Record<string, unknown>;
-        code = (b["detail"] as string) ?? (b["code"] as string) ?? undefined;
-      }
-      throw new PaymentRequiredError(status, message, body, code);
+      throw new PaymentRequiredError(status, message, body, errorCode(body));
     }
     if (status === 429) throw new RateLimitError(status, message, body);
     if (status === 409) {
-      let code: string | undefined;
-      if (body && typeof body === "object") {
-        const b = body as Record<string, unknown>;
-        code = (b["detail"] as string) ?? (b["code"] as string) ?? undefined;
-      }
-      throw new ConflictError(status, message, body, code);
+      throw new ConflictError(status, message, body, errorCode(body));
     }
     if (status === 422) {
-      let code: string | undefined;
-      if (body && typeof body === "object") {
-        const b = body as Record<string, unknown>;
-        code = (b["code"] as string) ?? (b["detail"] as string) ?? undefined;
-      }
-      throw new ValidationError(status, message, body, code);
+      throw new ValidationError(status, message, body, errorCode(body, true));
     }
     throw new ApiError(status, message, body);
   }
 
   // -- auth ---------------------------------------------------------------- //
   async register(email: string, password: string): Promise<unknown> {
-    return this.request("POST", "/v1/auth/register", {
+    return this.request("POST", "/auth/register", {
       body: { email, password },
       auth: false,
     });
   }
 
   async login(email: string, password: string): Promise<TokenPair> {
-    const pair = await this.request<TokenPair>("POST", "/v1/auth/login", {
+    const pair = await this.request<TokenPair>("POST", "/auth/login", {
       body: { email, password },
       auth: false,
     });
@@ -194,7 +218,7 @@ export class ComputeCoinClient {
   }
 
   async refresh(refreshToken: string): Promise<TokenPair> {
-    const pair = await this.request<TokenPair>("POST", "/v1/auth/refresh", {
+    const pair = await this.request<TokenPair>("POST", "/auth/refresh", {
       body: { refresh_token: refreshToken },
       auth: false,
     });
@@ -204,17 +228,19 @@ export class ComputeCoinClient {
 
   // -- projects ------------------------------------------------------------ //
   async listProjects(): Promise<Project[]> {
-    return this.request<Project[]>("GET", "/v1/projects");
+    return this.request<Project[]>("GET", "/projects");
   }
 
   async createProject(name: string): Promise<Project> {
-    return this.request<Project>("POST", "/v1/projects", { body: { name } });
+    return this.request<Project>("POST", "/projects", { body: { name } });
   }
 
   async createApiKey(projectId: string, name?: string): Promise<ApiKey> {
-    return this.request<ApiKey>("POST", `/v1/projects/${projectId}/api-keys`, {
+    const k = await this.request<ApiKey>("POST", `/projects/${projectId}/api-keys`, {
       body: { name: name ?? null },
     });
+    // The API names the one-time secret `api_key`; expose it as `key` as documented.
+    return k.key === undefined && k.api_key !== undefined ? { ...k, key: k.api_key } : k;
   }
 
   // -- OpenAI-compatible inference ----------------------------------------- //
@@ -364,7 +390,7 @@ export class ComputeCoinClient {
       `/v1/jobs/${id}/cancel`,
       { body: {} },
     );
-    return data ?? { job_id: id, cancellation_requested: true };
+    return data ?? { job_id: id, cancel_requested: true, cancellation_requested: true };
   }
 
   /**
@@ -415,7 +441,8 @@ export class ComputeCoinClient {
 
   /** The customer's own double-entry ledger entries (append-only). */
   async getLedger(): Promise<LedgerEntry[]> {
-    return this.request<LedgerEntry[]>("GET", "/v1/billing/ledger");
+    const data = await this.request<LedgerEntry[] | { items?: LedgerEntry[] }>("GET", "/v1/billing/ledger");
+    return Array.isArray(data) ? data : data.items ?? [];
   }
 
   /** Spend summary + per-job usage records (estimated vs actual kept separate). */
@@ -463,5 +490,119 @@ export class ComputeCoinClient {
 
   async listPayouts(): Promise<Payout[]> {
     return this.request<Payout[]>("GET", "/v1/provider/payouts");
+  }
+  // -- U18: private chat streaming and private Kit fan-out (Node only: uses node:crypto) -------- //
+  async getPrivacyVerifierKey(): Promise<PrivacyVerifierKey> {
+    return this.request<PrivacyVerifierKey>("GET", "/v1/privacy/verifier-key");
+  }
+
+  private async guardianSet(
+    guardians?: Record<string, string>,
+    threshold?: number,
+  ): Promise<{ guardians: Record<string, string>; threshold: number }> {
+    const { checkGuardianPin } = await import("./private.js");
+    if (!guardians || threshold === undefined) {
+      const keys = await this.getPrivacyVerifierKey();
+      guardians = guardians ?? keys.guardians ?? {};
+      threshold = threshold ?? keys.threshold ?? 2;
+      checkGuardianPin(guardians, threshold, this.guardianPin, this.requireGuardianPin);
+    } else if (this.guardianPin) {
+      checkGuardianPin(guardians, threshold, this.guardianPin);
+    }
+    return { guardians, threshold };
+  }
+
+  /**
+   * `client.chat.completions.create({model, messages, stream: true, isolation_tier: "sealed"})` returns an async iterable of
+   * DECRYPTED text deltas (messages encrypted here, chunks opened and un-padded here). `stream: false` returns the
+   * ChatCompletion as `chatCompletions` does. A non-private `stream: true` yields plain text deltas. With the platform's
+   * PRIVACY_STREAMING_ENABLED off the server answers 400 `streaming_not_supported_for_private`, thrown as an ApiError.
+   */
+  readonly chat = {
+    completions: {
+      create: (params: ChatCompletionCreateParams): any => this.chatCreate(params),
+    },
+  };
+
+  private chatCreate(params: ChatCompletionCreateParams): any {
+    const { stream, padBytes, guardians, threshold, ...rest } = params;
+    const tier = String(rest.isolation_tier ?? "").toLowerCase();
+    const isPrivate = ["sealed", "sealed_pro", "confidential"].includes(tier);
+    if (!stream) {
+      if (isPrivate) throw new Error("private chat is streamed: pass stream: true (or submit a private job for a one-shot result)");
+      return this.chatCompletions(rest as { model: string; messages: ChatMessage[] });
+    }
+    return isPrivate ? this.privateChatStream(rest, padBytes, guardians, threshold) : this.plainChatStream(rest);
+  }
+
+  private async streamBody(payload: Record<string, unknown>): Promise<ReadableStream<Uint8Array>> {
+    const resp = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: this.headers(true),
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) await this.handle(resp); // throws the typed error
+    if (!resp.body) throw new Error("streaming is not supported by this fetch implementation");
+    return resp.body;
+  }
+
+  private async *plainChatStream(rest: Record<string, unknown>): AsyncGenerator<string> {
+    const { iterSseData } = await import("./private.js");
+    const body = await this.streamBody({ ...rest, stream: true });
+    for await (const ev of iterSseData(body)) {
+      const e = ev as { error?: { message?: string; code?: string }; choices?: Array<{ delta?: { content?: string } }> };
+      if (e.error) throw new ApiError(200, String(e.error.message ?? e.error.code), e);
+      for (const c of e.choices ?? []) if (c.delta?.content) yield c.delta.content;
+    }
+  }
+
+  private async *privateChatStream(
+    rest: Record<string, unknown>,
+    padBytes: number | undefined,
+    guardians: Record<string, string> | undefined,
+    threshold: number | undefined,
+  ): AsyncGenerator<string> {
+    const { generateX25519Keypair, preparePrivateInput, iterPrivateText, buildPrivateChatInput, DEFAULT_PAD_BYTES } = await import("./private.js");
+    const g = await this.guardianSet(guardians, threshold);
+    const plain = buildPrivateChatInput(rest.messages as ChatMessage[], {
+      max_tokens: rest.max_tokens as number | undefined,
+      temperature: rest.temperature as number | undefined,
+    });
+    const kp = generateX25519Keypair();
+    const prepared = preparePrivateInput(plain, g.guardians, g.threshold, true);
+    const body = await this.streamBody({
+      ...rest,
+      messages: [{ role: "user", content: "sealed" }], // placeholder; the real messages are in encrypted_input
+      stream: true,
+      encrypted_input: prepared.encrypted_input,
+      dk_shares: prepared.dk_shares,
+      result_public_key: kp.publicKeyHex,
+    });
+    yield* iterPrivateText(body, kp.privateKeyHex, padBytes ?? DEFAULT_PAD_BYTES);
+  }
+
+  /**
+   * Encrypt one plaintext per part here and POST `/v1/jobs/v2/fanout` with `private_parts`. Keep `resultPrivateKeys`
+   * (one per part, same order): they are the only way to open the parts' sealed outputs.
+   */
+  async submitPrivateFanout(params: SubmitPrivateFanoutParams): Promise<PrivateFanoutSubmission> {
+    const { preparePrivateFanoutParts } = await import("./private.js");
+    const tier = params.isolationTier ?? "sealed";
+    if (!["sealed", "sealed_pro", "confidential"].includes(tier)) throw new Error("a private fan-out needs a private isolationTier");
+    const g = await this.guardianSet(params.guardians, params.threshold);
+    const { parts, resultPrivateKeys } = preparePrivateFanoutParts(params.parts, g.guardians, g.threshold);
+    const body: Record<string, unknown> = {
+      spec: params.spec,
+      isolation_tier: tier,
+      required_gpu_runtime: params.requiredGpuRuntime ?? "cuda",
+      private_parts: parts,
+    };
+    if (params.projectId !== undefined) body["project_id"] = params.projectId;
+    if (params.machineId !== undefined) body["machine_id"] = params.machineId;
+    const fanout = await this.request<Record<string, unknown>>("POST", "/v1/jobs/v2/fanout", {
+      body,
+      ...(params.idempotencyKey !== undefined ? { headers: { "Idempotency-Key": params.idempotencyKey } } : {}),
+    });
+    return { fanout, resultPrivateKeys };
   }
 }

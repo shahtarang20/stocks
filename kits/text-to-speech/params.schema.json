@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "texts"
+  ],
+  "properties": {
+    "texts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "voice": {
+      "type": "string",
+      "enum": [
+        "af_heart",
+        "af_bella",
+        "am_michael",
+        "bf_emma",
+        "bm_george"
+      ],
+      "default": "af_heart"
+    },
+    "speed": {
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 2,
+      "default": 1
+    }
+  }
+}

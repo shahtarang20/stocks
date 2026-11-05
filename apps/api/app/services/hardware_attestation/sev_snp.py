@@ -2,7 +2,8 @@
 
 Evidence (hex / PEM):
 
-    {"report": <the 1184-byte ATTESTATION_REPORT>, "vcek_cert": <PEM>, "ask_cert": <PEM>}
+    {"report": <the 1184-byte ATTESTATION_REPORT>, "vcek_cert": <PEM>, "ask_cert": <PEM>,
+     "crls": [<AMD KDS CRL, PEM / hex DER / base64 DER>, ...]}
 
 Checks, all on the signed report bytes (AMD SEV-SNP ABI, ATTESTATION_REPORT):
 1. VCEK -> ASK -> pinned ARK (AMD signs these with RSA-PSS; the chain check follows each cert);
@@ -10,12 +11,17 @@ Checks, all on the signed report bytes (AMD SEV-SNP ABI, ATTESTATION_REPORT):
    covers bytes 0x000..0x29F;
 3. REPORT_DATA (0x50, 64 bytes) == SHA-512(nonce);
 4. the guest policy (0x08) does not allow debugging (bit 19);
-5. MEASUREMENT (0x90, 48 bytes) is returned from the signed bytes; it must equal
+5. revocation (P2, R5): a current CRL signed by the ASK must cover the VCEK (``sev_snp_revocation_unknown``
+   if none, ``sev_snp_certificate_revoked`` if listed); a CRL signed by the ARK covering the ASK is
+   honoured when present. Format of AMD KDS ``/vcek/v1/{product}/crl`` is unverified (R7) until a
+   recorded CRL is added. ``context["legacy_collateral_ok"]`` (tests only) tolerates a MISSING CRL.
+6. MEASUREMENT (0x90, 48 bytes) is returned from the signed bytes; it must equal
    ``expected_measurements["measurement"]`` when given (the caller matches it to a trusted image).
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import struct
 from typing import Any
@@ -32,6 +38,7 @@ from app.services.hardware_attestation import (
     load_pem_certificate,
     verify_chain,
 )
+from app.services.hardware_attestation.revocation import check_path_revocation, parse_crls
 
 REPORT_SIZE = 0x4A0
 SIGNED_END = 0x2A0
@@ -66,7 +73,12 @@ class SEVSNPVerifier:
         # 1. VCEK -> ASK -> pinned ARK.
         vcek = load_pem_certificate(evidence.get("vcek_cert"), "VCEK certificate")
         ask = [load_pem_certificate(evidence["ask_cert"], "ASK certificate")] if evidence.get("ask_cert") else []
-        verify_chain(vcek, ask, root_certs, code="sev_snp_bad_certificate_chain")
+        now = (context or {}).get("now") or dt.datetime.now(dt.timezone.utc)
+        path = verify_chain(vcek, ask, root_certs, code="sev_snp_bad_certificate_chain", now=now)
+        check_path_revocation(
+            path, crls=parse_crls(evidence.get("crls"), "sev_snp"), prefix="sev_snp", now=now,
+            required="leaf", allow_missing=bool((context or {}).get("legacy_collateral_ok")),
+        )
 
         # 2. VCEK signature over the report body.
         if struct.unpack_from("<I", report, 0x34)[0] != SIG_ALGO_ECDSA_P384_SHA384:

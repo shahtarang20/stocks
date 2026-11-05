@@ -12,7 +12,7 @@
   --surface: 0 0% 100%;
   --surface-2: 214 32% 96%;
   --border: 214 25% 88%;
-  --input: 214 25% 85%;
+  --input: 215 16% 57%; /* form-control borders: >= 3:1 on the page (WCAG 1.4.11) */
   --ring: 221 83% 53%;
   --foreground: 222 30% 12%;
   --muted: 215 20% 92%;
@@ -20,14 +20,15 @@
 
   --primary: 221 83% 53%;
   --primary-foreground: 0 0% 100%;
-  --success: 152 55% 36%;
+  --success: 152 60% 28%;
   --success-foreground: 0 0% 100%;
-  --warning: 32 90% 44%;
+  --warning: 32 90% 32%;
   --warning-foreground: 0 0% 100%;
   --danger: 0 72% 48%;
   --danger-foreground: 0 0% 100%;
 
   --radius: 0.625rem;
+  color-scheme: light;
 }
 
 .dark {
@@ -35,7 +36,7 @@
   --surface: 222 28% 10%;
   --surface-2: 221 24% 15%;
   --border: 220 20% 20%;
-  --input: 220 20% 22%;
+  --input: 218 14% 42%;
   --ring: 217 91% 60%;
   --foreground: 210 30% 96%;
   --muted: 220 20% 16%;
@@ -49,6 +50,7 @@
   --warning-foreground: 40 40% 10%;
   --danger: 0 72% 60%;
   --danger-foreground: 0 30% 10%;
+  color-scheme: dark;
 }
 
 * {
@@ -65,6 +67,30 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+::selection {
+  background-color: hsl(var(--primary) / 0.28);
+}
+
+/* Native checkboxes and radios pick up the brand colour. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: hsl(var(--primary));
+}
+
+/* Anchor jumps land below the sticky header. */
+:target,
+h2[id],
+h3[id] {
+  scroll-margin-top: 5rem;
 }
 
 /* Grid backdrop used in the hero only. */
@@ -82,4 +108,62 @@ body {
     hsl(var(--primary) / 0.28),
     transparent 70%
   );
+}
+
+/* Accessibility: visible keyboard focus on every interactive element that does not
+   set its own ring, and a skip link that appears on focus. */
+a:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+/* Dialogs: opacity only, so the centring transform on the content is untouched. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog-overlay[data-state="open"],
+.dialog-content[data-state="open"] {
+  animation: overlay-in 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

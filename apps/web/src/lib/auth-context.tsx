@@ -24,6 +24,7 @@ import {
   ApiError,
   clearStoredTokens,
   getStoredAccessToken,
+  SESSION_EXPIRED_EVENT,
   getStoredRefreshToken,
   type CurrentUser,
 } from "./api";
@@ -43,7 +44,11 @@ interface AuthContextValue {
   /** Authoritative admin status from /auth/me */
   isAdmin: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    aup?: { accept_aup: boolean; aup_version: string },
+  ) => Promise<void>;
   logout: () => void;
   /** Re-read /auth/me (after a profile change). */
   refreshUser: () => Promise<void>;
@@ -97,22 +102,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // The API client could not renew the session (refresh token expired or revoked): sign out here so
+  // the route guard sends the user to /login instead of leaving a page full of 401 errors.
+  useEffect(() => {
+    const onExpired = () => {
+      clearStoredTokens();
+      setUser(null);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
+
   const login = useCallback(async (email: string, password: string) => {
     await api.login({ email, password });
     const me = await api.getMe();
     setUser(me);
   }, []);
 
-  const register = useCallback(async (email: string, password: string) => {
-    await api.register({ email, password });
+  const register = useCallback(
+    async (email: string, password: string, aup?: { accept_aup: boolean; aup_version: string }) => {
+    await api.register({ email, password, ...(aup ?? {}) });
     // Log in immediately after a successful registration
     await api.login({ email, password });
     const me = await api.getMe();
     setUser(me);
-  }, []);
+    },
+    [],
+  );
 
   const logout = useCallback(() => {
-    clearStoredTokens();
+    // api.logout() snapshots the stored credentials synchronously and clears
+    // them itself; clearing first would send an unauthenticated, CSRF-less
+    // request that the API rejects, leaving the server session alive.
     api.logout().catch(() => {});
     setUser(null);
   }, []);

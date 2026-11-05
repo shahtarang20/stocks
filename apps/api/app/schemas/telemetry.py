@@ -8,17 +8,20 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+# Integer DB columns are 32-bit: an unbounded value from an agent would overflow on Postgres (500 for the whole batch).
+_INT32_MAX = 2**31 - 1
+
 
 # --------------------------------------------------------------------------- #
 # Ingestion Schemas
 # --------------------------------------------------------------------------- #
 class MachineTelemetryItem(BaseModel):
     timestamp: datetime | None = None
-    gpu_index: int = Field(default=0, ge=0)
+    gpu_index: int = Field(default=0, ge=0, le=1024)
     gpu_util_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     mem_util_pct: float | None = Field(default=None, ge=0.0, le=100.0)
-    mem_used_mb: int | None = Field(default=None, ge=0)
-    mem_total_mb: int | None = Field(default=None, ge=0)
+    mem_used_mb: int | None = Field(default=None, ge=0, le=_INT32_MAX)
+    mem_total_mb: int | None = Field(default=None, ge=0, le=_INT32_MAX)
     temp_c: float | None = Field(default=None, ge=-50.0, le=150.0)
     power_w: float | None = Field(default=None, ge=0.0)
     fan_speed_pct: float | None = Field(default=None, ge=0.0, le=100.0)
@@ -38,9 +41,9 @@ class JobTelemetryItem(BaseModel):
     job_id: uuid.UUID
     timestamp: datetime | None = None
     gpu_util_pct: float | None = Field(default=None, ge=0.0, le=100.0)
-    mem_used_mb: int | None = Field(default=None, ge=0)
+    mem_used_mb: int | None = Field(default=None, ge=0, le=_INT32_MAX)
     tokens_per_sec: float | None = Field(default=None, ge=0.0)
-    step_count: int | None = Field(default=None, ge=0)
+    step_count: int | None = Field(default=None, ge=0, le=_INT32_MAX)
     loss: float | None = None
     extra_metrics: dict[str, Any] | None = None
 

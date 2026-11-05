@@ -1,0 +1,68 @@
+name: load-test
+
+# Manual only. Runs Locust against a throwaway local stack inside the runner, never
+# against a deployed environment.
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: "Concurrent users"
+        default: "50"
+      spawn_rate:
+        description: "Users spawned per second"
+        default: "5"
+      duration:
+        description: "Run time (e.g. 5m)"
+        default: "5m"
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LOAD_USER_EMAIL: ${{ secrets.LOAD_USER_EMAIL }}
+      LOAD_USER_PASSWORD: ${{ secrets.LOAD_USER_PASSWORD }}
+      LOAD_MACHINE_ID: ${{ secrets.LOAD_MACHINE_ID }}
+      LOAD_MACHINE_SECRET: ${{ secrets.LOAD_MACHINE_SECRET }}
+      LOAD_MODEL: ${{ vars.LOAD_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Start local stack
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/health && exit 0
+            sleep 3
+          done
+          docker compose logs
+          exit 1
+      - name: Install Locust
+        run: pip install -r tests/load/requirements.txt
+      - name: Run load test
+        # Inputs go through env, never interpolated into the script (shell injection via workflow_dispatch inputs).
+        env:
+          LOAD_USERS: ${{ inputs.users }}
+          LOAD_SPAWN_RATE: ${{ inputs.spawn_rate }}
+          LOAD_DURATION: ${{ inputs.duration }}
+        run: |
+          mkdir -p out
+          locust -f tests/load/locustfile.py --host http://localhost:8000 --headless \
+            -u "$LOAD_USERS" -r "$LOAD_SPAWN_RATE" -t "$LOAD_DURATION" \
+            --csv out/load --only-summary
+      - name: Check regression thresholds
+        run: python tests/load/check_thresholds.py out/load tests/load/thresholds.json
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results
+          path: out/
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v

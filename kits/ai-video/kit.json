@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "slug": "ai-video",
+  "version": "1.0.0",
+  "name": "AI video generation (CogVideoX-2B)",
+  "description": "Text-to-video (optionally image-to-video when the image-conditioned weights are baked, see README) with a fixed seed per prompt (seed + prompt index); frames are encoded to mp4 with a bit-exact ffmpeg libx264 command. Model: CogVideoX-2B (Apache-2.0, OWNER DECISION to confirm); see kits/ai-video/README.md.",
+  "category": "video",
+  "image": "ghcr.io/computecoin/kit-ai-video@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "prompts"
+    ],
+    "properties": {
+      "prompts": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+        "default": 0
+      },
+      "width": {
+        "type": "integer",
+        "minimum": 256,
+        "maximum": 720,
+        "multipleOf": 16,
+        "default": 720
+      },
+      "height": {
+        "type": "integer",
+        "minimum": 256,
+        "maximum": 480,
+        "multipleOf": 16,
+        "default": 480
+      },
+      "num_frames": {
+        "type": "integer",
+        "enum": [
+          9,
+          17,
+          25,
+          33,
+          41,
+          49
+        ],
+        "default": 49
+      },
+      "steps": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 50,
+        "default": 50
+      },
+      "guidance_scale": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 12,
+        "default": 6
+      },
+      "fps": {
+        "type": "integer",
+        "minimum": 6,
+        "maximum": 30,
+        "default": 8
+      },
+      "crf": {
+        "type": "integer",
+        "minimum": 14,
+        "maximum": 28,
+        "default": 18
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "image",
+      "kind": "file",
+      "required": false
+    }
+  ],
+  "outputs": [
+    {
+      "name": "videos",
+      "path": "/out/videos"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 24,
+    "min_compute_capability": "8.0",
+    "cpu": 4,
+    "ram_gb": 48,
+    "disk_gb": 60
+  },
+  "billing_hints": {
+    "unit": "video_second",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "psnr_ssim",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {
+      "min_mean_psnr_db": 22.0,
+      "min_frame_psnr_db": 16.0,
+      "min_mean_ssim": 0.7,
+      "max_duration_diff_s": 0.5,
+      "max_frame_count_diff": 0
+    },
+    "owner_decision": "OWNER DECISION: diffusion video differs across GPU models by more than a re-encode does, so these PSNR/SSIM bounds are deliberately loose conservative placeholders (mean PSNR 22 dB, worst frame 16 dB, mean SSIM 0.70, equal frame count) to be tuned with cross-GPU benchmark data (U5.3). Unreadable or missing reference is inconclusive, never a failure of the host. Do not publish with redundancy sampling on until the owner decides."
+  }
+}

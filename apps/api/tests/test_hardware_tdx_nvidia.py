@@ -25,6 +25,9 @@ from app.services.hardware_attestation.tdx import SGX_EXT_OID, TDXVerifier
 
 NONCE = "tee-nonce-2468"
 NOW = dt.datetime.now(dt.timezone.utc)
+# R9: the pre-P2 tests build evidence without CRLs / RIMs / module identity; fail-closed defaults now
+# refuse that, so these helpers opt in to the tests-only tolerance of MISSING collateral.
+LEGACY = {"legacy_collateral_ok": True}
 
 
 def _cert(subject, key, issuer=None, issuer_key=None, ca=False, extensions=(), hash_alg=None):
@@ -94,7 +97,7 @@ class Tdx:
     def __init__(self, comps=None, pcesvn=10):
         self.root_key = ec.generate_private_key(ec.SECP256R1())
         self.root = _cert("Intel SGX Root CA", self.root_key, ca=True)
-        ca_key = ec.generate_private_key(ec.SECP256R1())
+        ca_key = self.ca_key = ec.generate_private_key(ec.SECP256R1())
         self.pck_ca = _cert("Intel SGX PCK Platform CA", ca_key, "Intel SGX Root CA", self.root_key, ca=True)
         self.pck_key = ec.generate_private_key(ec.SECP256R1())
         self.fmspc = bytes.fromhex("00806f050000")
@@ -149,7 +152,7 @@ class Tdx:
 
     def verify(self, quote=None, collateral=None, nonce=NONCE, expected=None, roots=None):
         ev = {"quote": quote or self.quote(), "collateral": collateral or self.collateral()}
-        return TDXVerifier().verify(ev, nonce, expected, [self.root] if roots is None else roots)
+        return TDXVerifier().verify(ev, nonce, expected, [self.root] if roots is None else roots, LEGACY)
 
 
 @pytest.fixture
@@ -217,7 +220,7 @@ def test_tdx_truncated_quotes_are_refused(tdx, cut):
 
 class Gpu:
     def __init__(self):
-        root_key = ec.generate_private_key(ec.SECP384R1())
+        root_key = self.root_key = ec.generate_private_key(ec.SECP384R1())
         self.root = _cert("NVIDIA Device Identity CA", root_key, ca=True, hash_alg=hashes.SHA384())
         self.key = ec.generate_private_key(ec.SECP384R1())
         self.cert = _cert("GH100 A01 FSP BROM", self.key, "NVIDIA Device Identity CA", root_key, hash_alg=hashes.SHA384())
@@ -233,7 +236,7 @@ class Gpu:
         return {"request": request.hex(), "response": (unsigned + sig).hex(), "certificate_chain": [_pem(self.cert)]}
 
     def verify(self, ev=None, nonce=NONCE, expected=None, roots=None):
-        return NvidiaCCVerifier().verify(ev or self.evidence(), nonce, expected, [self.root] if roots is None else roots)
+        return NvidiaCCVerifier().verify(ev or self.evidence(), nonce, expected, [self.root] if roots is None else roots, LEGACY)
 
 
 @pytest.fixture

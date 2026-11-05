@@ -53,10 +53,10 @@ const STATUS: Record<
 
 /** How a usage number was obtained. Shown on every card that has one. */
 const SOURCE_LABEL: Record<string, string> = {
-  measured: "counted by us — estimate",
-  vendor_api: "read from vendor",
-  manual: "entered by hand",
-  unavailable: "no usage API",
+  measured: "counted by ComputeCoin (an estimate)",
+  vendor_api: "read from the service itself",
+  manual: "typed in by hand",
+  unavailable: "the service gives no usage numbers",
 };
 
 function UsageBar({ pct, status }: { pct: number; status: string }) {
@@ -122,8 +122,8 @@ function ServiceCard({ v }: { v: VendorCard }) {
                 {v.measurable
                   ? "No usage reading yet."
                   : v.quota_limit
-                    ? "Usage cannot be read automatically."
-                    : "Usage-billed — no fixed ceiling."}
+                    ? "Usage cannot be read automatically. Check the service's own dashboard."
+                    : "Billed by how much is used. There is no fixed limit."}
               </span>
             </div>
           )}
@@ -183,8 +183,7 @@ function ServiceCard({ v }: { v: VendorCard }) {
             </span>
           ) : (
             <span>
-              Renewal date not set — add it to get a reminder before you are
-              charged.
+              No renewal date saved. Add one to get a reminder before you are charged.
             </span>
           )}
         </div>
@@ -250,7 +249,7 @@ export default function AdminVendorsPage() {
     <>
       <ConsolePageHeader
         title="Third-party services"
-        description="Every external service ComputeCoin depends on, its quota, its cost and its renewal date. Usage figures show where they came from — a number counted by us is an estimate, not the vendor's invoice."
+        description="These are the outside companies ComputeCoin pays to run (for example email, payments and hosting). Check how much of each limit is used, what it costs and when it renews. Select Check now to refresh. A number counted by ComputeCoin is an estimate, not a bill."
         action={
           <Button
             variant="outline"
@@ -296,9 +295,8 @@ export default function AdminVendorsPage() {
             </span>
             {s.services_without_cost > 0 ? (
               <span className="text-amber-400">
-                Partial — {s.services_without_cost} service
-                {s.services_without_cost === 1 ? "" : "s"} have no cost set, so
-                this is not your full bill.
+                Not the full bill: {s.services_without_cost} service
+                {s.services_without_cost === 1 ? " has" : "s have"} no cost saved yet.
               </span>
             ) : null}
           </CardContent>
@@ -326,7 +324,7 @@ export default function AdminVendorsPage() {
                   onClick={() => acknowledge.mutate(a.id)}
                   disabled={acknowledge.isPending}
                 >
-                  Dismiss
+                  Mark as seen
                 </Button>
               </div>
             ))}
@@ -344,13 +342,13 @@ export default function AdminVendorsPage() {
         <Card>
           <CardContent className="flex items-center gap-2 p-6 text-sm text-red-400">
             <AlertTriangle className="h-4 w-4" />
-            Could not load services.
+            We could not load the services. Refresh the page to try again.
           </CardContent>
         </Card>
       ) : list.length === 0 ? (
         <Card>
           <CardContent className="p-6 text-sm text-muted-foreground">
-            No services configured yet.
+            No services are listed yet. The engineering team adds them.
           </CardContent>
         </Card>
       ) : (

@@ -44,13 +44,13 @@ class JobCreate(BaseModel):
     machine_id: uuid.UUID | None = None
     project_id: uuid.UUID | None = None
     gpu_count: int = Field(default=1, ge=1, le=64)
-    estimated_minutes: int = Field(default=1, gt=0)
+    estimated_minutes: int = Field(default=1, gt=0, le=525_600)  # <= 1 year; an unbounded int overflows the DB column (500)
     # A spending cap must be positive — a negative/zero budget is rejected at
     # validation (defense-in-depth; the hold/budget math never sees a negative).
     max_cost: decimal.Decimal | None = Field(default=None, gt=0)
-    max_runtime_seconds: int | None = Field(default=None, gt=0)
+    max_runtime_seconds: int | None = Field(default=None, gt=0, le=31_536_000)
     retry_policy: RetryPolicy | None = None
-    priority: int = Field(default=0, ge=0)
+    priority: int = Field(default=0, ge=0, le=1_000_000)
     isolation_tier: str = Field(
         default="container", pattern="^(container|open|gvisor|microvm|sealed|sealed_pro|confidential)$"
     )
@@ -63,6 +63,19 @@ class JobCreate(BaseModel):
     value_at_risk: decimal.Decimal | None = Field(
         default=None, ge=0, le=decimal.Decimal("1000000000"), max_digits=12, decimal_places=2
     )
+
+    # B5: {"egress": ["host:port", ...]}; default none. Validated and normalized below; refused for privacy tiers.
+    network_policy: dict | None = None
+
+    @model_validator(mode="after")
+    def _network_policy_valid(self) -> "JobCreate":
+        from app.services.network_policy import NetworkPolicyError, validate_network_policy
+
+        try:
+            self.network_policy = validate_network_policy(self.network_policy, isolation_tier=self.isolation_tier)
+        except NetworkPolicyError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
 
     @model_validator(mode="after")
     def _privacy_fields_match_tier(self) -> "JobCreate":
@@ -94,6 +107,7 @@ class JobOut(BaseModel):
     execution_mode: str
     isolation_tier: str = "container"
     required_gpu_runtime: str = "cuda"
+    network_policy: dict | None = None
     machine_id: uuid.UUID | None = None
     reservation_id: uuid.UUID | None = None
     gpu_count: int
@@ -197,6 +211,8 @@ class ClaimResponse(BaseModel):
     isolation_tier: str = "container"
     limits: ClaimLimits
     image_digest: str | None = None
+    # B5: validated egress allowlist ({"egress": [...]}) or null for no network.
+    network_policy: dict | None = None
     artifact_upload: ArtifactUploadGrant
     lease_expires_at: dt.datetime
     encrypted_input: dict | None = None
@@ -208,6 +224,8 @@ class ClaimResponse(BaseModel):
     # this job), then calls POST /v1/agents/jobs/{job_id}/keys with the job-bound verdict.
     key_attestation_required: bool = False
     key_attestation_nonce: str | None = None
+    # U18: the agent seals each stream chunk to result_public_key and relays only ciphertext.
+    stream_sealed: bool = False
 
 
 class JobHeartbeatRequest(BaseModel):
@@ -230,7 +248,11 @@ class JobLogsAppendResponse(BaseModel):
 
 
 class ResultArtifactRef(BaseModel):
-    artifact_id: uuid.UUID
+    # v1 receipts carry the artifact id from the upload grant. v2 (Kit) receipts carry {name, sha256, size, file_id} for an
+    # output uploaded through the data plane and NO artifact_id: it used to be required, so every Kit job result was a 400.
+    artifact_id: uuid.UUID | None = None
+    file_id: uuid.UUID | None = None
+    name: str | None = Field(default=None, max_length=255)
     kind: str = "output"
     sha256: str | None = None
     size: int | None = None

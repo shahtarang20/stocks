@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "slug": "batch-embeddings",
+  "version": "1.0.0",
+  "name": "Batch text embeddings",
+  "description": "Computes sentence embeddings for a list of texts with one baked encoder model (transformers, mean pooling) and writes a NumPy matrix and the id list. Licences: see kits/batch-embeddings/README.md.",
+  "category": "inference",
+  "image": "ghcr.io/computecoin/kit-batch-embeddings@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "max_length": {
+        "type": "integer",
+        "minimum": 16,
+        "maximum": 8192,
+        "default": 512
+      },
+      "batch_size": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 256,
+        "default": 32
+      },
+      "normalize": {
+        "type": "boolean",
+        "default": true
+      },
+      "round_decimals": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 8,
+        "default": 4
+      },
+      "pooling": {
+        "type": "string",
+        "enum": [
+          "mean",
+          "cls"
+        ],
+        "default": "mean"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "texts",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "embeddings",
+      "path": "/out/embeddings"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 4,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 16,
+    "disk_gb": 20
+  },
+  "billing_hints": {
+    "unit": "text",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "cosine",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {"min_cosine": 0.99},
+    "owner_decision": "OWNER DECISION: every embedding row of the host must have cosine similarity >= min_cosine (0.99, conservative default, to be tuned with cross-GPU benchmark data U5.3) to the independent re-run, with identical shape and identical ordered ids. Missing or unreadable reference data is inconclusive. Sample fraction also pending owner approval."
+  }
+}

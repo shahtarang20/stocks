@@ -1,0 +1,274 @@
+name: Kits
+
+# Builds the wave-1 Kit images (kits/*), pushes them to GHCR, fills the image digest into a COPY of each manifest,
+# smoke-tests on GPU runners, and (manual dispatch only) signs offline-held-key manifests and publishes them.
+# NEVER BUILT OR RUN yet. Repository variables to set (all name@sha256:... or hashes recorded by the owner):
+#   KIT_BASE_AI_IMAGE (CUDA PyTorch), KIT_BASE_BLENDER (CUDA runtime), KIT_BASE_FFMPEG (minimal with python3),
+#   KIT_BASE_UPSCALE (CUDA PyTorch), KIT_FETCH_IMAGE (python), AI_MODEL_REVISION, AI_MANIFEST_SHA256,
+#   (vars for the six wave-2+ kits: <SLUG>_ASSET_URL / <SLUG>_ASSET_SHA256, e.g. GAUSSIAN_SPLAT_TRAIN_ASSET_URL: GitHub names cannot start with a digit),
+#   BLENDER_URL, BLENDER_SHA256, FFMPEG_URL, FFMPEG_SHA256, X4PLUS_URL, X4PLUS_SHA256, X4PLUS_ANIME_URL,
+#   X4PLUS_ANIME_SHA256, KIT_SIGNING_KEY_PATH (a path on the kit-signer runner), KIT_API_URL.
+# Secret: KIT_ADMIN_TOKEN (admin API bearer token). The signing key itself is NOT a secret here and is never uploaded.
+
+on:
+  pull_request:
+    paths:
+      - "kits/**"
+      - "scripts/kit_ci.py"
+      - "scripts/sign_kit.py"
+      - ".github/workflows/kits.yml"
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: "Build AND push images to GHCR"
+        type: boolean
+        default: false
+      publish:
+        description: "Sign and publish to the Kit registry (needs push_images and approval)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kits-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Offline gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Kit manifests, schemas, Dockerfiles, smoke specs
+        run: python scripts/kit_ci.py check --kits-dir kits
+      - name: Kit unit tests
+        run: |
+          python -m pip install -U pip
+          pip install -e "apps/api[dev]"   # kits/tests import app.services.* (kit schema, verify plug-ins)
+          pytest -q kits/tests
+
+  build:
+    name: Build ${{ matrix.slug }}
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: ai-image
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_AI_IMAGE }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              MODEL_REVISION=${{ vars.AI_MODEL_REVISION }}
+              EXPECTED_MANIFEST_SHA256=${{ vars.AI_MANIFEST_SHA256 }}
+          - slug: blender-render
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_BLENDER }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              BLENDER_URL=${{ vars.BLENDER_URL }}
+              BLENDER_SHA256=${{ vars.BLENDER_SHA256 }}
+          - slug: ffmpeg-transcode
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_FFMPEG }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              FFMPEG_URL=${{ vars.FFMPEG_URL }}
+              FFMPEG_SHA256=${{ vars.FFMPEG_SHA256 }}
+          - slug: upscale
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_UPSCALE }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              X4PLUS_URL=${{ vars.X4PLUS_URL }}
+              X4PLUS_SHA256=${{ vars.X4PLUS_SHA256 }}
+              X4PLUS_ANIME_URL=${{ vars.X4PLUS_ANIME_URL }}
+              X4PLUS_ANIME_SHA256=${{ vars.X4PLUS_ANIME_SHA256 }}
+          - slug: whisper-transcribe
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_WHISPER_TRANSCRIBE }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.WHISPER_TRANSCRIBE_ASSET_URL }}
+              ASSET_SHA256=${{ vars.WHISPER_TRANSCRIBE_ASSET_SHA256 }}
+          - slug: llm-finetune-lora
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_LLM_FINETUNE_LORA }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.LLM_FINETUNE_LORA_ASSET_URL }}
+              ASSET_SHA256=${{ vars.LLM_FINETUNE_LORA_ASSET_SHA256 }}
+          - slug: video-upscale-frames
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_VIDEO_UPSCALE_FRAMES }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.VIDEO_UPSCALE_FRAMES_ASSET_URL }}
+              ASSET_SHA256=${{ vars.VIDEO_UPSCALE_FRAMES_ASSET_SHA256 }}
+          - slug: comfyui-workflow-runner
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_COMFYUI_WORKFLOW_RUNNER }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.COMFYUI_WORKFLOW_RUNNER_ASSET_URL }}
+              ASSET_SHA256=${{ vars.COMFYUI_WORKFLOW_RUNNER_ASSET_SHA256 }}
+          - slug: batch-embeddings
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_BATCH_EMBEDDINGS }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.BATCH_EMBEDDINGS_ASSET_URL }}
+              ASSET_SHA256=${{ vars.BATCH_EMBEDDINGS_ASSET_SHA256 }}
+          - slug: 3d-gaussian-splat-train
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_3D_GAUSSIAN_SPLAT_TRAIN }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.GAUSSIAN_SPLAT_TRAIN_ASSET_URL }}
+              ASSET_SHA256=${{ vars.GAUSSIAN_SPLAT_TRAIN_ASSET_SHA256 }}
+          - slug: llm-serve
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_LLM_SERVE }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.LLM_SERVE_ASSET_URL }}
+              ASSET_SHA256=${{ vars.LLM_SERVE_ASSET_SHA256 }}
+          - slug: notebooks
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_NOTEBOOKS }}
+          - slug: ai-video
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_AI_VIDEO }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              MODEL_REVISION=${{ vars.AI_VIDEO_MODEL_REVISION }}
+              EXPECTED_MANIFEST_SHA256=${{ vars.AI_VIDEO_MANIFEST_SHA256 }}
+          - slug: text-to-speech
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_TEXT_TO_SPEECH }}
+              FETCH_IMAGE=${{ vars.KIT_FETCH_IMAGE }}
+              ASSET_URL=${{ vars.TEXT_TO_SPEECH_ASSET_URL }}
+              ASSET_SHA256=${{ vars.TEXT_TO_SPEECH_ASSET_SHA256 }}
+          - slug: scientific-compute
+            build_args: |
+              BASE_IMAGE=${{ vars.KIT_BASE_SCIENTIFIC_COMPUTE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image repository name (lowercase)
+        id: repo
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kit-${{ matrix.slug }}" >> "$GITHUB_OUTPUT"
+      - name: Refuse unpinned or missing inputs
+        run: |
+          for kv in $(echo "${{ matrix.build_args }}" | tr '\n' ' '); do
+            case "$kv" in
+              BASE_IMAGE=*|FETCH_IMAGE=*) case "$kv" in *@sha256:*) ;; *) echo "$kv is not pinned by digest"; exit 1;; esac;;
+            esac
+            case "$kv" in *=) echo "missing repository variable for ${kv%%=*}"; exit 1;; esac
+          done
+      - name: Build (and push on dispatch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: kits
+          file: kits/${{ matrix.slug }}/Dockerfile
+          build-args: ${{ matrix.build_args }}
+          push: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+          tags: ${{ steps.repo.outputs.name }}:${{ github.sha }}
+          provenance: true
+      - name: Fill the digest into a copy of the manifest
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+        run: |
+          python scripts/kit_ci.py fill-digest --kit kits/${{ matrix.slug }}/kit.json \
+            --repo "${{ steps.repo.outputs.name }}" --digest "${{ steps.build.outputs.digest }}" \
+            --out dist/${{ matrix.slug }}.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+        with:
+          name: manifest-${{ matrix.slug }}
+          path: dist/${{ matrix.slug }}.json
+          if-no-files-found: error
+
+  smoke:
+    # Needs self-hosted GPU runners labelled per model (U5.1: >= 3 GPU models). Hosted runners have no GPU.
+    # CPU-only Kits (scientific-compute) run on self-hosted runners labelled cpu-a, cpu-b, cpu-c.
+    name: Smoke ${{ matrix.slug }} on ${{ matrix.gpu }}
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+    runs-on: [self-hosted, linux, "${{ matrix.gpu }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        # llm-serve (service step) and notebooks (session step) are in this list: their smoke.json uses `steps`.
+        slug: [ai-image, blender-render, ffmpeg-transcode, upscale, whisper-transcribe, llm-finetune-lora, video-upscale-frames, comfyui-workflow-runner, batch-embeddings, 3d-gaussian-splat-train, ai-video, text-to-speech, llm-serve, notebooks]
+        gpu: [gpu-3090, gpu-4090, gpu-a100]
+        include:
+          # scientific-compute is a CPU-only Kit (gpu_count 0): three CPU host classes, runner labels cpu-a/cpu-b/cpu-c.
+          - {slug: scientific-compute, gpu: cpu-a}
+          - {slug: scientific-compute, gpu: cpu-b}
+          - {slug: scientific-compute, gpu: cpu-c}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifest-${{ matrix.slug }}
+          path: dist
+      - name: Run smoke spec against the pushed digest
+        run: |
+          IMAGE=$(python -c "import json;print(json.load(open('dist/${{ matrix.slug }}.json'))['image'])")
+          docker pull "$IMAGE"
+          EXTRA=""
+          case "${{ matrix.slug }}" in
+            blender-render) blender -b --python kits/blender-render/smoke/make_scene.py -- fixture.bin && EXTRA="--input-file scene=fixture.bin";;
+            ffmpeg-transcode) ffmpeg -y -f lavfi -i testsrc2=size=1280x720:rate=30:duration=10 -f lavfi -i sine=frequency=440:duration=10 -c:v libx264 -pix_fmt yuv420p -c:a aac -f mp4 fixture.bin && EXTRA="--input-file source=fixture.bin";;
+            upscale) python kits/upscale/smoke/make_fixture.py fixture.bin && EXTRA="--input-file source=fixture.bin";;
+            batch-embeddings) python kits/batch-embeddings/smoke/make_fixture.py fixture.bin && EXTRA="--input-file texts=fixture.bin";;
+            llm-finetune-lora) python kits/llm-finetune-lora/smoke/make_fixture.py fixture.bin && EXTRA="--input-file dataset=fixture.bin";;
+            video-upscale-frames) python kits/video-upscale-frames/smoke/make_fixture.py fixture.bin && EXTRA="--input-file frames=fixture.bin";;
+            scientific-compute) python kits/scientific-compute/smoke/make_fixture.py fixture.bin && EXTRA="--input-file script=fixture.bin";;
+            # whisper-transcribe, comfyui-workflow-runner, 3d-gaussian-splat-train: owner-supplied licensed fixtures (see each smoke.json)
+          esac
+          case "${{ matrix.gpu }}" in cpu-*) EXTRA="$EXTRA --host-class ${{ matrix.gpu }}";; esac
+          python kits/tools/smoke_runner.py --smoke kits/${{ matrix.slug }}/smoke/smoke.json --image "$IMAGE" \
+            $EXTRA --report report-${{ matrix.slug }}-${{ matrix.gpu }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.slug }}-${{ matrix.gpu }}
+          path: report-${{ matrix.slug }}-${{ matrix.gpu }}.json
+
+  sign-publish:
+    name: Sign offline key and publish ${{ matrix.slug }}
+    needs: [build, smoke]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images && inputs.publish }}
+    # Protected environment with required reviewers; runner is a dedicated machine that holds the key file.
+    environment: kit-signing
+    runs-on: [self-hosted, linux, kit-signer]
+    strategy:
+      max-parallel: 1
+      matrix:
+        slug: [ai-image, blender-render, ffmpeg-transcode, upscale, whisper-transcribe, llm-finetune-lora, video-upscale-frames, comfyui-workflow-runner, batch-embeddings, 3d-gaussian-splat-train, ai-video, text-to-speech, scientific-compute, llm-serve, notebooks]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifest-${{ matrix.slug }}
+          path: dist
+      - name: Sign (key read from a path on this runner; never copied, never in the repo)
+        env:
+          KEY_PATH: ${{ vars.KIT_SIGNING_KEY_PATH }}
+        run: |
+          test -n "$KEY_PATH" && test -f "$KEY_PATH"
+          python scripts/sign_kit.py --manifest dist/${{ matrix.slug }}.json --key "$KEY_PATH" \
+            --out dist/${{ matrix.slug }}.signed.json
+      - name: Publish through the admin API (409 = this version already exists, left as is)
+        env:
+          KIT_ADMIN_TOKEN: ${{ secrets.KIT_ADMIN_TOKEN }}
+        run: python scripts/kit_ci.py publish --signed dist/${{ matrix.slug }}.signed.json --api-url "${{ vars.KIT_API_URL }}"

@@ -1,0 +1,4 @@
+{
+  "default": {"p95_ms": null, "p99_ms": null, "max_error_rate": null, "min_rps": null},
+  "per_name": {}
+}

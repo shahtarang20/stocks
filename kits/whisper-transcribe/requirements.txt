@@ -1,0 +1,4 @@
+# Pinned, NOT yet checked against PyPI or the base image (L4). Freeze with hashes in CI.
+# torch/torchvision come from the pinned CUDA base image.
+faster-whisper==1.1.0
+numpy==2.2.2

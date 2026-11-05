@@ -67,7 +67,7 @@ class Snp:
 
     def __init__(self):
         ark_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        ask_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ask_key = self.ask_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.ark = _cert("ARK-Milan", ark_key, ca=True, pss=True)
         self.ask = _cert("SEV-Milan", ask_key, "ARK-Milan", ark_key, ca=True, pss=True)
         self.vcek_key = ec.generate_private_key(ec.SECP384R1())
@@ -92,7 +92,7 @@ class Snp:
 
     def verify(self, evidence, nonce=NONCE, expected="default", roots="default"):
         expected = {"measurement": self.measurement.hex()} if expected == "default" else expected
-        return SEVSNPVerifier().verify(evidence, nonce, expected, [self.ark] if roots == "default" else roots)
+        return SEVSNPVerifier().verify(evidence, nonce, expected, [self.ark] if roots == "default" else roots, {"legacy_collateral_ok": True})
 
 
 @pytest.fixture
@@ -188,12 +188,25 @@ async def test_verdict_uses_hardware_signed_measurements_not_the_hosts_copy(db_e
     from app.models.user import User
     from app.services.attestation_verifier import AttestationVerifierError, gpu_bound_nonce, verify_machine_evidence
     from app.services.privacy_crypto import generate_ed25519_keypair, generate_x25519_keypair
+    from tests.test_hardware_revocation_rim_p2 import _rim, _rsa_chain, make_crl
     from tests.test_hardware_tdx_nvidia import Gpu
 
     gpu = Gpu()
+    # P2: the service is strict. Every pinned link needs a current issuer-signed CRL, and the GPU
+    # evidence needs an NVIDIA-signed RIM carrying the golden values (verified against a pinned root).
+    rim_rk, rim_root, rim_lk, rim_leaf = _rsa_chain()
+    # index 2 has an alternative golden value so a second, equally valid GPU report exists for the relay case
+    rim_xml = _rim({i: [v, b"\x00" * 48] if i == 2 else [v] for i, v in gpu.values.items()}, rim_lk, rim_leaf)
+    gpu_crls = [make_crl(gpu.root, gpu.root_key, alg=hashes.SHA384()), make_crl(rim_root, rim_rk)]
+    snp_crls = [make_crl(snp.ask, snp.ask_key, alg=hashes.SHA384(), pss=True)]
+
+    def gpu_collateral(ev):
+        return {**ev, "crls": gpu_crls, "rims": [rim_xml]}
+
     monkeypatch.setattr(settings, "PRIVACY_SOFTWARE_ATTESTATION", False)
     monkeypatch.setattr(settings, "PRIVACY_HARDWARE_ATTESTATION", True)
-    monkeypatch.setattr(settings, "PRIVACY_HARDWARE_ROOT_CERTS", json.dumps({"sev_snp": [_pem(snp.ark)], "nvidia_cc": [_pem(gpu.root)]}))
+    monkeypatch.setattr(settings, "PRIVACY_HARDWARE_ROOT_CERTS", json.dumps(
+        {"sev_snp": [_pem(snp.ark)], "nvidia_cc": [_pem(gpu.root), _pem(rim_root)]}))
     sm = async_sessionmaker(bind=db_engine, expire_on_commit=False)
     async with sm() as db:
         user = User(email=f"h-{uuid.uuid4().hex[:6]}@x.io", password_hash="pw", email_verified=True, status=UserStatus.active)
@@ -223,18 +236,18 @@ async def test_verdict_uses_hardware_signed_measurements_not_the_hosts_copy(db_e
                 await attest(*args)
             return exc.value.code
 
-        gpu_ev = gpu.evidence(nonce=NONCE)
-        cc = {"cpu_flavor": "sev_snp", "cpu": snp.evidence(nonce=gpu_bound_nonce(NONCE, gpu_ev)), "gpu": gpu_ev}
+        gpu_ev = gpu_collateral(gpu.evidence(nonce=NONCE))
+        cc = {"cpu_flavor": "sev_snp", "cpu": {**snp.evidence(nonce=gpu_bound_nonce(NONCE, gpu_ev)), "crls": snp_crls}, "gpu": gpu_ev}
         verdict, _ = await attest("confidential", "confidential", cc)
         assert verdict["image_hash"] == "ab" * 32 and verdict["tier_reached"] == "confidential"
 
         # A guest that booted another image but CLAIMS the trusted measurement is refused.
-        evil = {**cc, "cpu": snp.evidence(nonce=gpu_bound_nonce(NONCE, gpu_ev), measurement=hashlib.sha384(b"evil").digest())}
+        evil = {**cc, "cpu": {**snp.evidence(nonce=gpu_bound_nonce(NONCE, gpu_ev), measurement=hashlib.sha384(b"evil").digest()), "crls": snp_crls}}
         assert await code("confidential", "confidential", evil, trusted) == "unknown_os_image"
         # A GPU report from somewhere else cannot be paired with this CPU report.
-        other_gpu = gpu.evidence(nonce=NONCE, values={1: gpu.values[1], 2: b"\x00" * 48})  # same GPU model, other report
+        other_gpu = gpu_collateral(gpu.evidence(nonce=NONCE, values={1: gpu.values[1], 2: b"\x00" * 48, 3: gpu.values[3]}))  # same GPU model, other report
         relayed = {**cc, "gpu": other_gpu}
-        assert (await code("confidential", "confidential", relayed)).startswith("hardware_attestation_failed:")
+        assert await code("confidential", "confidential", relayed) == "hardware_attestation_failed:sev_snp_wrong_nonce"
         # Each tier takes only its evidence: no SEV-SNP for Sealed, no TPM / CPU-only for Confidential.
         assert await code("sealed", "confidential", cc) == "hardware_attestation_failed:hardware_tier_mismatch"
         assert await code("confidential", "tpm2", {"quote": {}}) == "hardware_attestation_failed:hardware_tier_mismatch"

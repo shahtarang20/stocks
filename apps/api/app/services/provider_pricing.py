@@ -38,6 +38,7 @@ __all__ = [
     "PricingPolicyError",
     "MAX_WINDOWS",
     "MAX_ALLOWLIST_ENTRIES",
+    "validate_asking_price",
     "validate_floor_price",
     "validate_availability_windows",
     "validate_model_allowlist",
@@ -69,6 +70,27 @@ class PricingPolicyError(ValueError):
 # ---------------------------------------------------------------------------
 # Validation / normalization
 # ---------------------------------------------------------------------------
+def validate_asking_price(value: decimal.Decimal | int | str) -> decimal.Decimal:
+    """Return the asking price per hour quantized to 2dp.
+
+    Shared by PATCH /provider/machines/{id} and PUT .../pricing. A zero, negative or
+    non-finite price, one that rounds to 0.00, or an absurdly large one is refused:
+    the asking price drives what a customer is quoted and what the provider is paid.
+    """
+    try:
+        price = decimal.Decimal(str(value))
+    except (decimal.InvalidOperation, ValueError):
+        raise PricingPolicyError("asking_price_not_a_number")
+    if not price.is_finite():
+        raise PricingPolicyError("asking_price_not_a_number")
+    if price > decimal.Decimal("1000000"):
+        raise PricingPolicyError("asking_price_too_large")
+    quantized = price.quantize(decimal.Decimal("0.01"), rounding=decimal.ROUND_HALF_UP)
+    if price <= 0 or quantized <= 0:
+        raise PricingPolicyError("asking_price_must_be_positive")
+    return quantized
+
+
 def validate_floor_price(value: decimal.Decimal | int | str | None) -> decimal.Decimal | None:
     """Return the floor price quantized to 2dp, or ``None`` to clear it.
 

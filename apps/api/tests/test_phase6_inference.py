@@ -252,24 +252,53 @@ class TestChatCompletions:
         assert data["detail"]["error"]["code"] == "model_not_found"
 
     @pytest.mark.asyncio
-    async def test_chat_streaming_not_supported(
+    async def test_chat_streaming_sse_format_and_text_equals_non_streaming(
         self, client: AsyncClient, authed_user: dict, setup_model_and_machine
     ):
-        """stream=true returns a 400 error (not yet supported)."""
+        """B2: stream=true yields chunk objects, a stop chunk and [DONE]; text equals non-stream."""
+        import json
+
         headers = auth_headers(authed_user["access_token"])
+        body = {"model": "echo-sim-v1", "messages": [{"role": "user", "content": "hello"}]}
+        plain = await client.post("/v1/chat/completions", json=body, headers=headers)
+        assert plain.status_code == 200
+        expected = plain.json()["choices"][0]["message"]["content"]
+
         resp = await client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "echo-sim-v1",
-                "messages": [{"role": "user", "content": "hello"}],
-                "stream": True,
-            },
-            headers=headers,
+            "/v1/chat/completions", json={**body, "stream": True}, headers=headers
         )
-        assert resp.status_code == 400
-        data = resp.json()
-        assert "error" in data["detail"]
-        assert data["detail"]["error"]["code"] == "streaming_not_supported"
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        events = [e for e in resp.text.split("\n\n") if e]
+        assert events[-1] == "data: [DONE]"
+        chunks = [json.loads(e[len("data: "):]) for e in events[:-1]]
+        assert all(c["object"] == "chat.completion.chunk" for c in chunks)
+        assert len({c["id"] for c in chunks}) == 1
+        assert chunks[0]["choices"][0]["delta"]["role"] == "assistant"
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+        assert all(c["computecoin"]["execution_mode"] == "simulated" for c in chunks)
+        text = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
+        assert text == expected
+        assert len(chunks) > 3  # actually split into pieces
+
+    @pytest.mark.asyncio
+    async def test_chat_streaming_refused_for_private_tiers(
+        self, client: AsyncClient, authed_user: dict, setup_model_and_machine
+    ):
+        headers = auth_headers(authed_user["access_token"])
+        for tier in ("sealed", "sealed_pro", "confidential"):
+            resp = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "echo-sim-v1",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": True,
+                    "isolation_tier": tier,
+                },
+                headers=headers,
+            )
+            assert resp.status_code == 400
+            assert resp.json()["detail"]["error"]["code"] == "streaming_not_supported_for_private"
 
     @pytest.mark.asyncio
     async def test_chat_requires_auth(

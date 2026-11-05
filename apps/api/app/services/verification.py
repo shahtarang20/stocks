@@ -85,6 +85,10 @@ def verify_output(
         if not valid:
             reason = "manifest_mismatch"
 
+    elif workload_type in ("kit", "byoc"):  # BYOC jobs (workload_type "byoc") also return files, not a typed output
+        # Kit outputs are files, hash-checked by the data plane at upload; a Service replica declares none at all.
+        # The result body is only a status object, so the shape check is "is an object" (already checked above).
+        checks["kit_result_is_object"] = True
     else:
         valid = False
         reason = "unknown_workload"
@@ -125,6 +129,13 @@ def is_unbilled_job(job: Job) -> bool:
     the job result path must skip ``billing.settle_job`` for these.
     """
     return bool(job.is_challenge or job.shadow_of_job_id is not None)
+
+
+def is_service_replica_job(job: Job) -> bool:
+    """True for a U11 Service replica job (its v2 plan carries a ``service`` block). A replica is a long-lived server
+    with no declared outputs: there is nothing to compare, so it is never shadow-sampled or Kit-verified."""
+    plan = (getattr(job, "data_policy", None) or {}).get("v2_plan")
+    return isinstance(plan, dict) and bool(plan.get("service"))
 
 
 def is_shadow_job(job: Job) -> bool:
@@ -293,6 +304,27 @@ async def _pick_shadow_machine(
     return min(candidates, key=_rank_key).machine
 
 
+def kit_shadow_data_policy(data_policy: dict | None) -> dict:
+    """A deep copy of the primary's data_policy for a Kit reference run, so the claim carries the SAME ``v2_plan``
+    (kit, inputs, assets, outputs, egress) but no state of the primary's run:
+
+    * ``checkpoint`` is dropped (the reference run must compute from scratch, never resume or write to the primary's
+      checkpoint store; ``agent_v2.build_claim_v2`` only adds ``resume`` when the plan has a checkpoint dir);
+    * ``service`` is dropped (a reference run is never a long-lived replica).
+
+    Outputs need no rewrite: ``agent_v2`` stores uploads under ``out/<job id>/`` of the job that uploads, which is the
+    shadow's own id, and ``kit_verification_run`` reads them from there.
+    """
+    import copy
+
+    dp = copy.deepcopy(data_policy) if isinstance(data_policy, dict) else {}
+    plan = dp.get("v2_plan")
+    if isinstance(plan, dict):
+        plan.pop("checkpoint", None)
+        plan.pop("service", None)
+    return dp
+
+
 async def create_shadow_job(
     db: AsyncSession, primary: Job, now: dt.datetime | None = None
 ) -> tuple[Job, RedundancyCheck] | None:
@@ -306,7 +338,7 @@ async def create_shadow_job(
     ``jobs.shadow_of_job_id``, so :func:`is_unbilled_job` keeps it off the
     customer's invoice.
     """
-    if primary.is_challenge or primary.shadow_of_job_id is not None:
+    if primary.is_challenge or primary.shadow_of_job_id is not None or is_service_replica_job(primary):
         return None
 
     now = now or utcnow()
@@ -341,6 +373,14 @@ async def create_shadow_job(
         # of a private job would hand the Data Key to an under-staked machine.
         value_at_risk=primary.value_at_risk,
     )
+    if primary.workload_type == "kit":
+        # U6: a Kit reference run must be the same Kit at the same version with the same plan and spec.
+        import copy
+
+        shadow.spec_v2 = copy.deepcopy(primary.spec_v2 or {})
+        shadow.kit_id, shadow.kit_version = primary.kit_id, primary.kit_version
+        shadow.network_policy = primary.network_policy
+        shadow.data_policy = kit_shadow_data_policy(primary.data_policy)
     # Same GPU runtime as the machine that ran the primary: CUDA and ROCm builds may legitimately
     # produce different bytes, so a cross-vendor comparison would wrongly accuse an honest host.
     if primary.machine_id is not None and primary.gpu_count:
@@ -381,7 +421,9 @@ async def maybe_create_shadow_job(
     db: AsyncSession, primary: Job, now: dt.datetime | None = None
 ) -> tuple[Job, RedundancyCheck] | None:
     """Sampling entry point for redundant execution of a completed paid job."""
-    if is_unbilled_job(primary) or not should_shadow():
+    if is_unbilled_job(primary) or primary.workload_type == "kit" or is_service_replica_job(primary):
+        return None  # kit jobs have their own sampler: services/kit_verification_run.py (U6)
+    if not should_shadow():
         return None
     return await create_shadow_job(db, primary, now)
 
@@ -398,6 +440,8 @@ async def resolve_redundancy(
     """
     if shadow.shadow_of_job_id is None:
         return None
+    if shadow.workload_type == "kit":
+        return None  # kit outputs are files: compared by the worker sweep (kit_verification_run), not here
 
     check = (
         await db.execute(
@@ -569,3 +613,54 @@ async def check_model_identity(
         actual_hash=reported,
         detail={"model": job.model, "machine_id": str(job.machine_id) if job.machine_id else None},
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. Kit verification plug-ins (U6, ADR-0006 section 12) — additive
+# ---------------------------------------------------------------------------
+KIT_VERIFICATION_KIND = "kit_output"
+
+
+def verify_kit_output(manifest: dict, primary_files: list, reference_files: list) -> dict[str, Any]:
+    """Judge a kit job's output with the plug-in named in the Kit manifest ``verification.method``.
+
+    Returns a record shaped like :func:`verify_output` (``valid``, ``reason``, ``checks``, ``note``)
+    plus ``method``, ``status`` (passed | failed | inconclusive) and ``scores`` so the job page can
+    show the method and result. ``valid`` is True only for ``passed``; callers must treat
+    ``inconclusive`` as "not proven either way" and never slash on it.
+    """
+    from pathlib import Path
+
+    from app.services.verify_plugins import run_kit_verification
+
+    outcome = run_kit_verification(manifest, [Path(p) for p in primary_files], [Path(p) for p in reference_files])
+    detail = outcome.to_detail()
+    return {
+        "valid": outcome.passed,
+        "workload_type": "kit",
+        "reason": outcome.reason,
+        "checks": detail["checks"],
+        "method": outcome.method,
+        "status": outcome.status,
+        "scores": detail["scores"],
+        "thresholds": detail["thresholds"],
+        "note": detail["note"],
+    }
+
+
+async def record_kit_verification(
+    db: AsyncSession, job: Job, manifest: dict, primary_files: list, reference_files: list,
+    *, reference_job_id: uuid.UUID | None = None,
+) -> VerificationResult:
+    """Run the kit's verification method and store method and result as append-only evidence.
+
+    The method and outcome live in ``verification_results.detail`` (existing JSON column; no
+    migration), kind ``kit_output``. Scheduling the reference re-run and calling this from the
+    result path is U7's wiring; this function is the single decision point.
+    """
+    record = verify_kit_output(manifest, primary_files, reference_files)
+    detail = {"method": record["method"], "status": record["status"], "reason": record["reason"],
+              "scores": record["scores"], "thresholds": record["thresholds"], "checks": record["checks"],
+              "reference_job_id": str(reference_job_id) if reference_job_id else None}
+    return await _record_result(db, job_id=job.id, kind=KIT_VERIFICATION_KIND,
+                                passed=record["status"] == "passed", detail=detail)

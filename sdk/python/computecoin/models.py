@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class TokenPair(BaseModel):
@@ -22,8 +22,9 @@ class Project(BaseModel):
 
 class ApiKey(BaseModel):
     id: str
-    # Only shown once at creation time; afterwards only the prefix is returned.
-    key: Optional[str] = None
+    # Only shown once at creation time; afterwards only the prefix is returned. The API names this field
+    # ``api_key``; ``key`` is accepted too so older servers and fixtures keep working.
+    key: Optional[str] = Field(default=None, validation_alias=AliasChoices("api_key", "key"))
     prefix: str
     name: Optional[str] = None
 
@@ -137,7 +138,9 @@ class Reservation(BaseModel):
 
 
 class Job(BaseModel):
-    id: str
+    # The API names it "job_id" (JobOut); "id" is kept for callers/tests that use it. Without the alias every
+    # submit_job / get_job / submit_private_job against the real API raised a ValidationError.
+    id: str = Field(validation_alias=AliasChoices("id", "job_id"))
     customer_id: Optional[str] = None
     project_id: Optional[str] = None
     workload_type: str
@@ -171,6 +174,10 @@ class Job(BaseModel):
         if self.gpu_runtime is None and self.required_gpu_runtime is not None:
             self.gpu_runtime = self.required_gpu_runtime
         return self
+    # The job's result and run metrics (JobOut.output / .metrics): without these the SDK dropped the result.
+    output: Optional[dict[str, Any]] = None
+    metrics: Optional[dict[str, Any]] = None
+    cancel_requested: Optional[bool] = None
     encrypted_input: Optional[dict[str, Any]] = None
     encrypted_output: Optional[dict[str, Any]] = None
     dk_shares: Optional[dict[str, Any]] = None
@@ -186,7 +193,9 @@ class Job(BaseModel):
 class JobEvent(BaseModel):
     """One immutable row of the append-only job FSM history."""
 
-    job_id: str
+    # The API's JobEventOut has no job_id (the job is in the URL); a required field made every
+    # get_job_events call against the real API raise a ValidationError.
+    job_id: Optional[str] = None
     seq: int
     from_state: Optional[str] = None
     to_state: str
@@ -220,7 +229,10 @@ class CancelAck(BaseModel):
 
     job_id: Optional[str] = None
     status: Optional[str] = None
-    cancellation_requested: Optional[bool] = None
+    # The API (JobCancelOut) names it ``cancel_requested``; the old name is still accepted.
+    cancellation_requested: Optional[bool] = Field(
+        default=None, validation_alias=AliasChoices("cancel_requested", "cancellation_requested")
+    )
 
 
 # -- Phase 5: billing / ledger / invoices / disputes / payouts ------------ #
@@ -256,6 +268,8 @@ class LedgerEntry(BaseModel):
     amount: str  # money -> string, always > 0
     currency: str = "USDC_CREDITS"
     reference: Optional[str] = None
+    reference_type: Optional[str] = None
+    reference_id: Optional[str] = None
     created_at: Optional[str] = None
 
 

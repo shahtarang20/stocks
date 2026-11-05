@@ -36,7 +36,7 @@ def test_login_shapes_request_and_sets_token():
     pair = client.login("a@b.com", "pw")
 
     assert captured["method"] == "POST"
-    assert captured["url"] == "https://api.test/v1/auth/login"
+    assert captured["url"] == "https://api.test/auth/login"
     assert captured["body"] == {"email": "a@b.com", "password": "pw"}
     assert pair.access_token == "acc"
     # Token is now attached for authenticated calls.
@@ -832,3 +832,76 @@ def test_get_provider_earnings_parses_live_ledger_figures():
     assert isinstance(earnings.available, str)
     assert earnings.recent[0].amount == "1.35"
     assert earnings.recent[0].direction == "credit"
+
+
+def test_job_model_accepts_api_job_id():
+    """The real API returns ``job_id`` (not ``id``); Job.model_validate used to fail with 'id Field required'."""
+    from computecoin.models import Job
+
+    api = {"job_id": "j1", "workload_type": "text-generation", "model": "echo-sim-v1", "status": "reserved", "customer_id": "c"}
+    assert Job.model_validate(api).id == "j1"
+    assert Job.model_validate({**api, "id": "j2", "job_id": "ignored"}).id == "j2"
+
+
+def test_events_without_job_id_cancel_requested_and_job_output_match_the_api():
+    """JobEventOut has no job_id, JobCancelOut says cancel_requested and JobOut carries output: the SDK dropped or rejected all three."""
+    from computecoin.models import CancelAck, Job, JobEvent
+
+    ev = JobEvent.model_validate({"seq": 1, "from_state": None, "to_state": "created", "actor": "customer"})
+    assert ev.job_id is None and ev.to_state == "created"
+    assert CancelAck.model_validate({"job_id": "j", "status": "cancelled", "cancel_requested": True}).cancellation_requested is True
+    job = Job.model_validate(
+        {"job_id": "j1", "workload_type": "text-generation", "model": "m", "status": "completed",
+         "output": {"text": "hi"}, "metrics": {"tokens": 3}}
+    )
+    assert job.output == {"text": "hi"} and job.metrics == {"tokens": 3}
+
+
+def test_create_api_key_exposes_the_one_time_secret_the_api_returns_as_api_key():
+    """The API names the secret ``api_key``; the SDK must not drop it (it is shown only once)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/projects/p1/api-keys"
+        return httpx.Response(201, json={"id": "k1", "project_id": "p1", "name": "n", "prefix": "cc_live_ab", "api_key": "cc_live_abSECRET"})
+
+    key = ComputeCoinClient("https://api.test", access_token="t", transport=httpx.MockTransport(handler)).create_api_key("p1", "n")
+    assert key.key == "cc_live_abSECRET" and key.prefix == "cc_live_ab"
+
+
+def test_get_ledger_reads_the_paginated_envelope_and_passes_paging():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["q"] = dict(request.url.params)
+        entry = {"entry_id": "e", "transaction_id": "t", "kind": "hold", "direction": "debit", "amount": "0.14",
+                 "currency": "USDC_CREDITS", "reference_type": "job", "reference_id": "j", "created_at": "2026-01-01T00:00:00"}
+        return httpx.Response(200, json={"items": [entry], "page": 2, "page_size": 10, "total": 11})
+
+    led = ComputeCoinClient("https://api.test", access_token="t", transport=httpx.MockTransport(handler)).get_ledger(page=2, page_size=10)
+    assert [e.amount for e in led] == ["0.14"] and led[0].reference_type == "job"
+    assert seen["q"] == {"page": "2", "page_size": "10"}
+
+
+def test_structured_error_bodies_give_readable_message_and_string_code():
+    """Inference errors are {"detail": {"error": {"message", "code"}}}; validation errors are a list. The SDK must
+    surface readable text and a string `.code`, never a raw dict/list as the code."""
+    bodies = {
+        404: {"detail": {"error": {"message": "Model 'x' not found", "code": "model_not_found"}}},
+        422: {"detail": [{"type": "too_short", "loc": ["body", "messages"], "msg": "too short"}]},
+        409: {"detail": "budget_exceeded"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = int(request.url.params["s"])
+        return httpx.Response(status, json=bodies[status])
+
+    client = make_client(handler)
+    with pytest.raises(EndpointNotAvailableError) as e404:
+        client._request("GET", "/x", params={"s": 404})
+    assert "Model 'x' not found" in str(e404.value)
+    with pytest.raises(ValidationError) as e422:
+        client._request("GET", "/x", params={"s": 422})
+    assert e422.value.code is None and "too short" in str(e422.value)
+    with pytest.raises(ConflictError) as e409:
+        client._request("GET", "/x", params={"s": 409})
+    assert e409.value.code == "budget_exceeded"

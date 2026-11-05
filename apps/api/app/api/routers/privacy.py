@@ -196,8 +196,8 @@ async def get_transparency_checkpoint(db: AsyncSession = Depends(get_db)) -> dic
 
 @router.get("/transparency-log/consistency")
 async def get_transparency_consistency(
-    from_size: int = Query(..., ge=1),
-    to_size: int = Query(..., ge=1),
+    from_size: int = Query(..., ge=1, le=10**9),  # unbounded values overflowed the DB LIMIT (HTTP 500) on a public route
+    to_size: int = Query(..., ge=1, le=10**9),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """RFC 6962 consistency proof between tree size from_size and to_size."""
@@ -300,7 +300,11 @@ async def bond_stake_endpoint(
 
     Administrator-only: a host must not be able to grant itself stake. This does NOT grant any
     isolation tier; tiers come only from a successful attestation.
+
+    With stake sync on, the vault is the only source of stake (R4) and this route refuses.
     """
+    if settings.STAKE_SYNC_ENABLED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="stake_managed_on_chain")
     machine = (
         await db.execute(select(ProviderMachine).where(ProviderMachine.id == body.machine_id).with_for_update())
     ).scalar_one_or_none()

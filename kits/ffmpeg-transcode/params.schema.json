@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "codec": {"type": "string", "enum": ["h264", "h265"], "default": "h264"},
+    "encoder": {"type": "string", "enum": ["auto", "nvenc", "cpu"], "default": "auto"},
+    "crf": {"type": "integer", "minimum": 0, "maximum": 51, "default": 23},
+    "preset": {"type": "string", "enum": ["fast", "medium", "slow"], "default": "medium"},
+    "height": {"type": "integer", "minimum": 144, "maximum": 2160},
+    "audio": {"type": "string", "enum": ["aac", "none"], "default": "aac"},
+    "start_seconds": {"type": "number", "minimum": 0, "maximum": 86400, "default": 0},
+    "duration_seconds": {"type": "number", "minimum": 0.1, "maximum": 86400}
+  }
+}

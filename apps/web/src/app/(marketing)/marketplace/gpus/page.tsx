@@ -3,9 +3,9 @@ import { PageHero } from "@/components/layout/page-hero";
 import { LiveGpuTable } from "@/components/marketplace/live-gpu-table";
 
 export const metadata: Metadata = {
-  title: "GPU listings",
+  title: "Computers for rent",
   description:
-    "Search live, registered GPU machines by model, VRAM, price, region, workload, and verification status. Request a quote and reserve capacity.",
+    "Search computers with a graphics card (GPU) that hosts have shared. Filter by GPU model, memory, price and region, then ask for a price quote.",
 };
 
 export default function GpuListingsPage() {
@@ -13,8 +13,8 @@ export default function GpuListingsPage() {
     <>
       <PageHero
         eyebrow="Marketplace"
-        title="Live GPU listings"
-        description="Search real machines registered on the network — online, available, and priced. Filter by model, VRAM, price, region, workload, and verification status, then request a quote."
+        title="Computers for rent"
+        description="These are computers that hosts have connected to ComputeCoin. Filter by graphics card (GPU) model, GPU memory, price and region. Then ask for a price quote. A quote holds the price for a short time."
       />
       <div className="container space-y-8 py-12">
         <LiveGpuTable />

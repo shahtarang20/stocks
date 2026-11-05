@@ -17,48 +17,48 @@ export default function DevelopersPage() {
     <>
       <PageHero
         eyebrow="Developers"
-        title="Bring your workloads, not a new SDK"
-        description="Run containerized training and inference on the network using tooling you already use. The API below is the Phase 1 contract the console is built against."
+        title="Bring your own containers and tools"
+        description="This page is for people who write code. You can send jobs from the website, or from your own program with the ComputeCoin API."
       />
       <div className="container grid gap-10 py-12 lg:grid-cols-[1.6fr_1fr]">
         <Prose>
           <h2>What works today</h2>
           <p>
-            Phase 1 ships the account and console surface: registration, login,
-            token refresh, and project listing against the ComputeCoin API.
-            Job submission and live provisioning are stubbed in the console and
-            land as the provider network comes online.
+            You can create an account, add test credits, browse computers, get price quotes, send
+            jobs and read results in the dashboard. Python and TypeScript client libraries are
+            included in the project. Jobs run in practice mode (simulated) by default, so results
+            are placeholders until real GPU jobs are switched on.
           </p>
           <h2>Workflow</h2>
           <ul>
-            <li>Package your workload as an OCI container image.</li>
-            <li>Select hardware by GPU model, VRAM, interconnect, and region.</li>
-            <li>Choose a provider verification tier that fits your risk profile.</li>
-            <li>Submit the job; payment is escrowed and metered per second.</li>
-            <li>Export the itemized usage record for reconciliation.</li>
+            <li>Put your work in a container image (a packaged program that runs the same anywhere).</li>
+            <li>Choose a computer by graphics card (GPU) model, GPU memory and region.</li>
+            <li>Choose how private the job must be. Private options need special hardware on the host.</li>
+            <li>Send the job. Credits are held and billed per second of run time.</li>
+            <li>Download the itemized usage record to check your bill.</li>
           </ul>
-          <h2>API contract (Phase 1)</h2>
+          <h2>Using the API</h2>
           <p>
-            The console talks to a FastAPI backend. The base URL is configured
-            with <strong>NEXT_PUBLIC_API_BASE_URL</strong> (defaults to{" "}
-            <strong>http://localhost:8000</strong>).
+            The website talks to the ComputeCoin API. Your program can do the same. The web address
+            of the API is set with <strong>NEXT_PUBLIC_API_BASE_URL</strong> (it defaults to{" "}
+            <strong>http://localhost:8000</strong> on your own computer). These calls are the basics.
           </p>
           <ul>
             <li><strong>POST</strong> /auth/register — create an account</li>
-            <li><strong>POST</strong> /auth/login — returns access + refresh tokens</li>
-            <li><strong>POST</strong> /auth/refresh — rotate tokens</li>
-            <li><strong>GET</strong> /projects — list your projects (Bearer auth)</li>
+            <li><strong>POST</strong> /auth/login — log in and get your access keys</li>
+            <li><strong>POST</strong> /auth/refresh — get new access keys</li>
+            <li><strong>GET</strong> /projects — list your projects (send your access key with the call)</li>
           </ul>
           <p>
-            Authorization is enforced server-side on the API. The console&apos;s
-            client-side route guard is a convenience for UX only.
+            The API itself checks who you are on every call. Hiding a page in the website is only
+            for convenience and is not a safety feature.
           </p>
         </Prose>
 
         <aside className="space-y-4">
           <div className="rounded-lg border border-border bg-surface p-5">
             <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-              <Terminal className="h-4 w-4 text-primary" /> Quick auth call
+              <Terminal aria-hidden="true" className="h-4 w-4 text-primary" /> Try a log-in call
             </div>
             <pre className="overflow-x-auto rounded-md bg-background p-3 font-mono text-xs text-muted-foreground">
 {`curl -X POST \\
@@ -68,14 +68,15 @@ export default function DevelopersPage() {
        "password":"••••••"}'`}
             </pre>
             <p className="mt-3 text-xs text-muted-foreground">
-              Returns <code>access_token</code> and <code>refresh_token</code>.
+              The reply contains your <code>access_token</code> and <code>refresh_token</code>. Keep
+              them private.
             </p>
           </div>
           <div className="rounded-lg border border-border bg-surface p-5">
-            <Badge variant="neutral">Phase 1</Badge>
+            <Badge variant="neutral">Preview</Badge>
             <p className="mt-3 text-sm text-muted-foreground">
-              A published client library and job API are planned. For now, the
-              console demonstrates the account and project surface end to end.
+              The client libraries are not on a public package site yet. Ask us how to get them, or use
+              the website.
             </p>
             <Button asChild className="mt-4 w-full" size="sm">
               <Link href="/register">Create an account</Link>

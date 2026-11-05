@@ -10,15 +10,15 @@ export default function NotFound() {
         <p className="text-5xl font-bold tracking-tight">404</p>
         <h1 className="mt-2 text-xl font-semibold">Page not found</h1>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-          The page you&apos;re looking for doesn&apos;t exist or has moved.
+          We could not find that page. The link may be old or mistyped. Go back to the home page, or look at the computers for rent.
         </p>
       </div>
       <div className="flex gap-2">
         <Button asChild>
-          <Link href="/">Back home</Link>
+          <Link href="/">Go to the home page</Link>
         </Button>
         <Button asChild variant="outline">
-          <Link href="/marketplace">Marketplace</Link>
+          <Link href="/marketplace">See computers for rent</Link>
         </Button>
       </div>
     </div>

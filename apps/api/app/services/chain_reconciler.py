@@ -324,6 +324,44 @@ class JsonRpcChainClient:
                 raise ChainClientError("transfer_log_malformed") from exc
         return out
 
+    async def transfer_logs_from(
+        self, token_address: str, from_address: str, from_block: int, to_block: int
+    ) -> list[dict[str, Any]]:
+        """ERC-20 ``Transfer`` events sent BY ``from_address`` (the withdrawal hot wallet), inclusive range.
+
+        Same shape as :meth:`transfer_logs` plus ``to_address``; used by the B1 payout reconciliation."""
+        from_topic = "0x" + from_address.lower().removeprefix("0x").rjust(64, "0")
+        raw = await self._rpc(
+            "eth_getLogs",
+            [
+                {
+                    "address": token_address,
+                    "fromBlock": hex(from_block),
+                    "toBlock": hex(to_block),
+                    "topics": [self.TRANSFER_TOPIC, from_topic],
+                }
+            ],
+        )
+        if not isinstance(raw, list):
+            raise ChainClientError("getlogs_malformed_response")
+        out: list[dict[str, Any]] = []
+        for log in raw:
+            try:
+                topics = log["topics"]
+                out.append(
+                    {
+                        "tx_hash": log["transactionHash"].lower(),
+                        "log_index": int(log["logIndex"], 16),
+                        "block_number": int(log["blockNumber"], 16),
+                        "from_address": "0x" + topics[1][-40:].lower(),
+                        "to_address": "0x" + topics[2][-40:].lower(),
+                        "amount": int(log["data"], 16),
+                    }
+                )
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ChainClientError("transfer_log_malformed") from exc
+        return out
+
     async def _latest_block(self) -> int:
         result = await self._rpc("eth_blockNumber", [])
         try:
@@ -794,3 +832,105 @@ def run_to_dict(run: ChainReconciliationRun, *, include_detail: bool = False) ->
         payload["detail"] = run.detail
     return payload
 
+
+
+# ---------------------------------------------------------------------------
+# B1: token withdrawals. Chain transfers out of the hot wallet vs ledger payouts.
+# ---------------------------------------------------------------------------
+async def reconcile_withdrawals(db: AsyncSession, client: Any | None = None, *, auto_pause: bool = True) -> dict[str, Any]:
+    """Compare COMPUTE transfers out of the hot wallet with the ledger's paid-out withdrawals.
+
+    Mismatches (each one pauses withdrawals when ``auto_pause``; the caller commits):
+
+    * ``unknown_payout``  : a chain transfer from the hot wallet that no withdrawal row owns
+    * ``amount_or_destination_mismatch`` : a withdrawal's tx exists but pays another amount or address
+    * ``missing_on_chain``: a paid_out withdrawal with no matching chain transfer
+    * ``ledger_paid_out`` : the paid_out ledger account differs from the sum of paid_out withdrawals
+    * ``ledger_pending``  : withdrawal_pending differs from the sum of open withdrawals
+
+    Only blocks ``WITHDRAWALS_CONFIRMATIONS`` deep are compared, so a reorg cannot raise a false alarm.
+    """
+    # Imported here: these modules import this one.
+    from sqlalchemy import func
+
+    from app.models.billing import BillingAccount
+    from app.models.withdrawal import OPEN_STATUSES, Withdrawal
+    from app.services.withdrawal_pause import set_pause
+
+    if not settings.withdrawals_configured:
+        return {"enabled": False}
+    client = client or JsonRpcChainClient()
+    hot = settings.WITHDRAWALS_HOT_WALLET_ADDRESS.strip().lower()
+    token = settings.COMPUTE_TOKEN_ADDRESS
+    latest = await client.latest_block()
+    safe_head = latest - int(settings.WITHDRAWALS_CONFIRMATIONS)
+    start = max(0, int(settings.WITHDRAWALS_RECON_FROM_BLOCK))
+    chunk = max(1, int(settings.CHAIN_LOG_CHUNK_BLOCKS))
+
+    logs: list[dict[str, Any]] = []
+    cur = start
+    while cur <= safe_head:
+        end = min(cur + chunk - 1, safe_head)
+        logs.extend(await client.transfer_logs_from(token, hot, cur, end))
+        cur = end + 1
+
+    rows = (await db.execute(select(Withdrawal).where(Withdrawal.hot_wallet == hot))).scalars().all()
+    by_hash = {r.tx_hash.lower(): r for r in rows if r.tx_hash}
+    findings: list[dict[str, Any]] = []
+    seen_hashes: set[str] = set()
+    for log in logs:
+        h = log["tx_hash"].lower()
+        row = by_hash.get(h)
+        if row is None:
+            findings.append({"kind": "unknown_payout", "tx_hash": h, "amount": str(log["amount"])})
+            continue
+        seen_hashes.add(h)
+        if row.status == "paid_out" and (
+            int(row.amount_raw) != int(log["amount"]) or row.destination.lower() != log["to_address"].lower()
+        ):
+            findings.append({"kind": "amount_or_destination_mismatch", "tx_hash": h, "withdrawal_id": str(row.id)})
+    for r in rows:
+        if r.status == "paid_out" and r.tx_hash and r.receipt_block is not None and r.receipt_block <= safe_head:
+            if r.tx_hash.lower() not in seen_hashes and r.receipt_block >= start:
+                findings.append({"kind": "missing_on_chain", "tx_hash": r.tx_hash, "withdrawal_id": str(r.id)})
+
+    async def _acct(t: str) -> int:
+        v = (
+            await db.execute(
+                select(func.coalesce(func.sum(BillingAccount.balance_minor), 0)).where(
+                    BillingAccount.type == t, BillingAccount.owner_id.is_(None)
+                )
+            )
+        ).scalar_one()
+        return int(v)
+
+    async def _sum(statuses: tuple[str, ...]) -> int:
+        v = (
+            await db.execute(
+                select(func.coalesce(func.sum(Withdrawal.credits_minor), 0)).where(Withdrawal.status.in_(statuses))
+            )
+        ).scalar_one()
+        return int(v)
+
+    ledger_paid, rows_paid = await _acct("paid_out"), await _sum(("paid_out",))
+    ledger_pending, rows_pending = await _acct("withdrawal_pending"), await _sum(OPEN_STATUSES)
+    if ledger_paid != rows_paid:
+        findings.append({"kind": "ledger_paid_out", "ledger_minor": ledger_paid, "withdrawals_minor": rows_paid})
+    if ledger_pending != rows_pending:
+        findings.append({"kind": "ledger_pending", "ledger_minor": ledger_pending, "withdrawals_minor": rows_pending})
+
+    ok = not findings
+    if findings and auto_pause:
+        await set_pause(
+            db, True, reason=f"reconciliation mismatch: {sorted({f['kind'] for f in findings})}", source="reconciliation"
+        )
+    return {
+        "enabled": True,
+        "ok": ok,
+        "paused": bool(findings and auto_pause),
+        "latest_block": latest,
+        "safe_head": safe_head,
+        "transfers_checked": len(logs),
+        "withdrawals_checked": len(rows),
+        "findings": findings,
+    }

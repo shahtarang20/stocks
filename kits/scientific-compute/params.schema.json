@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "args": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "maxItems": 16,
+      "default": []
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 600
+    },
+    "max_output_mb": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1024,
+      "default": 256
+    },
+    "max_memory_mb": {
+      "type": "integer",
+      "minimum": 128,
+      "maximum": 32768,
+      "default": 4096
+    },
+    "deterministic": {
+      "type": "boolean",
+      "default": false
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "default": 0
+    }
+  }
+}

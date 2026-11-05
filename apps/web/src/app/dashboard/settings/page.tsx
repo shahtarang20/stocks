@@ -19,27 +19,28 @@ import {
 } from "@/components/ui/dialog";
 import { api, apiErrorCode, ApiError, clearStoredTokens, CREDITS_LABEL } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/components/console/toast";
 
 const ACCOUNT_ERRORS: Record<string, string> = {
   current_password_incorrect: "Your current password is not correct.",
-  new_password_same_as_current: "Choose a new password that is different from the current one.",
-  password_incorrect: "That password is not correct.",
-  account_has_active_jobs: "You still have jobs in progress. Wait for them to finish or cancel them first.",
-  account_has_held_credits: "Some of your credits are held by a job in progress. Wait for it to finish first.",
-  account_has_open_disputes: "You have an open dispute. It must be resolved before the account can be deleted.",
-  account_has_pending_payouts: "You have a payout request in progress. Wait for it to settle first.",
-  administrator_cannot_self_delete: "Administrator accounts cannot delete themselves. Ask another administrator to remove your admin role first.",
-  credits_would_be_forfeited: "Tick the box to confirm you give up your remaining credits.",
+  new_password_same_as_current: "Your new password must be different from your current one. Choose another.",
+  password_incorrect: "That password is not right. Check it and try again.",
+  account_has_active_jobs: "You still have jobs running. Wait for them to finish, or cancel them, then try again.",
+  account_has_held_credits: "A running job is holding some of your credits. Wait for it to finish, then try again.",
+  account_has_open_disputes: "You have a dispute that is still open. Wait for our answer, then try again.",
+  account_has_pending_payouts: "You have a payout request that is not finished. Wait for it to finish, then try again.",
+  administrator_cannot_self_delete: "An administrator account cannot delete itself. Ask another administrator to remove your admin role first.",
+  credits_would_be_forfeited: "Tick the box to confirm you give up your remaining credits, then try again.",
 };
 
 function accountError(err: unknown): string {
   const code = apiErrorCode(err);
   if (code && ACCOUNT_ERRORS[code]) return ACCOUNT_ERRORS[code];
   if (err instanceof ApiError) {
-    if (err.status === 429) return "Too many attempts. Please wait a few minutes and try again.";
+    if (err.status === 429) return "Too many tries. Wait a few minutes, then try again.";
     return err.message;
   }
-  return "Something went wrong. Please try again.";
+  return "Something went wrong. Check your internet connection and try again.";
 }
 
 function ErrorLine({ message }: { message: string | null }) {
@@ -58,6 +59,7 @@ function ErrorLine({ message }: { message: string | null }) {
 export default function SettingsPage() {
   const { user, email, accessToken, refreshUser } = useAuth();
   const token = accessToken as string;
+  const toast = useToast();
 
   // ---- profile ----
   const [name, setName] = useState("");
@@ -69,6 +71,7 @@ export default function SettingsPage() {
     mutationFn: () => api.updateProfile(token, name.trim()),
     onSuccess: async () => {
       await refreshUser();
+      toast.success("Your name was saved.");
       setNameSaved(true);
       setTimeout(() => setNameSaved(false), 3000);
     },
@@ -93,8 +96,8 @@ export default function SettingsPage() {
   function submitPassword(e: React.FormEvent) {
     e.preventDefault();
     setPwLocalError(null);
-    if (newPw.length < 8) return setPwLocalError("New password must be at least 8 characters.");
-    if (newPw !== newPw2) return setPwLocalError("The new passwords do not match.");
+    if (newPw.length < 8) return setPwLocalError("That password is too short. Use at least 8 characters.");
+    if (newPw !== newPw2) return setPwLocalError("The two new passwords are different. Type the same password in both boxes.");
     pwMut.mutate();
   }
 
@@ -127,13 +130,13 @@ export default function SettingsPage() {
     <>
       <ConsolePageHeader
         title="Settings"
-        description="Manage your account profile, password and session."
+        description="Change your name or password, log out, or delete your account."
       />
       <div className="max-w-2xl space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>Profile</CardTitle>
-            <CardDescription>Your email is your sign-in and cannot be changed here.</CardDescription>
+            <CardTitle>Your details</CardTitle>
+            <CardDescription>Your email is how you log in. You cannot change it here.</CardDescription>
           </CardHeader>
           <CardContent>
             <form
@@ -148,10 +151,10 @@ export default function SettingsPage() {
                 <Input id="s-email" type="email" value={email ?? ""} readOnly />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="s-name">Display name</Label>
+                <Label htmlFor="s-name">Your name (shown in the app)</Label>
                 <Input
                   id="s-name"
-                  placeholder="Not set"
+                  placeholder="Not set yet"
                   maxLength={120}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -177,7 +180,7 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>Password</CardTitle>
             <CardDescription>
-              Changing your password signs you out everywhere, including this device.
+              When you change your password, you are logged out on every device, including this one. Then log in again with the new password.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -188,7 +191,15 @@ export default function SettingsPage() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="s-new-pw">New password</Label>
-                <Input id="s-new-pw" type="password" autoComplete="new-password" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+                <Input
+                  id="s-new-pw"
+                  type="password"
+                  autoComplete="new-password"
+                  aria-describedby="s-new-pw-help"
+                  value={newPw}
+                  onChange={(e) => setNewPw(e.target.value)}
+                />
+                <p id="s-new-pw-help" className="text-xs text-muted-foreground">Use at least 8 characters.</p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="s-new-pw2">Confirm new password</Label>
@@ -205,10 +216,9 @@ export default function SettingsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Session</CardTitle>
+            <CardTitle>Log out</CardTitle>
             <CardDescription>
-              Log out to end your session on this device. Your session is held
-              in secure cookies and in memory, never in local storage.
+              Log out to end your visit on this device. We do not keep your password in this browser.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -228,12 +238,12 @@ export default function SettingsPage() {
         <Card className="border-danger/40">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              Danger zone <Badge variant="danger">Irreversible</Badge>
+              Delete your account <Badge variant="danger">Cannot be undone</Badge>
             </CardTitle>
             <CardDescription>
-              Deleting your account removes your email and name, signs you out everywhere and
-              revokes your API keys and machines. Job, invoice and ledger records are kept
-              without your identity, because they are financial records.
+              Deleting your account removes your email and name, logs you out everywhere, and turns
+              off your API keys and any computers you added as a host. We keep your job, invoice and
+              payment records, but without your name or email, because they are financial records.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -249,11 +259,18 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Delete your account?</DialogTitle>
             <DialogDescription>
-              This cannot be undone. You can sign up again with the same email later, but
-              nothing from this account carries over.
+              You cannot undo this. You can sign up again with the same email later, but
+              nothing from this account will come with you.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <form
+            id="delete-account-form"
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (delPw && !(hasCredits && !forfeit) && !deleteMut.isPending) deleteMut.mutate();
+            }}
+          >
             {hasCredits ? (
               <label className="flex items-start gap-2 text-sm">
                 <input
@@ -264,24 +281,25 @@ export default function SettingsPage() {
                   onChange={(e) => setForfeit(e.target.checked)}
                 />
                 <span>
-                  I give up my remaining <span className="font-mono">{available}</span> {CREDITS_LABEL}.
+                  I give up my remaining <span className="font-mono">{available}</span> credits. They are {CREDITS_LABEL.toLowerCase()}.
                 </span>
               </label>
             ) : null}
             <div className="space-y-1.5">
-              <Label htmlFor="s-del-pw">Enter your password to confirm</Label>
+              <Label htmlFor="s-del-pw">Type your password to confirm</Label>
               <Input id="s-del-pw" type="password" autoComplete="current-password" value={delPw} onChange={(e) => setDelPw(e.target.value)} />
             </div>
             {deleteMut.isError ? <ErrorLine message={accountError(deleteMut.error)} /> : null}
-          </div>
+          </form>
           <DialogFooter>
             <Button variant="outline" onClick={closeDelete} disabled={deleteMut.isPending}>
               Cancel
             </Button>
             <Button
+              type="submit"
+              form="delete-account-form"
               variant="danger"
               disabled={!delPw || (hasCredits && !forfeit) || deleteMut.isPending}
-              onClick={() => deleteMut.mutate()}
             >
               {deleteMut.isPending ? <Loader2 className="animate-spin" /> : null}
               Delete my account

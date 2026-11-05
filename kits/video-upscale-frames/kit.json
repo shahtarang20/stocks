@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "slug": "video-upscale-frames",
+  "version": "1.0.0",
+  "name": "Video frame upscaling (pipeline helper)",
+  "description": "Upscales an ordered zip of numbered video frames 2x or 4x with Real-ESRGAN weights through spandrel and writes numbered PNG frames plus a manifest. Meant to sit between ffmpeg-transcode (extract frames) and a second ffmpeg-transcode step (encode) in a pipeline. Licences: see kits/video-upscale-frames/README.md.",
+  "category": "enhancement",
+  "image": "ghcr.io/computecoin/kit-video-upscale-frames@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "model": {
+        "type": "string",
+        "enum": [
+          "realesrgan-x4plus",
+          "realesrgan-x4plus-anime"
+        ],
+        "default": "realesrgan-x4plus"
+      },
+      "scale": {
+        "type": "integer",
+        "enum": [
+          2,
+          4
+        ],
+        "default": 4
+      },
+      "tile": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1024,
+        "default": 512
+      },
+      "fps": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 240,
+        "default": 30
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "frames",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "frames",
+      "path": "/out/frames"
+    },
+    {
+      "name": "manifest",
+      "path": "/out/manifest.json"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 6,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 16,
+    "disk_gb": 40
+  },
+  "billing_hints": {
+    "unit": "frame",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "perceptual",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "Per-frame fp32 inference differs slightly across GPU models; no temporal smoothing, so flicker is the source's. Defaults pending U5.3 benchmark data."
+  }
+}

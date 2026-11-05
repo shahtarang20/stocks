@@ -125,14 +125,61 @@ def verify_contract_signature(
     return hmac.compare_digest(expected, signature)
 
 
+def isolation_runtimes() -> list[str]:
+    """U8: isolation runtimes this host can run, advertised so BYOC is placed only where it is isolated."""
+    from .isolation import probe_gvisor, probe_microvm
+
+    out = []
+    try:
+        if probe_gvisor():
+            out.append("gvisor")
+        if probe_microvm():
+            out.append("microvm")
+    except Exception:
+        return []
+    return out
+
+
+def _vfio_gpu_flag() -> Optional[bool]:
+    """U14: True only when the operator turned the Windows VM tier on (``windows_vm_enabled``) AND this host really has
+    qemu, mtools, /dev/kvm, VFIO and a vfio-pci display device. None (field omitted) otherwise."""
+    try:
+        from .config import AgentConfig
+        from .vm_runner import advertise
+
+        if not AgentConfig.load().windows_vm_enabled:
+            return None
+        return True if advertise().get("vfio_gpu") is True else None
+    except Exception:
+        return None
+
+
+def _cpu_capable_flag() -> Optional[bool]:
+    """True only when the operator opted in to CPU-only Kits (``cpu_only_kits_enabled``); None (field omitted) otherwise."""
+    try:
+        from .config import AgentConfig
+
+        return True if AgentConfig.load().cpu_only_kits_enabled else None
+    except Exception:
+        return None
+
+
 def default_health(report: Optional[CapabilityReport] = None) -> dict[str, Any]:
     """Minimal health block matching the contract's ``health`` shape."""
-    return {
+    health: dict[str, Any] = {
         "gpu_temp_c": None,
         "gpu_util_pct": None,
         "mem_used_mb": None,
         "uptime_s": int(max(0.0, time.time() - _PROCESS_START)),
+        "isolation_runtimes": isolation_runtimes(),
     }
+    vfio = _vfio_gpu_flag()  # additive: absent unless the host qualifies, so every existing payload is unchanged
+    if vfio is not None:
+        health["vfio_gpu"] = vfio
+    cpu_capable = _cpu_capable_flag()
+    if cpu_capable is not None:
+        health["cpu_capable"] = cpu_capable
+    return health
 
 
 def build_contract_heartbeat_body(
@@ -228,8 +275,12 @@ def heartbeat_loop(
     report_factory: Callable[[], CapabilityReport] = build_capability_report,
     sleeper: Callable[[float], None] = time.sleep,
     emit: Optional[Callable[[int, Any], None]] = None,
+    availability_fn: Optional[Callable[[], str]] = None,
 ) -> list[Any]:
     """Send heartbeats on a fixed cadence.
+
+    ``availability_fn`` (B6) is asked before each beat for the availability to report
+    ("online" or "throttled"); an error in it falls back to ``availability``.
 
     ``iterations <= 0`` loops until interrupted; a positive value runs a bounded
     number of heartbeats (what tests use, with an injected ``transport`` and a
@@ -242,12 +293,16 @@ def heartbeat_loop(
     i = 0
     while iterations <= 0 or i < iterations:
         try:
+            try:
+                current = availability_fn() if availability_fn is not None else availability
+            except Exception:
+                current = availability
             resp = send_contract_heartbeat(
                 base_url,
                 machine_id,
                 machine_secret,
                 report=report,
-                availability=availability,
+                availability=current,
                 transport=transport,
             )
             responses.append(resp)

@@ -74,6 +74,12 @@ class Job(Base, TimestampMixin):
     execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="simulated")
     isolation_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="container")
     required_gpu_runtime: Mapped[str] = mapped_column(String(32), nullable=False, default="cuda")
+    # B5: {"egress": ["host:port", ...]} or NULL = no network.
+    network_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # U7: Job Spec v2 (Kit) jobs only; NULL for v1 jobs. kit_id is the Kit slug (no FK: Kits are immutable, addressed by slug+version).
+    spec_v2: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    kit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    kit_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # --- Phase B/C: batching, challenges and redundant (shadow) execution ---

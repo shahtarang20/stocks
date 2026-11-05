@@ -1,0 +1,8 @@
+out/
+secureboot/
+.test-keys/
+mkosi.extra/opt/
+mkosi.cache/
+# The root .gitignore ignores *.env; this file holds non-secret defaults and MUST ship in the image
+# (computecoin-agent.service reads it with EnvironmentFile=).
+!mkosi.extra/etc/computecoin/agent.env

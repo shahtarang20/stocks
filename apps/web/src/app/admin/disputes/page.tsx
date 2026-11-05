@@ -36,7 +36,7 @@ export default function AdminDisputesPage() {
     <>
       <ConsolePageHeader
         title="Disputes"
-        description="Open and resolved billing disputes across all customers from GET /v1/admin/disputes. Admins can resolve disputes and authorize refunds from Admin → Billing."
+        description="Customers open a dispute when they think a job charge is wrong. Read each one here. To decide a dispute or refund credits, go to Billing and checks."
         action={
           <Button variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
@@ -58,7 +58,7 @@ export default function AdminDisputesPage() {
           <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
             <AlertCircle className="h-8 w-8 text-danger" />
             <p className="text-sm text-muted-foreground">
-              {query.error instanceof ApiError ? query.error.message : "Failed to load disputes"}
+              {query.error instanceof ApiError ? query.error.message : "We could not load the disputes. Select Try again."}
             </p>
             <Button variant="outline" onClick={() => query.refetch()}>
               <RefreshCw /> Try again
@@ -71,7 +71,7 @@ export default function AdminDisputesPage() {
             <MessageSquareWarning className="h-8 w-8 text-muted-foreground" />
             <h3 className="font-semibold">No disputes</h3>
             <p className="text-sm text-muted-foreground">
-              No billing disputes have been opened. Customers can open disputes on completed jobs.
+              No one has disputed a charge. Customers can open a dispute on a finished job if they think the charge is wrong.
             </p>
           </CardContent>
         </Card>
@@ -80,11 +80,11 @@ export default function AdminDisputesPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Dispute ID</TableHead>
-                <TableHead>Job ID</TableHead>
+                <TableHead>Dispute</TableHead>
+                <TableHead>Job</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Reason</TableHead>
-                <TableHead>Refund</TableHead>
+                <TableHead>Refund (credits)</TableHead>
                 <TableHead>Opened</TableHead>
                 <TableHead>Resolved</TableHead>
               </TableRow>

@@ -29,6 +29,7 @@ import {
   privacyApi,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { HelpTip } from "@/components/ui/help-tip";
 import { createJobErrorMessage } from "@/lib/jobs";
 import { checkGuardianPin, preparePrivateJob } from "@/lib/ccpp";
 
@@ -65,37 +66,37 @@ const schema = z
       ])
       .default("container"),
     required_gpu_runtime: z.enum(["cuda", "rocm", "any"]).default("cuda"),
-    model: z.string().trim().min(1, "Model is required"),
+    model: z.string().trim().min(1, "Enter the name of an AI model. If you are not sure, use echo-sim-v1."),
     prompt: z.string().optional(),
     max_tokens: z
       .string()
       .optional()
       .refine((v) => !v || /^\d+$/.test(v.trim()), {
-        message: "Enter a whole number of tokens",
+        message: "Use a whole number, like 64.",
       }),
     items_json: z.string().optional(),
     machine_id: z.string().optional(),
     gpu_count: z.coerce
-      .number({ invalid_type_error: "Enter a whole number" })
-      .int("Whole number")
-      .min(1, "At least 1"),
+      .number({ invalid_type_error: "Enter a whole number, like 1." })
+      .int("Use a whole number, like 1.")
+      .min(1, "Enter 1 or more."),
     estimated_minutes: z.coerce
-      .number({ invalid_type_error: "Enter a whole number" })
-      .int("Whole number")
-      .min(1, "At least 1 minute"),
+      .number({ invalid_type_error: "Enter a whole number, like 5." })
+      .int("Use a whole number, like 5.")
+      .min(1, "Enter 1 minute or more."),
     max_cost: z
       .string()
       .trim()
-      .refine(decimal, { message: "Enter a decimal like 5.00" }),
+      .refine(decimal, { message: "Enter an amount like 5.00." }),
     max_runtime_seconds: z.coerce
-      .number({ invalid_type_error: "Enter a whole number" })
-      .int("Whole number")
-      .min(1, "At least 1 second"),
+      .number({ invalid_type_error: "Enter a whole number of seconds, like 300." })
+      .int("Use a whole number of seconds, like 300.")
+      .min(1, "Enter 1 second or more."),
     max_retries: z.coerce
-      .number({ invalid_type_error: "Enter a whole number" })
-      .int("Whole number")
-      .min(0, "Cannot be negative")
-      .max(10, "Too many"),
+      .number({ invalid_type_error: "Enter a whole number, like 1." })
+      .int("Use a whole number, like 1.")
+      .min(0, "Use 0 or more.")
+      .max(10, "Use 10 or less."),
   })
   .superRefine((val, ctx) => {
     if (val.workload_type === "text-generation") {
@@ -103,7 +104,7 @@ const schema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["prompt"],
-          message: "A prompt is required for text-generation",
+          message: "Write a prompt first. It is the instruction you want the AI to follow.",
         });
       }
     } else {
@@ -113,7 +114,7 @@ const schema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["items_json"],
-          message: "Provide a JSON object with an items array",
+          message: "Add your list of prompts. See the example below the box.",
         });
         return;
       }
@@ -124,7 +125,7 @@ const schema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["items_json"],
-          message: "Invalid JSON",
+          message: "We could not read this list. Check for a missing comma, quote or bracket.",
         });
         return;
       }
@@ -136,15 +137,15 @@ const schema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["items_json"],
-          message: 'Must be {"items": [ ... ]} with at least one item',
+          message: 'The list must look like {"items": [ ... ]} and have at least one item.',
         });
       }
     }
-    if (val.required_gpu_runtime === "rocm" && val.isolation_tier !== "container") {
+    if (val.required_gpu_runtime === "rocm" && !["container", "sealed", "sealed_pro"].includes(val.isolation_tier)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["isolation_tier"],
-        message: "AMD (ROCm) jobs can only use the Container isolation tier for now.",
+        message: "AMD graphics cards can run Standard, Private or Extra private jobs only. Pick one of those, or switch the graphics card brand to NVIDIA.",
       });
     }
   });
@@ -194,7 +195,7 @@ export default function NewJobPage() {
   );
 
   useEffect(() => {
-    if (requiredGpuRuntime === "rocm" && isolationTier !== "container") {
+    if (requiredGpuRuntime === "rocm" && !["container", "sealed", "sealed_pro"].includes(isolationTier ?? "")) {
       setValue("isolation_tier", "container");
     }
   }, [requiredGpuRuntime, isolationTier, setValue]);
@@ -239,7 +240,7 @@ export default function NewJobPage() {
       ["sealed", "sealed_pro", "confidential"].includes(values.isolation_tier)
     ) {
       if (!key) {
-        setPrepError("No customer encryption key available");
+        setPrepError("We could not find your private key in this browser. Reload the page and try again.");
         return;
       }
       setIsPreparing(true);
@@ -268,7 +269,7 @@ export default function NewJobPage() {
         };
       } catch (err: any) {
         setIsPreparing(false);
-        setPrepError("Failed to prepare private job encryption: " + (err?.message || String(err)));
+        setPrepError("We could not lock (encrypt) your job input, so nothing was sent. Try again, or pick a different privacy level. Details: " + (err?.message || String(err)));
         return;
       }
       setIsPreparing(false);
@@ -318,15 +319,15 @@ export default function NewJobPage() {
         await executeJobSubmission(toSubmit, updatedKey);
       }
     } catch (err: any) {
-      setPrepError("Key backup failed: " + (err?.message || String(err)));
+      setPrepError("We could not save your key backup, so the job was not sent. Try the download again. Details: " + (err?.message || String(err)));
     }
   }
 
   return (
     <>
       <ConsolePageHeader
-        title="New job"
-        description="Submit a compute job via POST /v1/jobs. The scheduler validates, matches a machine, reserves capacity and dispatches it to the provider agent."
+        title="Start a new job"
+        description="Tell us what to run and the most you are willing to pay. We check your job, find a host's computer that fits, set your credits aside and start it."
         action={
           <Button asChild variant="outline">
             <Link href="/dashboard/jobs">
@@ -340,12 +341,11 @@ export default function NewJobPage() {
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <p className="text-muted-foreground">
           <span className="font-medium text-foreground">
-            CPU-only infrastructure runs in{" "}
-            <span className="font-mono">simulated</span> execution mode.
+            Right now, jobs usually run in practice mode (also called simulated).
           </span>{" "}
-          A simulated job returns a deterministic transform of your input — it is{" "}
-          <span className="font-medium">not real model inference</span> and must
-          never be treated as such. Nothing is charged in Phase 4.
+          In practice mode the result is a simple placeholder made from your input. It is{" "}
+          <span className="font-medium">not real AI output</span>, so do not rely on it. You only use
+          test credits, never real money.
         </p>
       </div>
 
@@ -364,83 +364,95 @@ export default function NewJobPage() {
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-1.5">
-                <Label htmlFor="workload_type">Workload type</Label>
+                <Label htmlFor="workload_type">Type of job</Label>
                 <select
                   id="workload_type"
                   className={selectClass}
                   {...register("workload_type")}
                 >
-                  <option value="text-generation">text-generation</option>
-                  <option value="batch-inference">batch-inference</option>
+                  <option value="text-generation">Answer one prompt (text-generation)</option>
+                  <option value="batch-inference">Answer a list of prompts (batch-inference)</option>
                 </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Choose &quot;one prompt&quot; to ask one question. Choose &quot;a list&quot; to send many at once.
+                </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="required_gpu_runtime">GPU runtime</Label>
+                <Label htmlFor="required_gpu_runtime">Graphics card brand</Label>
                 <select
                   id="required_gpu_runtime"
                   className={selectClass}
                   {...register("required_gpu_runtime")}
                 >
-                  <option value="cuda">CUDA</option>
-                  <option value="rocm">ROCm</option>
-                  <option value="any">Any</option>
+                  <option value="cuda">NVIDIA (CUDA)</option>
+                  <option value="rocm">AMD (ROCm)</option>
+                  <option value="any">Either brand</option>
                 </select>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {requiredGpuRuntime === "rocm"
-                    ? "AMD (ROCm) GPUs: Container isolation only for now."
-                    : "Target GPU runtime environment."}
+                    ? "AMD graphics cards can run Standard, Private and Extra private jobs only."
+                    : "The brand of graphics card (GPU) your job needs. If you are not sure, keep NVIDIA."}
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="isolation_tier">Isolation & Privacy Tier</Label>
+                <div>
+                  <Label htmlFor="isolation_tier">Privacy level</Label>
+                  <HelpTip term="privacy level">
+                    How well the host&apos;s computer is walled off from your job. Standard is the plain choice.
+                    The private levels lock your input so it is harder for the host to read, but they need
+                    special security hardware (such as a TPM chip) in the host&apos;s computer. Fewer computers
+                    have it, so these jobs can wait longer.
+                  </HelpTip>
+                </div>
                 <select
                   id="isolation_tier"
                   className={selectClass}
                   {...register("isolation_tier")}
                 >
-                  <option value="container">Container (shared kernel)</option>
+                  <option value="container">Standard (locked-down container)</option>
                   <option value="gvisor" disabled={requiredGpuRuntime === "rocm"}>
-                    gVisor sandbox (runsc){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                    Stronger wall (gVisor){requiredGpuRuntime === "rocm" ? " (not for AMD)" : ""}
                   </option>
                   <option value="microvm" disabled={requiredGpuRuntime === "rocm"}>
-                    microVM (Kata / Firecracker){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                    Stronger wall (microVM){requiredGpuRuntime === "rocm" ? " (not for AMD)" : ""}
                   </option>
-                  <option value="sealed" disabled={requiredGpuRuntime === "rocm"}>
-                    Sealed (private){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  <option value="sealed">
+                    Private (sealed){requiredGpuRuntime === "rocm" ? " (host needs the sealed setup)" : ""}
                   </option>
-                  <option value="sealed_pro" disabled={requiredGpuRuntime === "rocm"}>
-                    Sealed Pro (private){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                  <option value="sealed_pro">
+                    Extra private (sealed pro){requiredGpuRuntime === "rocm" ? " (host needs the sealed setup)" : ""}
                   </option>
                   <option value="confidential" disabled={requiredGpuRuntime === "rocm"}>
-                    Confidential (private){requiredGpuRuntime === "rocm" ? " (container only on ROCm)" : ""}
+                    Confidential{requiredGpuRuntime === "rocm" ? " (not for AMD)" : ""}
                   </option>
                 </select>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {isPrivateTier ? (
-                    <span className="text-emerald-400">
-                      Your input is encrypted in this browser and only your browser can decrypt the
-                      result; ComputeCoin&apos;s servers never see either. The host that runs the job
-                      decrypts the input in memory to compute on it. Hardware attestation (TPM / TEE)
-                      is not live yet, so today this relies on the host running the published sealed
-                      image and on its bonded stake, not on a hardware proof.
+                    <span className="text-success">
+                      Your input is locked (encrypted) in this browser. Only your browser can unlock the
+                      result, and ComputeCoin&apos;s servers never see either. The host&apos;s computer
+                      must unlock the input in memory to work on it. This level needs a host with special
+                      security hardware. The proof that the hardware is real has not been tested on
+                      real machines yet, so today you also trust the host to run the published private
+                      setup.
                       {GUARDIAN_PIN ? null : (
                         <>
-                          {" "}This build does not pin the guardian keys, so you are trusting ComputeCoin
-                          to serve the right ones.
+                          {" "}This version of the site does not double-check the safety keys, so you are
+                          trusting ComputeCoin to hand out the right ones.
                         </>
                       )}
                     </span>
                   ) : isolationTier === "gvisor" || isolationTier === "microvm" ? (
-                    <span>Stronger sandboxing against the job escaping. The host can still see the job.</span>
+                    <span>A stronger wall around your job on the host&apos;s computer. The host can still see what you send.</span>
                   ) : (
-                    <span className="text-amber-400">
-                      The host can see this job&apos;s input and output. Do not send private data.
+                    <span className="text-warning">
+                      The host can see what you send and what comes back. Do not send private or secret data.
                     </span>
                   )}
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="model">Model</Label>
+                <Label htmlFor="model">AI model</Label>
                 <Input
                   id="model"
                   aria-invalid={Boolean(errors.model)}
@@ -450,8 +462,8 @@ export default function NewJobPage() {
                   <p className="text-xs text-danger">{errors.model.message}</p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    <span className="font-mono">echo-sim-v1</span> is the approved
-                    simulated model.
+                    <span className="font-mono">echo-sim-v1</span> is the practice
+                    model. It does not run real AI. Keep it for now.
                   </p>
                 )}
               </div>
@@ -461,21 +473,30 @@ export default function NewJobPage() {
             {workloadType === "text-generation" ? (
               <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
                 <div className="space-y-1.5">
-                  <Label htmlFor="prompt">Prompt</Label>
+                  <Label htmlFor="prompt">Your prompt</Label>
                   <textarea
                     id="prompt"
                     rows={4}
                     className={textareaClass}
-                    placeholder="Write a haiku about distributed compute…"
+                    placeholder="For example: Write a short poem about the sea."
                     aria-invalid={Boolean(errors.prompt)}
                     {...register("prompt")}
                   />
                   {errors.prompt ? (
                     <p className="text-xs text-danger">{errors.prompt.message}</p>
-                  ) : null}
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      The question or instruction you want the AI to answer.
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="max_tokens">Max tokens</Label>
+                  <div>
+                    <Label htmlFor="max_tokens">Longest answer</Label>
+                    <HelpTip term="token">
+                      A token is a small piece of a word. Longer answers use more tokens, so they take longer.
+                    </HelpTip>
+                  </div>
                   <Input
                     id="max_tokens"
                     type="number"
@@ -489,13 +510,13 @@ export default function NewJobPage() {
                       {errors.max_tokens.message}
                     </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">Optional</p>
+                    <p className="text-xs text-muted-foreground">Optional. Counted in tokens.</p>
                   )}
                 </div>
               </div>
             ) : (
               <div className="space-y-1.5">
-                <Label htmlFor="items_json">Items (JSON)</Label>
+                <Label htmlFor="items_json">Your list of prompts</Label>
                 <textarea
                   id="items_json"
                   rows={8}
@@ -509,8 +530,8 @@ export default function NewJobPage() {
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    A JSON object with an <span className="font-mono">items</span>{" "}
-                    array, e.g.{" "}
+                    Write your list in the format below (this format is called JSON). Put one
+                    prompt inside each pair of curly brackets, for example{" "}
                     <span className="font-mono">
                       {'{"items": [{"prompt": "Hello"}]}'}
                     </span>
@@ -521,21 +542,21 @@ export default function NewJobPage() {
             )}
 
             <div className="space-y-1.5">
-              <Label htmlFor="machine_id">Target machine (optional)</Label>
+              <Label htmlFor="machine_id">Choose a specific computer (optional)</Label>
               <Input
                 id="machine_id"
-                placeholder="Leave blank to let the scheduler pick"
+                placeholder="Leave empty and we will pick one for you"
                 {...register("machine_id")}
               />
               <p className="text-xs text-muted-foreground">
-                Omit to let the scheduler pick the best eligible machine. Paste a
-                machine ID from the marketplace to target a specific one.
+                Most people leave this empty, and we pick the best computer that is free.
+                To use a particular computer, paste its ID from the marketplace.
               </p>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-1.5">
-                <Label htmlFor="gpu_count">GPU count</Label>
+                <Label htmlFor="gpu_count">Number of graphics cards (GPUs)</Label>
                 <Input
                   id="gpu_count"
                   type="number"
@@ -547,10 +568,12 @@ export default function NewJobPage() {
                   <p className="text-xs text-danger">
                     {errors.gpu_count.message}
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-xs text-muted-foreground">How many your job needs. Most jobs need 1.</p>
+                )}
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="estimated_minutes">Est. minutes</Label>
+                <Label htmlFor="estimated_minutes">Expected run time (minutes)</Label>
                 <Input
                   id="estimated_minutes"
                   type="number"
@@ -562,10 +585,12 @@ export default function NewJobPage() {
                   <p className="text-xs text-danger">
                     {errors.estimated_minutes.message}
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-xs text-muted-foreground">Your best guess. We use it to work out the price.</p>
+                )}
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="max_runtime_seconds">Max runtime (s)</Label>
+                <Label htmlFor="max_runtime_seconds">Time limit (seconds)</Label>
                 <Input
                   id="max_runtime_seconds"
                   type="number"
@@ -577,10 +602,12 @@ export default function NewJobPage() {
                   <p className="text-xs text-danger">
                     {errors.max_runtime_seconds.message}
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-xs text-muted-foreground">The job is stopped after this long. 300 seconds is 5 minutes.</p>
+                )}
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="max_retries">Max retries</Label>
+                <Label htmlFor="max_retries">Tries again if a computer fails</Label>
                 <Input
                   id="max_retries"
                   type="number"
@@ -592,12 +619,14 @@ export default function NewJobPage() {
                   <p className="text-xs text-danger">
                     {errors.max_retries.message}
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-xs text-muted-foreground">How many times we move your job to another computer. 0 means never.</p>
+                )}
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="max_cost">Max cost (budget cap)</Label>
+              <Label htmlFor="max_cost">Most you will pay (credits)</Label>
               <Input
                 id="max_cost"
                 inputMode="decimal"
@@ -610,8 +639,8 @@ export default function NewJobPage() {
                 <p className="text-xs text-danger">{errors.max_cost.message}</p>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  The estimate is validated against this cap (over it → rejected).{" "}
-                  {CREDITS_LABEL}. Nothing is charged in Phase 4.
+                  We will not start the job if the price is higher than this. Amounts are in credits.{" "}
+                  {CREDITS_LABEL}.
                 </p>
               )}
             </div>
@@ -623,11 +652,11 @@ export default function NewJobPage() {
               <Button type="submit" disabled={createMut.isPending || isPreparing}>
                 {isPreparing ? (
                   <>
-                    <Loader2 className="animate-spin" /> Encrypting payload…
+                    <Loader2 className="animate-spin" /> Locking your input…
                   </>
                 ) : createMut.isPending ? (
                   <>
-                    <Loader2 className="animate-spin" /> Submitting…
+                    <Loader2 className="animate-spin" /> Sending your job…
                   </>
                 ) : (
                   "Submit job"
@@ -652,13 +681,13 @@ export default function NewJobPage() {
           <DialogHeader>
             <div className="flex items-center gap-2 text-warning">
               <Key className="h-5 w-5" />
-              <DialogTitle>Backup Your Private Key (Required)</DialogTitle>
+              <DialogTitle>Save a backup of your private key</DialogTitle>
             </div>
             <DialogDescription className="text-left text-sm pt-2">
-              You are submitting a private job with end-to-end encryption.
-              Your encryption key is generated and stored{" "}
-              <strong className="text-foreground">exclusively in this browser</strong> (IndexedDB).
-              ComputeCoin servers <strong className="text-foreground">never receive or store</strong> your private key.
+              You picked a private job, so your input is locked (encrypted). The key that unlocks your
+              results is kept{" "}
+              <strong className="text-foreground">only in this browser</strong>.
+              ComputeCoin <strong className="text-foreground">never receives or stores</strong> your private key.
             </DialogDescription>
           </DialogHeader>
 
@@ -666,17 +695,17 @@ export default function NewJobPage() {
             <div className="flex items-start gap-2 text-warning">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <p className="font-semibold text-foreground">Critical Warning:</p>
+                <p className="font-semibold text-foreground">Please read this:</p>
                 <p className="text-muted-foreground">
-                  If you clear your browser cache, use an incognito window, or switch devices without a backup,
-                  <strong className="text-foreground"> you will permanently lose access</strong> to your decrypted job results.
+                  If you clear your browser data, use a private window, or switch to another device without a backup,
+                  <strong className="text-foreground"> you will lose your results for good</strong>. We cannot recover them for you.
                 </p>
               </div>
             </div>
 
             {customerKey ? (
               <div className="pt-1">
-                <span className="text-muted-foreground">Public Key:</span>
+                <span className="text-muted-foreground">Public key (safe to share):</span>
                 <p className="font-mono text-[11px] break-all select-all text-foreground mt-0.5">
                   {customerKey.publicKeyHex}
                 </p>
@@ -699,7 +728,7 @@ export default function NewJobPage() {
               onClick={handleDownloadKeyBackup}
               className="gap-2"
             >
-              <Download className="h-4 w-4" /> Download Key Backup &amp; Submit
+              <Download className="h-4 w-4" /> Download key backup and send job
             </Button>
           </DialogFooter>
         </DialogContent>

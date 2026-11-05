@@ -45,7 +45,7 @@ class SlashCreate(BaseModel):
     """Admin slash request. ``idempotency_key`` is mandatory: a slash moves real
     money, so a retried request must be provably the same request."""
 
-    amount: decimal.Decimal = Field(gt=0)
+    amount: decimal.Decimal = Field(gt=0, max_digits=24)
     reason: str = Field(min_length=8, max_length=1024)
     idempotency_key: str = Field(min_length=8, max_length=128)
     job_id: uuid.UUID | None = None

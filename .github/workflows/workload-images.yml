@@ -1,0 +1,135 @@
+name: Workload images
+
+# Builds the CUDA and ROCm workload images, pushes them to GHCR and records the digests in
+# workloads/digests.json. Base images are pinned by digest in repository variables.
+# Required repository variables: CUDA_BASE_IMAGE, ROCM_BASE_IMAGE, FETCH_IMAGE (all name@sha256:...),
+#   PROXY_BASE_IMAGE (python image for workloads/egress-proxy, name@sha256:...),
+#   TEXTGEN_MODEL_REVISION, TEXTGEN_MANIFEST_SHA256, EMBED_MODEL_REVISION, EMBED_MANIFEST_SHA256.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "workloads/**"
+      - ".github/workflows/workload-images.yml"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: workload-images
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.workload }} (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [text-generation, embeddings]
+        runtime: [cuda, rocm]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lowercase registry owner (GHCR repository names must be lowercase)
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve inputs
+        id: in
+        run: |
+          if [ "${{ matrix.runtime }}" = "cuda" ]; then echo "base=${{ vars.CUDA_BASE_IMAGE }}" >> "$GITHUB_OUTPUT"; else echo "base=${{ vars.ROCM_BASE_IMAGE }}" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ matrix.workload }}" = "text-generation" ]; then
+            echo "rev=${{ vars.TEXTGEN_MODEL_REVISION }}" >> "$GITHUB_OUTPUT"
+            echo "manifest=${{ vars.TEXTGEN_MANIFEST_SHA256 }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "rev=${{ vars.EMBED_MODEL_REVISION }}" >> "$GITHUB_OUTPUT"
+            echo "manifest=${{ vars.EMBED_MANIFEST_SHA256 }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refuse unpinned bases
+        run: |
+          case "${{ steps.in.outputs.base }}" in *@sha256:*) ;; *) echo "base image is not pinned by digest"; exit 1;; esac
+          case "${{ vars.FETCH_IMAGE }}" in *@sha256:*) ;; *) echo "FETCH_IMAGE is not pinned by digest"; exit 1;; esac
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: workloads/${{ matrix.workload }}
+          file: workloads/${{ matrix.workload }}/Dockerfile.${{ matrix.runtime }}
+          push: true
+          tags: ghcr.io/${{ env.OWNER_LC }}/computecoin-${{ matrix.workload }}-${{ matrix.runtime }}:${{ github.sha }}
+          build-args: |
+            BASE_IMAGE=${{ steps.in.outputs.base }}
+            FETCH_IMAGE=${{ vars.FETCH_IMAGE }}
+            MODEL_REVISION=${{ steps.in.outputs.rev }}
+            EXPECTED_MANIFEST_SHA256=${{ steps.in.outputs.manifest }}
+          provenance: true
+      - name: Record digest
+        run: |
+          mkdir -p out
+          echo "ghcr.io/${{ env.OWNER_LC }}/computecoin-${{ matrix.workload }}-${{ matrix.runtime }}@${{ steps.build.outputs.digest }}" > out/${{ matrix.workload }}.${{ matrix.runtime }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.workload }}-${{ matrix.runtime }}
+          path: out/*
+
+  egress-proxy:
+    name: Build egress proxy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lowercase registry owner (GHCR repository names must be lowercase)
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse unpinned base
+        run: |
+          case "${{ vars.PROXY_BASE_IMAGE }}" in *@sha256:*) ;; *) echo "PROXY_BASE_IMAGE (python image name@sha256:...) is not set or not pinned"; exit 1;; esac
+      - uses: docker/build-push-action@v6
+        with:
+          context: workloads/egress-proxy
+          push: true
+          tags: ghcr.io/${{ env.OWNER_LC }}/computecoin-egress-proxy:${{ github.sha }}
+          build-args: |
+            BASE_IMAGE=${{ vars.PROXY_BASE_IMAGE }}
+          provenance: true
+
+  record:
+    name: Write workloads/digests.json
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - name: Update digests.json
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("workloads/digests.json")
+          data = json.loads(p.read_text())
+          for f in pathlib.Path("digests").iterdir():
+              workload, runtime = f.name.rsplit(".", 1)
+              data["images"][workload][runtime] = f.read_text().strip()
+          data.pop("_comment", None)
+          p.write_text(json.dumps(data, indent=2) + "\n")
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add workloads/digests.json
+          git diff --cached --quiet || (git commit -m "chore(workloads): record image digests [skip ci]" && git push)

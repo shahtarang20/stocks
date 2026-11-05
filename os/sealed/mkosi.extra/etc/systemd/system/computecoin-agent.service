@@ -1,0 +1,33 @@
+[Unit]
+Description=ComputeCoin provider agent (Sealed OS)
+After=network-online.target docker.service tpm2.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/opt/computecoin-agent/venv/bin/computecoin-agent run --private-tier sealed
+EnvironmentFile=/etc/computecoin/agent.env
+Restart=always
+RestartSec=5
+# Config and credentials live in volatile /run; nothing persists across boots.
+Environment=COMPUTECOIN_CONFIG_DIR=/run/computecoin
+# PrivateTmp gives the agent its own /tmp, which the docker daemon (host mount namespace) cannot see: a job's bind
+# source created there does not exist for dockerd and every container job would fail. Per-job work dirs go to the
+# (RAM-backed, host-visible, 0700) runtime directory instead.
+Environment=TMPDIR=/run/computecoin
+RuntimeDirectory=computecoin
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SupplementaryGroups=docker tss
+
+[Install]
+WantedBy=multi-user.target

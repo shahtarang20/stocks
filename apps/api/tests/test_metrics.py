@@ -15,3 +15,13 @@ async def test_metrics_endpoint_exposes_gauges(client):
     assert "computecoin_users_total" in body
     # The money-safety metric must be present and zero on a balanced ledger.
     assert "computecoin_ledger_imbalance_minor 0" in body
+
+
+@pytest.mark.asyncio
+async def test_metrics_token_enforced_when_configured(client, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "METRICS_TOKEN", "s3cret-metrics-token")
+    assert (await client.get("/metrics")).status_code == 401
+    assert (await client.get("/metrics", headers={"Authorization": "Bearer wrong"})).status_code == 401
+    assert (await client.get("/metrics", headers={"Authorization": "Bearer s3cret-metrics-token"})).status_code == 200

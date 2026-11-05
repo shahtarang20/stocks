@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+# ComputeCoin embeddings workload image (cuda build).
+# Base images are pinned by digest through build args; the build FAILS on a tag-only reference (R7).
+#   BASE_IMAGE   e.g. vllm/vllm-openai@sha256:<digest> (CUDA)
+#   FETCH_IMAGE  a python image used only to download the weights at build time
+ARG BASE_IMAGE
+ARG FETCH_IMAGE
+
+FROM ${FETCH_IMAGE} AS fetch
+ARG MODEL_REPO=sentence-transformers/all-MiniLM-L6-v2
+# Exact commit of the model repo; weights are fetched only at this revision.
+ARG MODEL_REVISION
+# SHA-256 of the manifest (sha256sum of every weight file); the build fails if the download differs.
+ARG EXPECTED_MANIFEST_SHA256
+RUN test -n "${MODEL_REVISION}" && test -n "${EXPECTED_MANIFEST_SHA256}" \
+ && pip install --no-cache-dir "huggingface_hub==0.26.2" \
+ && python -c "from huggingface_hub import snapshot_download; snapshot_download('${MODEL_REPO}', revision='${MODEL_REVISION}', local_dir='/model', allow_patterns=['*.json','*.safetensors','*.model','*.txt'])" \
+ && cd /model && find . -type f ! -path './.cache/*' | sort | xargs sha256sum | sed 's# \./# #' > /model.sha256 \
+ && rm -rf /model/.cache \
+ && echo "${EXPECTED_MANIFEST_SHA256}  /model.sha256" | sha256sum -c -
+
+FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
+RUN case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE must be pinned by digest" >&2; exit 1;; esac
+COPY --from=fetch /model /opt/model
+COPY --from=fetch /model.sha256 /opt/model.sha256
+COPY entrypoint.py /app/entrypoint.py
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin workload \
+ && chmod -R a-w /opt/model /app
+ENV MODEL_DIR=/opt/model MODEL_MANIFEST=/opt/model.sha256 \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 PYTHONDONTWRITEBYTECODE=1
+USER 10001
+# The executor runs this with --network none, --read-only and a writable /out.
+ENTRYPOINT ["python3", "/app/entrypoint.py"]

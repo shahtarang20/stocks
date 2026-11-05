@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
 import {
   Table,
   TableBody,
@@ -28,12 +30,12 @@ import {
 } from "@/components/ui/dialog";
 import { api, ApiError, type ApiKey, type ApiKeyCreated, type Project } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { formatRelativeTime } from "@/lib/utils";
 
 export default function ApiKeysPage() {
   const { accessToken } = useAuth();
   const token = accessToken as string;
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -67,12 +69,13 @@ export default function ApiKeysPage() {
     mutationFn: () => api.createApiKey(token, activeProjectId, keyName.trim()),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["api-keys", activeProjectId] });
+      toast.success("API key created. Copy it now. You will not see it again.");
       setNewKeyResult(data);
       setKeyName("");
       setErrorMessage(null);
     },
     onError: (err) => {
-      setErrorMessage(err instanceof ApiError ? err.message : "Failed to create API key");
+      setErrorMessage(err instanceof ApiError ? err.message : "We could not create the API key. Check the name and try again.");
     },
   });
 
@@ -80,28 +83,33 @@ export default function ApiKeysPage() {
     mutationFn: (keyId: string) => api.revokeApiKey(token, activeProjectId, keyId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["api-keys", activeProjectId] });
+      toast.success("API key turned off. Programs that used it can no longer connect.");
       setRevokeTarget(null);
       setErrorMessage(null);
     },
     onError: (err) => {
-      setErrorMessage(err instanceof ApiError ? err.message : "Failed to revoke API key");
+      setErrorMessage(err instanceof ApiError ? err.message : "We could not turn off this API key. Try again in a moment.");
     },
   });
 
   function handleCopyKey() {
     if (!newKeyResult?.api_key) return;
-    navigator.clipboard.writeText(newKeyResult.api_key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard
+      .writeText(newKeyResult.api_key)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => toast.error("We could not copy it for you. Select the key and copy it yourself."));
   }
 
   return (
     <>
       <ConsolePageHeader
         title="API keys"
-        description="Manage project-scoped API keys for programmatic access to the ComputeCoin API and OpenAI-compatible inference endpoints."
+        description="An API key is a secret password that lets a program or script use ComputeCoin for you, without logging in. You only need one if you plan to run jobs from code. Each key belongs to one project."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               onClick={() => keysQuery.refetch()}
@@ -118,7 +126,7 @@ export default function ApiKeysPage() {
               }}
               disabled={!activeProjectId}
             >
-              <Plus /> Create key
+              <Plus /> Create an API key
             </Button>
           </div>
         }
@@ -129,7 +137,7 @@ export default function ApiKeysPage() {
         {projects.length > 1 && (
           <div className="flex min-w-0 items-center gap-3">
             <Label htmlFor="proj-select" className="text-sm text-muted-foreground whitespace-nowrap">
-              Active Project:
+              Project:
             </Label>
             <select
               id="proj-select"
@@ -147,61 +155,54 @@ export default function ApiKeysPage() {
         )}
 
         {projectsQuery.isLoading ? (
-          <Card>
-            <CardContent className="space-y-3 p-6">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-8 w-full" />
-              ))}
-            </CardContent>
-          </Card>
+          <TableSkeleton rows={3} label="Loading projects" />
         ) : projects.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-              <KeyRound className="h-8 w-8 text-muted-foreground" />
-              <h3 className="font-semibold">No projects available</h3>
-              <p className="text-sm text-muted-foreground">
-                You must create a project before generating API keys. Head over to Projects to create one.
-              </p>
-            </CardContent>
-          </Card>
-        ) : keysQuery.isLoading ? (
-          <Card>
-            <CardContent className="space-y-3 p-6">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-8 w-full" />
-              ))}
-            </CardContent>
-          </Card>
-        ) : keysQuery.isError ? (
-          <Card className="border-danger/40">
-            <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-              <AlertCircle className="h-8 w-8 text-danger" />
-              <p className="text-sm text-muted-foreground">
-                {keysQuery.error instanceof ApiError ? keysQuery.error.message : "Failed to load API keys"}
-              </p>
-            </CardContent>
-          </Card>
-        ) : keys.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-              <KeyRound className="h-8 w-8 text-muted-foreground" />
-              <h3 className="font-semibold">No API keys in this project</h3>
-              <p className="text-sm text-muted-foreground">
-                Generate an API key to access ComputeCoin via Python SDK, TypeScript SDK, or curl.
-              </p>
-              <Button onClick={() => setCreateOpen(true)}>
-                <Plus /> Create key
+          <EmptyState
+            icon={KeyRound}
+            title="You need a project first"
+            action={
+              <Button asChild>
+                <Link href="/dashboard/projects">Create a project</Link>
               </Button>
-            </CardContent>
-          </Card>
+            }
+          >
+            An API key belongs to a project. Create a project first, then come back here.
+          </EmptyState>
+        ) : keysQuery.isLoading ? (
+          <TableSkeleton rows={3} label="Loading API keys" />
+        ) : keysQuery.isError ? (
+          <ErrorState
+            title="We could not load your API keys"
+            message={keysQuery.error instanceof ApiError ? keysQuery.error.message : undefined}
+            onRetry={() => keysQuery.refetch()}
+            retrying={keysQuery.isFetching}
+          />
+        ) : keys.length === 0 ? (
+          <EmptyState
+            icon={KeyRound}
+            title="This project has no API keys yet"
+            action={
+              <Button
+                onClick={() => {
+                  setErrorMessage(null);
+                  setNewKeyResult(null);
+                  setCreateOpen(true);
+                }}
+              >
+                <Plus /> Create an API key
+              </Button>
+            }
+          >
+            Create an API key if you want to send jobs from a program, such as a Python or JavaScript script. If you only use this website, you do not need one.
+          </EmptyState>
         ) : (
           <Card>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Label</TableHead>
-                  <TableHead>Key Prefix</TableHead>
-                  <TableHead>Created</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Start of the key</TableHead>
+                  <TableHead className="hidden sm:table-cell">Created</TableHead>
                   <TableHead>Last used</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -212,27 +213,31 @@ export default function ApiKeysPage() {
                     <TableCell className="font-medium">
                       {key.name}
                       {key.revoked_at ? (
-                        <Badge variant="outline" className="ml-2">Revoked</Badge>
+                        <Badge variant="outline" className="ml-2">Turned off</Badge>
                       ) : null}
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="whitespace-nowrap font-mono text-xs">
                       {key.prefix}••••••••
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatRelativeTime(key.created_at)}
+                    <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
+                      <RelativeTime iso={key.created_at} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {key.last_used_at ? formatRelativeTime(key.last_used_at) : "Never"}
+                      <RelativeTime iso={key.last_used_at} empty="Never" />
                     </TableCell>
                     <TableCell className="text-right">
                       {key.revoked_at ? null : (
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => setRevokeTarget(key)}
+                          aria-label={`Revoke API key ${key.name}`}
+                          onClick={() => {
+                            setErrorMessage(null);
+                            setRevokeTarget(key);
+                          }}
                           className="text-muted-foreground hover:text-danger"
                         >
-                          <Trash2 className="h-4 w-4 mr-1" /> Revoke
+                          <Trash2 className="h-4 w-4 mr-1" /> Turn off
                         </Button>
                       )}
                     </TableCell>
@@ -254,17 +259,17 @@ export default function ApiKeysPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {newKeyResult ? "API key generated" : "Create new API key"}
+              {newKeyResult ? "Your new API key" : "Create an API key"}
             </DialogTitle>
             <DialogDescription>
               {newKeyResult
-                ? "Copy your secret API key now. For security, it will never be displayed again."
-                : "Give your API key a descriptive name (e.g. ci-cd, vllm-prod)."}
+                ? "Copy your secret API key now. For your safety, we will never show it again."
+                : "Give your key a name so you remember what it is for, like my-laptop-script."}
             </DialogDescription>
           </DialogHeader>
 
           {errorMessage && (
-            <div className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+            <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
               {errorMessage}
             </div>
           )}
@@ -276,28 +281,38 @@ export default function ApiKeysPage() {
                   <code className="break-all font-mono text-sm text-primary">
                     {newKeyResult.api_key}
                   </code>
-                  <Button variant="outline" size="sm" onClick={handleCopyKey}>
+                  <Button variant="outline" size="sm" onClick={handleCopyKey} aria-label="Copy API key">
                     {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
                     {copied ? "Copied" : "Copy"}
                   </Button>
                 </div>
               </div>
-              <p className="text-xs text-warning">
-                ⚠️ Store this key safely. You will not be able to retrieve it again.
+              <p className="flex items-start gap-1.5 text-xs text-warning">
+                <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Keep this key somewhere safe, like a password manager. Do not share it. If you lose it, turn it off and create a new one.
               </p>
             </div>
           ) : (
-            <div className="space-y-4 py-2">
+            <form
+              id="create-key-form"
+              className="space-y-4 py-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (keyName.trim() && !createMutation.isPending) createMutation.mutate();
+              }}
+            >
               <div className="space-y-1.5">
-                <Label htmlFor="key-name">Key label</Label>
+                <Label htmlFor="key-name">Name for this key</Label>
                 <Input
                   id="key-name"
-                  placeholder="e.g. inference-client"
+                  placeholder="For example: my-laptop-script"
                   value={keyName}
                   onChange={(e) => setKeyName(e.target.value)}
+                  autoComplete="off"
+                  required
                 />
               </div>
-            </div>
+            </form>
           )}
 
           <DialogFooter>
@@ -311,10 +326,11 @@ export default function ApiKeysPage() {
                   Cancel
                 </Button>
                 <Button
-                  onClick={() => createMutation.mutate()}
+                  type="submit"
+                  form="create-key-form"
                   disabled={!keyName.trim() || createMutation.isPending}
                 >
-                  {createMutation.isPending ? "Generating…" : "Generate key"}
+                  {createMutation.isPending ? "Creating…" : "Create key"}
                 </Button>
               </>
             )}
@@ -326,11 +342,17 @@ export default function ApiKeysPage() {
       <Dialog open={Boolean(revokeTarget)} onOpenChange={(open) => !open && setRevokeTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Revoke API key</DialogTitle>
+            <DialogTitle>Turn off this API key?</DialogTitle>
             <DialogDescription>
-              Are you sure you want to revoke &quot;{revokeTarget?.name}&quot; ({revokeTarget?.prefix}…)? Any applications or scripts using this key will immediately be denied access.
+              Turn off &quot;{revokeTarget?.name}&quot; ({revokeTarget?.prefix}…)? Any program or script that uses this key will stop working right away. You can&apos;t undo this. You can always create a new key.
             </DialogDescription>
           </DialogHeader>
+
+          {errorMessage && revokeTarget ? (
+            <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+              {errorMessage}
+            </div>
+          ) : null}
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setRevokeTarget(null)} disabled={revokeMutation.isPending}>
@@ -342,7 +364,7 @@ export default function ApiKeysPage() {
               onClick={() => revokeTarget && revokeMutation.mutate(revokeTarget.id)}
               disabled={revokeMutation.isPending}
             >
-              {revokeMutation.isPending ? "Revoking…" : "Revoke key"}
+              {revokeMutation.isPending ? "Turning off…" : "Turn off key"}
             </Button>
           </DialogFooter>
         </DialogContent>

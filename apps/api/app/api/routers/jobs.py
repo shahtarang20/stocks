@@ -79,6 +79,7 @@ def shape_job(job: Job) -> JobOut:
         execution_mode=job.execution_mode,
         isolation_tier=getattr(job, "isolation_tier", "container") or "container",
         required_gpu_runtime=getattr(job, "required_gpu_runtime", "cuda") or "cuda",
+        network_policy=getattr(job, "network_policy", None),
         machine_id=job.machine_id,
         reservation_id=job.reservation_id,
         gpu_count=job.gpu_count,
@@ -176,6 +177,9 @@ async def create_job(
         if prior is not None:
             return shape_job(prior)
 
+    from app.services.abuse import assert_can_submit  # U16: no-op unless ABUSE_ENFORCE=true
+
+    await assert_can_submit(db, current.id)
     await _assert_project_accessible(db, body.project_id, current)
 
     # A targeted machine must exist BEFORE the insert: jobs.machine_id is a foreign
@@ -218,6 +222,7 @@ async def create_job(
         execution_mode="simulated",
         isolation_tier=body.isolation_tier or "container",
         required_gpu_runtime=(body.required_gpu_runtime or "cuda").lower(),
+        network_policy=body.network_policy,
         idempotency_key=idempotency_key,
         machine_id=body.machine_id,
         data_policy=body.data_policy.model_dump(mode="json", exclude_none=True) if body.data_policy else None,

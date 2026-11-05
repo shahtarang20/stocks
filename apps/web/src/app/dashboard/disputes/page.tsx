@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, RefreshCw, ShieldAlert } from "lucide-react";
+import { RefreshCw, ShieldAlert } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { CopyId, EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
 import {
   Table,
   TableBody,
@@ -18,8 +18,7 @@ import {
 } from "@/components/ui/table";
 import { api, ApiError, type Dispute } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { disputeStatusVariant, humanizeStatus } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
+import { disputeStatusText, disputeStatusVariant } from "@/lib/billing";
 import { shortId } from "@/lib/jobs";
 
 export default function DisputesPage() {
@@ -38,7 +37,7 @@ export default function DisputesPage() {
     <>
       <ConsolePageHeader
         title="Disputes"
-        description="Disputes you have opened on settled jobs. Open a dispute from a completed job's detail page."
+        description="A dispute asks our team to look again at a charge you think is wrong. Your disputes are listed here. To start one, open a finished job and press Dispute."
         action={
           <Button
             variant="outline"
@@ -52,46 +51,26 @@ export default function DisputesPage() {
       />
 
       {query.isLoading ? (
-        <Card>
-          <CardContent className="space-y-3 p-6">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </CardContent>
-        </Card>
+        <TableSkeleton rows={3} label="Loading disputes" />
       ) : query.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load disputes</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {query.error instanceof ApiError
-                ? query.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => query.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your disputes"
+          message={query.error instanceof ApiError ? query.error.message : undefined}
+          onRetry={() => query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : disputes.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-              <ShieldAlert className="h-6 w-6" />
-            </span>
-            <h3 className="font-semibold">No disputes</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              If a settled charge looks wrong, open a dispute from that job&apos;s
-              detail page and it will appear here.
-            </p>
+        <EmptyState
+          icon={ShieldAlert}
+          title="You have not opened any disputes"
+          action={
             <Button asChild>
-              <Link href="/dashboard/jobs">Go to jobs</Link>
+              <Link href="/dashboard/jobs">Go to my jobs</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          If a charge looks wrong, open that job and press Dispute. Tell us what looks wrong. The dispute will show up here, with our answer.
+        </EmptyState>
       ) : (
         <Card>
           <Table>
@@ -99,7 +78,7 @@ export default function DisputesPage() {
               <TableRow>
                 <TableHead>Dispute</TableHead>
                 <TableHead>Job</TableHead>
-                <TableHead>Reason</TableHead>
+                <TableHead>What you told us</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Opened</TableHead>
               </TableRow>
@@ -107,13 +86,14 @@ export default function DisputesPage() {
             <TableBody>
               {disputes.map((d) => (
                 <TableRow key={d.dispute_id}>
-                  <TableCell className="font-mono text-xs">
-                    {shortId(d.dispute_id)}
+                  <TableCell>
+                    <CopyId id={d.dispute_id} label="Copy dispute id" />
                   </TableCell>
                   <TableCell>
                     {d.job_id ? (
                       <Link
                         href={`/dashboard/jobs/${d.job_id}`}
+                        title={d.job_id}
                         className="font-mono text-xs text-primary hover:underline"
                       >
                         {shortId(d.job_id)}
@@ -122,16 +102,16 @@ export default function DisputesPage() {
                       "—"
                     )}
                   </TableCell>
-                  <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
+                  <TableCell className="max-w-[10rem] truncate text-sm text-muted-foreground sm:max-w-xs" title={d.reason}>
                     {d.reason}
                   </TableCell>
                   <TableCell>
                     <Badge variant={disputeStatusVariant(d.status)}>
-                      {humanizeStatus(d.status)}
+                      {disputeStatusText(d.status)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {formatRelativeTime(d.created_at)}
+                    <RelativeTime iso={d.created_at} />
                   </TableCell>
                 </TableRow>
               ))}

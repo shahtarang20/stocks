@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "slug": "ffmpeg-transcode",
+  "version": "1.0.0",
+  "name": "Video transcode (ffmpeg, NVENC)",
+  "description": "Re-encodes a video to H.264 or H.265 with NVENC when a GPU encoder is available, otherwise CPU. Optional start/duration window. ffmpeg build licence: see kits/ffmpeg-transcode/README.md.",
+  "category": "video",
+  "image": "ghcr.io/computecoin/kit-ffmpeg-transcode@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "codec": {
+        "type": "string",
+        "enum": [
+          "h264",
+          "h265"
+        ],
+        "default": "h264"
+      },
+      "encoder": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "nvenc",
+          "cpu"
+        ],
+        "default": "auto"
+      },
+      "crf": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 51,
+        "default": 23
+      },
+      "preset": {
+        "type": "string",
+        "enum": [
+          "fast",
+          "medium",
+          "slow"
+        ],
+        "default": "medium"
+      },
+      "height": {
+        "type": "integer",
+        "minimum": 144,
+        "maximum": 2160
+      },
+      "audio": {
+        "type": "string",
+        "enum": [
+          "aac",
+          "none"
+        ],
+        "default": "aac"
+      },
+      "start_seconds": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 86400,
+        "default": 0
+      },
+      "duration_seconds": {
+        "type": "number",
+        "minimum": 0.1,
+        "maximum": 86400
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "source",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "video",
+      "path": "/out/result.mp4"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 4,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 8,
+    "disk_gb": 50
+  },
+  "billing_hints": {
+    "unit": "video_minute",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "psnr_ssim",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "Reference is an independent re-encode of a sampled start/duration window with the same params. Hardware (NVENC) and software encodes legitimately differ, so defaults are loose and conservative; owner sets final values after U5.3 benchmarks. Empty thresholds use the verify_plugins defaults."
+  }
+}

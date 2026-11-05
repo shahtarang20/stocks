@@ -8,7 +8,9 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "test:a11y": "vitest run src/a11y"
   },
   "dependencies": {
     "@hookform/resolvers": "3.10.0",
@@ -20,6 +22,8 @@
     "@radix-ui/react-label": "2.1.2",
     "@radix-ui/react-slot": "1.1.2",
     "@tanstack/react-query": "5.66.0",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "lucide-react": "0.474.0",
@@ -33,12 +37,17 @@
     "zod": "3.24.1"
   },
   "devDependencies": {
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/react": "16.2.0",
     "@types/node": "22.13.1",
     "@types/react": "19.0.8",
     "@types/react-dom": "19.0.3",
     "autoprefixer": "10.4.20",
+    "axe-core": "4.10.2",
     "eslint": "9.19.0",
     "eslint-config-next": "15.5.28",
+    "eslint-plugin-jsx-a11y": "6.10.2",
+    "jsdom": "26.0.0",
     "postcss": "8.5.1",
     "tailwindcss": "3.4.17",
     "typescript": "5.7.3",

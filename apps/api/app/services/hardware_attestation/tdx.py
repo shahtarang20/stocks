@@ -20,7 +20,15 @@ Collateral is signed by Intel, so the host may fetch and send it. Checks:
 5. TCB Info collateral: Intel-signed, current, FMSPC equals the PCK's, and the first TCB level
    matched by the PCK's SGX TCB and the quote's TEE_TCB_SVN has status UpToDate;
 6. from the signed TD report: debug off, REPORTDATA == SHA-512(nonce), MRTD and RTMR0-3.
-Not implemented: CRL / OCSP revocation of the PCK chain, and the TDX-module identity check.
+7. revocation (P2, R5): ``collateral.crls`` carries Intel's PCK CRL and Root CA CRL (PEM / hex DER);
+   every link of the PCK chain and of the TCB signing chain needs a current CRL signed by its issuer
+   (``tdx_certificate_revoked`` / ``tdx_revocation_unknown``);
+8. TDX-module identity (P2): the quote's MRSIGNERSEAM and SEAMATTRIBUTES must match the Intel-signed
+   TCB Info module identity (``tdxModule`` for major version 0, else ``tdxModuleIdentities`` entry
+   ``TDX_<major>``), and its ISVSVN (TEE_TCB_SVN[0]) must reach a level with status UpToDate.
+Collateral formats were taken from Intel's PCS API v4 / TCB Info v3 descriptions (R7: re-check the
+current docs and record URL + date before real quotes are accepted). ``context["legacy_collateral_ok"]``
+(tests only; never set by the service) tolerates MISSING CRLs and module identity, never present bad ones.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from app.services.hardware_attestation import (
     load_pem_certificate,
     verify_chain,
 )
+from app.services.hardware_attestation.revocation import check_path_revocation, parse_crls
 
 HEADER_SIZE, BODY_SIZE, QE_REPORT_SIZE = 48, 584, 384
 TEE_TYPE_TDX = 0x81
@@ -230,6 +239,41 @@ def qe_identity_status(identity: dict[str, Any], isvsvn: int) -> str:
     return "NoMatchingLevel"
 
 
+def tdx_module_status(tcb_info: dict[str, Any], tee_tcb_svn: bytes, mrsignerseam: bytes, seam_attributes: bytes) -> str:
+    """Check the TDX module against the Intel-signed identity; returns the module's TCB status.
+
+    Raises tdx_module_identity_unknown (no identity published), tdx_bad_tdx_module (signer or
+    attributes differ). The caller requires the returned status to be UpToDate."""
+    major = tee_tcb_svn[1]
+    if major == 0:
+        ident = tcb_info.get("tdxModule")
+    else:
+        wanted = f"TDX_{major:02X}"
+        ident = next((i for i in tcb_info.get("tdxModuleIdentities") or [] if str(i.get("id", "")).upper() == wanted), None)
+    if not isinstance(ident, dict):
+        raise _err("module_identity_unknown", "TCB Info publishes no identity for this TDX module version")
+    try:
+        want_signer = bytes.fromhex(str(ident["mrsigner"]))
+        want_attr = int.from_bytes(bytes.fromhex(str(ident["attributes"])), "little")
+        mask = int.from_bytes(bytes.fromhex(str(ident["attributesMask"])), "little")
+    except (KeyError, ValueError) as exc:
+        raise _err("bad_collateral", "TDX module identity in TCB Info is malformed") from exc
+    if len(want_signer) != 48 or mrsignerseam != want_signer:
+        raise _err("bad_tdx_module", "MRSIGNERSEAM is not the Intel TDX module signer")
+    if int.from_bytes(seam_attributes, "little") & mask != want_attr & mask:
+        raise _err("bad_tdx_module", "SEAMATTRIBUTES do not match the TDX module identity")
+    if major == 0:
+        return "UpToDate"  # the legacy module has no per-version levels; signer + attributes are the identity
+    isvsvn = tee_tcb_svn[0]
+    for level in ident.get("tcbLevels", []):
+        try:
+            if isvsvn >= int(level["tcb"]["isvsvn"]):
+                return str(level.get("tcbStatus"))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return "NoMatchingLevel"
+
+
 # --------------------------------------------------------------------------- verifier
 
 class TDXVerifier:
@@ -272,7 +316,7 @@ class TDXVerifier:
         if not pems:
             raise _err("bad_certificate_chain", "no PCK certificate in the quote")
         certs = [load_pem_certificate(p, "PCK chain") for p in pems]
-        verify_chain(certs[0], certs[1:], root_certs, code="tdx_bad_certificate_chain", now=now)
+        pck_path = verify_chain(certs[0], certs[1:], root_certs, code="tdx_bad_certificate_chain", now=now)
         pck = certs[0]
         pck_ext = pck_sgx_extension(pck)
 
@@ -288,10 +332,14 @@ class TDXVerifier:
 
         # 4-5. Intel-signed collateral.
         coll = evidence.get("collateral") or {}
+        legacy = bool((context or {}).get("legacy_collateral_ok"))
+        crls = parse_crls(coll.get("crls"), "tdx")
+        check_path_revocation(pck_path, crls=crls, prefix="tdx", now=now, allow_missing=legacy)
         tcb_chain = [load_pem_certificate(p, "TCB signing chain") for p in coll.get("tcb_signing_chain") or []]
         if not tcb_chain:
             raise _err("bad_collateral", "no TCB signing certificate")
-        verify_chain(tcb_chain[0], tcb_chain[1:], root_certs, code="tdx_bad_collateral", now=now)
+        tcb_path = verify_chain(tcb_chain[0], tcb_chain[1:], root_certs, code="tdx_bad_collateral", now=now)
+        check_path_revocation(tcb_path, crls=crls, prefix="tdx", now=now, allow_missing=legacy)
         identity = verify_signed_collateral(str(coll.get("qe_identity", "")), "enclaveIdentity", tcb_chain[0], now)
         mrsigner = qe_report[128:160].hex()
         isvprodid, isvsvn = struct.unpack_from("<HH", qe_report, 256)
@@ -306,6 +354,11 @@ class TDXVerifier:
         status = tcb_status(tcb_info, pck_ext, body[0:16])
         if status != "UpToDate":
             raise _err("tcb_not_up_to_date", f"platform TCB status is {status}")
+        has_identity = bool(tcb_info.get("tdxModule") or tcb_info.get("tdxModuleIdentities"))
+        if has_identity or not legacy:
+            status = tdx_module_status(tcb_info, body[0:16], body[64:112], body[112:120])
+            if status != "UpToDate":
+                raise _err("tcb_not_up_to_date", f"TDX module TCB status is {status}")
 
         # 6. Claims from the signed TD report.
         f = {k: body[o:o + n] for k, (o, n) in _BODY.items()}

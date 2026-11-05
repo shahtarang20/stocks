@@ -249,7 +249,17 @@ async def acknowledge_alert(
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AlertActionResponse:
-    """Acknowledge an active telemetry alert."""
+    """Acknowledge an active telemetry alert (an administrator, or the provider that owns the alert's machine)."""
+    # Any signed-in user used to be able to acknowledge ANY alert by id; the list route is already scoped this way.
+    if "administrator" not in current.roles:
+        owned = await db.scalar(
+            select(TelemetryAlert.id)
+            .join(ProviderMachine, ProviderMachine.id == TelemetryAlert.machine_id)
+            .join(Provider, Provider.id == ProviderMachine.provider_id)
+            .where(TelemetryAlert.id == alert_id, Provider.user_id == current.id)
+        )
+        if owned is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
     alert = await telemetry_service.acknowledge_alert(db, alert_id, current.id)
     if alert is None:
         raise HTTPException(

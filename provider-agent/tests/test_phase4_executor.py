@@ -286,3 +286,118 @@ def test_select_executor_switches_on_image_digest():
 
     dock = select_executor(_hw_spec(), None)
     assert isinstance(dock, DockerExecutor)
+
+
+# --------------------------------------------------------------------------- #
+# Review fix: output.json is job-controlled (symlink / size)
+# --------------------------------------------------------------------------- #
+def _run_with_output_planter(tmp_path, plant):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    def fake_runner(argv, output_dir):
+        plant(out_dir)
+        return DockerRunResult(returncode=0, stdout="", stderr="")
+
+    ex = DockerExecutor(runner=fake_runner, docker_available=lambda: True, nvidia_available=lambda: False,
+                        output_root=str(out_dir))
+    return ex.run(_hw_spec())
+
+
+def test_docker_output_json_symlink_to_host_file_is_not_followed(tmp_path):
+    secret = tmp_path / "host-secret.json"
+    secret.write_text(json.dumps({"text": "HOST SECRET", "machine_secret": "s3cr3t"}))
+
+    def plant(out_dir):
+        (out_dir / "output.json").symlink_to(secret)
+
+    r = _run_with_output_planter(tmp_path, plant)
+    assert r.status == "failed"
+    assert r.error["code"] == "missing_output"
+    assert r.artifacts == []
+    assert "HOST SECRET" not in json.dumps(r.output)
+
+
+def test_docker_output_json_over_size_cap_is_refused(tmp_path, monkeypatch):
+    import computecoin_agent.executor as ex_mod
+
+    monkeypatch.setattr(ex_mod, "MAX_OUTPUT_JSON_BYTES", 64)
+
+    def plant(out_dir):
+        (out_dir / "output.json").write_text(json.dumps({"text": "x" * 500}))
+
+    r = _run_with_output_planter(tmp_path, plant)
+    assert r.status == "failed"
+    assert r.error["code"] == "missing_output"
+
+
+def test_docker_output_json_fifo_does_not_hang(tmp_path):
+    import os
+
+    def plant(out_dir):
+        os.mkfifo(out_dir / "output.json")
+
+    r = _run_with_output_planter(tmp_path, plant)
+    assert r.status == "failed"
+    assert r.error["code"] == "missing_output"
+
+
+def test_docker_run_is_named_and_container_removed_after_timeout_kill(tmp_path):
+    """`timeout --signal=KILL N docker run` only kills the docker CLI (exit 137); the container itself keeps running
+    unless the agent stops it by name."""
+    calls = []
+
+    def fake_runner(argv, output_dir):
+        calls.append(list(argv))
+        return DockerRunResult(returncode=137, stdout="", stderr="")
+
+    ex = DockerExecutor(runner=fake_runner, docker_available=lambda: True, nvidia_available=lambda: False,
+                        output_root=str(tmp_path))
+    r = ex.run(_hw_spec(job_id="job-to"))
+    assert r.status == "failed"
+    assert _flag_value(calls[0], "--name") == "ccoin-job-job-to"
+    assert ["docker", "rm", "-f", "ccoin-job-job-to"] in calls
+
+
+def test_docker_container_removed_when_runner_raises(tmp_path):
+    calls = []
+
+    def fake_runner(argv, output_dir):
+        calls.append(list(argv))
+        if argv[0] == "timeout":
+            raise OSError("docker client died")
+        return DockerRunResult(returncode=0)
+
+    ex = DockerExecutor(runner=fake_runner, docker_available=lambda: True, nvidia_available=lambda: False,
+                        output_root=str(tmp_path))
+    with pytest.raises(OSError):
+        ex.run(_hw_spec(job_id="job-x"))
+    assert ["docker", "rm", "-f", "ccoin-job-job-x"] in calls
+
+
+# --------------------------------------------------------------------------- #
+# Review fix: sealed-tier private chat streaming needs the monitor's env pointers
+# --------------------------------------------------------------------------- #
+def _sealed_spec(**kw):
+    spec = _hw_spec(job_id="job-sealed")
+    spec.isolation_tier = "sealed"
+    for k, v in kw.items():
+        setattr(spec, k, v)
+    return spec
+
+
+def test_sealed_tier_accepts_only_the_stream_env_pointers():
+    argv = _argv_for(_sealed_spec(extra_env={"COMPUTECOIN_STREAM": "/out/stream.ndjson",
+                                              "COMPUTECOIN_PROGRESS": "/out/progress.json"}))
+    assert "COMPUTECOIN_STREAM=/out/stream.ndjson" in argv
+    assert "--network" in argv and _flag_value(argv, "--network") == "none"
+    assert not any(a.startswith("type=bind,source=") and "target=/out" not in a for a in argv)
+
+
+def test_sealed_tier_still_refuses_staging_mounts_and_other_env():
+    from computecoin_agent.executor import ExecutorError
+
+    with pytest.raises(ExecutorError):
+        _argv_for(_sealed_spec(extra_env={"LD_PRELOAD": "/x"}))
+    with pytest.raises(ExecutorError):
+        _argv_for(_sealed_spec(mounts=[{"source": "/data", "target": "/in", "readonly": True}]))

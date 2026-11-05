@@ -96,7 +96,7 @@ class OnboardingOut(ConnectAccountOut):
 
 
 class ConnectPayoutRequest(BaseModel):
-    amount: decimal.Decimal = Field(gt=0)
+    amount: decimal.Decimal = Field(gt=0, max_digits=24)
     # Caller-supplied stable key: a retried request must pay exactly once.
     idempotency_key: str = Field(min_length=8, max_length=128)
 

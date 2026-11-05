@@ -367,9 +367,10 @@ describe("WP-D: Website Private Jobs (Browser Cryptography & Flow)", () => {
     });
 
     it("says hardware attestation is not live and what the host can see", () => {
-      expect(pages[0]).toContain("Hardware attestation (TPM / TEE)");
-      expect(pages[0]).toContain("decrypts the input in memory");
-      expect(pages[1]).toContain("hardware attestation is not live");
+      // Plain-language copy: the hardware proof has not been tried on real machines; the host can read the input.
+      expect(pages[0]).toContain("has not been tested on");
+      expect(pages[0]).toContain("must unlock the input in memory");
+      expect(pages[1]).toContain("hardware security check is not live");
     });
   });
 });

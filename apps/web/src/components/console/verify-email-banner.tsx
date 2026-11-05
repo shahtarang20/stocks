@@ -19,9 +19,9 @@ export function VerifyEmailBanner() {
     setNote(null);
     try {
       await api.resendVerification(accessToken as string);
-      setNote("Verification email sent. Check your inbox, then reload this page.");
+      setNote("We sent a new link. Open it from your inbox (check spam too), then reload this page.");
     } catch (err) {
-      setNote(err instanceof ApiError ? err.message : "Could not send the email. Please try again.");
+      setNote(err instanceof ApiError ? err.message : "We could not send the email. Please try again in a minute.");
     } finally {
       setPending(false);
     }
@@ -35,7 +35,7 @@ export function VerifyEmailBanner() {
       <p className="flex items-start gap-2">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <span>
-          Verify your email ({user.email}) to buy credits and submit jobs.
+          Please confirm your email ({user.email}) to add credits and run jobs. We sent you a link when you signed up.
           {note ? <span className="ml-1 text-muted-foreground">{note}</span> : null}
         </span>
       </p>

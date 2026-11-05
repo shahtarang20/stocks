@@ -13,25 +13,35 @@ import { api, apiErrorCode, ApiError, CREDITS_LABEL } from "@/lib/api";
 import { CopyField } from "@/components/provider/copy-field";
 import { useAuth } from "@/lib/auth-context";
 import { connectWallet, ensureChain, getWalletProvider, isMainnetChain, signMessage, WalletError } from "@/lib/ethereum";
-import { formatRelativeTime } from "@/lib/utils";
+import { CopyButton, RelativeTime } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
+import { HelpTip } from "@/components/ui/help-tip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const LINK_ERRORS: Record<string, string> = {
-  email_not_verified: "Verify your email first. Use the banner at the top of the page.",
-  address_linked_to_another_account: "That wallet is already linked to a different account.",
-  account_already_has_a_wallet: "Your account already has a wallet on this network. Unlink it first to use another.",
-  message_expired: "The signing request expired. Please try again.",
-  signature_wrong_signer: "The signature came from a different wallet account than the one you selected.",
-  signature_invalid: "The signature could not be verified. Please try again.",
-  wrong_chain: "Your wallet is on a different network than this app uses.",
-  invalid_address: "That does not look like a wallet address.",
+  email_not_verified: "Please confirm your email first. Use the button at the top of the page to get a new link.",
+  address_linked_to_another_account: "That wallet is already linked to a different ComputeCoin account. Use another wallet, or unlink it from the other account first.",
+  account_already_has_a_wallet: "Your account already has a wallet linked. Unlink it first if you want to use a different one.",
+  message_expired: "The request timed out before you approved it. Press the button to try again.",
+  signature_wrong_signer: "You approved with a different wallet account than the one we asked for. Pick the same account in your wallet and try again.",
+  signature_invalid: "We could not check your approval. Press the button to try again.",
+  wrong_chain: "Your wallet is set to a different network than this site uses. Switch networks in your wallet, then try again.",
+  invalid_address: "That does not look like a wallet address. Check it and try again.",
 };
 
 function errorMessage(err: unknown): string {
   if (err instanceof WalletError) return err.message;
   const code = apiErrorCode(err);
   if (code && LINK_ERRORS[code]) return LINK_ERRORS[code];
-  if (err instanceof ApiError) return err.status === 429 ? "Too many attempts. Please wait and try again." : err.message;
-  return "Something went wrong. Please try again.";
+  if (err instanceof ApiError) return err.status === 429 ? "Too many tries. Wait a minute, then try again." : err.message;
+  return "Something went wrong. Check your internet connection and try again.";
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -48,6 +58,8 @@ export default function WalletPage() {
   const token = accessToken as string;
   const queryClient = useQueryClient();
   const [step, setStep] = useState<string | null>(null);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const toast = useToast();
 
   const query = useQuery({
     queryKey: ["wallet"],
@@ -58,20 +70,23 @@ export default function WalletPage() {
 
   const linkMut = useMutation({
     mutationFn: async () => {
-      if (!data) throw new WalletError("not_ready", "Still loading. Try again in a moment.");
-      setStep("Connecting to your wallet…");
+      if (!data) throw new WalletError("not_ready", "This page is still loading. Wait a moment, then try again.");
+      setStep("Opening your wallet. Approve the connection in the wallet window…");
       const address = await connectWallet();
       setStep(`Switching to ${data.chain.chain_name ?? `network ${data.chain.chain_id}`}…`);
       await ensureChain(data.chain.chain_id);
-      setStep("Preparing the signing request…");
+      setStep("Getting a short message for you to sign…");
       const challenge = await api.walletLinkChallenge(token, address);
-      setStep("Waiting for your signature…");
+      setStep("Waiting for you to sign the message in your wallet…");
       const signature = await signMessage(address, challenge.message);
-      setStep("Verifying…");
+      setStep("Checking your signature…");
       return api.walletLink(token, { address, chain_id: challenge.chain_id, message: challenge.message, signature });
     },
     onSettled: () => setStep(null),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["wallet"] }),
+    onSuccess: () => {
+      toast.success("Your wallet is linked.");
+      return queryClient.invalidateQueries({ queryKey: ["wallet"] });
+    },
   });
 
   const depositsEnabled = Boolean(data?.deposits?.enabled);
@@ -83,7 +98,11 @@ export default function WalletPage() {
 
   const unlinkMut = useMutation({
     mutationFn: () => api.walletUnlink(token),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["wallet"] }),
+    onSuccess: () => {
+      toast.success("Your wallet is unlinked.");
+      setConfirmUnlink(false);
+      return queryClient.invalidateQueries({ queryKey: ["wallet"] });
+    },
   });
 
   const hasWallet = typeof window !== "undefined" && Boolean(getWalletProvider());
@@ -93,8 +112,8 @@ export default function WalletPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Wallet"
-        description="Your credits on the platform, and your COMPUTE tokens on the blockchain. They are separate balances."
+        title="Crypto wallet"
+        description="This page is optional. It shows your platform credits next to your COMPUTE tokens, which live on a blockchain in a crypto wallet you control (like MetaMask). They are two separate balances. You do not need a crypto wallet to run jobs."
         action={
           <Button variant="outline" onClick={() => { query.refetch(); if (depositsEnabled) depositsQuery.refetch(); }} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
@@ -106,18 +125,18 @@ export default function WalletPage() {
       <div className="max-w-2xl space-y-6">
         {data && isMainnetChain(data.chain.chain_id) ? (
           <div role="note" className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
-            <p className="font-medium">Your COMPUTE tokens are real; your platform credits are not</p>
+            <p className="font-medium">Your COMPUTE tokens are real. Your platform credits are not.</p>
             <p className="text-muted-foreground">
-              The token balance below is held on {net} and is controlled by your own wallet. Platform credits are a
-              separate, simulated balance. Tokens are not converted to credits (or back) yet.
+              The token balance below is held on {net} and is controlled by your own wallet. Platform credits are
+              test credits. You cannot turn tokens into credits, or credits into tokens, yet.
             </p>
           </div>
         ) : (
           <div role="note" className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
-            <p className="font-medium">Test network, no monetary value</p>
+            <p className="font-medium">Test network: these coins are worth nothing</p>
             <p className="text-muted-foreground">
-              COMPUTE tokens shown here exist on a test network only. Platform credits are simulated.
-              Nothing on this page is money, and tokens are not converted to credits (or back) yet.
+              The COMPUTE tokens shown here live on a practice blockchain (a test network). Platform credits are
+              test credits too. Nothing on this page is real money. You cannot turn tokens into credits, or credits into tokens, yet.
             </p>
           </div>
         )}
@@ -125,23 +144,26 @@ export default function WalletPage() {
         {query.isError ? (
           <div role="alert" className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{errorMessage(query.error)}</span>
+            <span className="flex-1">{errorMessage(query.error)}</span>
+            <Button size="sm" variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
+              <RefreshCw className={query.isFetching ? "animate-spin" : undefined} /> Try again
+            </Button>
           </div>
         ) : null}
 
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              Platform credits <Badge variant="neutral">simulated</Badge>
+              Platform credits <Badge variant="neutral">test credits</Badge>
             </CardTitle>
-            <CardDescription>What you spend on jobs and hosts earn. Held in the platform ledger.</CardDescription>
+            <CardDescription>What you spend on jobs, and what hosts earn. These are kept by ComputeCoin, not on the blockchain.</CardDescription>
           </CardHeader>
           <CardContent>
             {query.isLoading ? (
               <Skeleton className="h-16 w-full" />
             ) : (
               <dl className="divide-y divide-border">
-                <Row label="Available">
+                <Row label="Ready to spend">
                   <span className="font-mono tabular-nums" data-testid="credits-available">{data?.credits.available}</span>
                 </Row>
                 <Row label="Held by running jobs">
@@ -153,7 +175,7 @@ export default function WalletPage() {
               </dl>
             )}
             <p className="mt-2 text-xs text-muted-foreground">
-              {CREDITS_LABEL}. See <Link href="/dashboard/billing" className="text-primary hover:underline">Billing</Link> for the full ledger.
+              {CREDITS_LABEL}. Go to <Link href="/dashboard/billing" className="text-primary hover:underline">Credits and billing</Link> to add credits and see your history.
             </p>
           </CardContent>
         </Card>
@@ -161,9 +183,9 @@ export default function WalletPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              On-chain wallet {data ? <Badge variant="outline">{net}</Badge> : null}
+              Crypto wallet {data ? <Badge variant="outline">{net}</Badge> : null}
             </CardTitle>
-            <CardDescription>Link a wallet you control to see your COMPUTE token balance.</CardDescription>
+            <CardDescription>Connect a wallet you own to see how many COMPUTE tokens it holds.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {query.isLoading ? (
@@ -172,52 +194,56 @@ export default function WalletPage() {
               <>
                 <dl className="divide-y divide-border">
                   <Row label="Address">
-                    <span className="font-mono text-xs" data-testid="wallet-address">{data.wallet.address}</span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-mono text-xs" data-testid="wallet-address">{data.wallet.address}</span>
+                      <CopyButton value={data.wallet.address} label="Copy wallet address" />
+                    </span>
                   </Row>
-                  <Row label="Linked">{formatRelativeTime(data.wallet.linked_at)}</Row>
+                  <Row label="Connected"><RelativeTime iso={data.wallet.linked_at} /></Row>
                   <Row label={`${data.chain.symbol} balance`}>
                     {data.token_balance !== null ? (
                       <span className="font-mono tabular-nums" data-testid="token-balance">
                         {data.token_balance} {data.chain.symbol}
                       </span>
                     ) : !data.chain.configured ? (
-                      <span className="text-muted-foreground">Not available: this server has no chain connection configured.</span>
+                      <span className="text-muted-foreground">Not available: this site is not connected to the blockchain yet.</span>
                     ) : (
-                      <span className="text-muted-foreground">Unavailable right now. Try Refresh.</span>
+                      <span className="text-muted-foreground">Not available right now. Press Refresh to try again.</span>
                     )}
                   </Row>
-                  <Row label="Token contract">
-                    <span className="font-mono text-xs">{data.chain.token_address}</span>
+                  <Row label="Token address">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-mono text-xs">{data.chain.token_address}</span>
+                      {data.chain.token_address ? <CopyButton value={data.chain.token_address} label="Copy token contract address" /> : null}
+                    </span>
                   </Row>
                 </dl>
                 <div className="flex flex-wrap items-center gap-3">
                   {explorer ? (
                     <Button asChild variant="outline" size="sm">
                       <a href={`${explorer}/address/${data.wallet.address}`} target="_blank" rel="noopener noreferrer">
-                        View on explorer <ExternalLink />
+                        See it on the blockchain explorer <ExternalLink />
                       </a>
                     </Button>
                   ) : null}
-                  <Button variant="outline" size="sm" onClick={() => unlinkMut.mutate()} disabled={unlinkMut.isPending}>
-                    {unlinkMut.isPending ? <Loader2 className="animate-spin" /> : null}
-                    Unlink wallet
+                  <Button variant="outline" size="sm" onClick={() => { unlinkMut.reset(); setConfirmUnlink(true); }}>
+                    Disconnect wallet
                   </Button>
                 </div>
               </>
             ) : (
               <>
                 <p className="text-sm text-muted-foreground">
-                  Linking proves the wallet is yours. You sign a short message; no transaction is sent and
-                  nothing is spent. Your wallet needs no funds to link.
+                  Connecting proves the wallet is yours. You sign a short message in your wallet. No payment is made and nothing is spent. Your wallet does not need any coins to connect.
                 </p>
                 {!hasWallet ? (
                   <p className="text-sm text-muted-foreground">
-                    No browser wallet detected. Install MetaMask (or another wallet) and reload this page.
+                    We could not find a crypto wallet in this browser. Install a wallet such as MetaMask, then reload this page.
                   </p>
                 ) : null}
                 <Button onClick={() => linkMut.mutate()} disabled={linkMut.isPending || !data}>
                   {linkMut.isPending ? <Loader2 className="animate-spin" /> : null}
-                  Connect and link wallet
+                  Connect my wallet
                 </Button>
                 {step ? <p role="status" className="text-sm text-muted-foreground">{step}</p> : null}
               </>
@@ -228,18 +254,15 @@ export default function WalletPage() {
                 <span>{errorMessage(linkMut.error)}</span>
               </div>
             ) : null}
-            {unlinkMut.isError ? (
-              <div role="alert" className="text-sm text-danger">{errorMessage(unlinkMut.error)}</div>
-            ) : null}
           </CardContent>
         </Card>
 
         {depositsEnabled && data?.deposits ? (
           <Card>
             <CardHeader>
-              <CardTitle>Deposit COMPUTE for credits</CardTitle>
+              <CardTitle>Turn COMPUTE tokens into credits</CardTitle>
               <CardDescription>
-                Send COMPUTE from your linked wallet to the address below and it is credited to your balance.
+                Send COMPUTE tokens from your connected wallet to the address below. After the transfer is confirmed, credits are added to your account.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -247,10 +270,15 @@ export default function WalletPage() {
                 <Row label="Rate">
                   <span data-testid="deposit-rate">1 {data.chain.symbol} = {data.deposits.credits_per_token} credits</span>
                 </Row>
-                <Row label="Allowed size">
+                <Row label="Allowed amount">
                   {data.deposits.min_tokens} to {data.deposits.max_tokens} {data.chain.symbol} per transfer
                 </Row>
-                <Row label="Credited after">{data.deposits.confirmations} block confirmations</Row>
+                <Row label="Credits are added after">
+                  {data.deposits.confirmations} confirmations
+                  <HelpTip term="confirmations">
+                    A confirmation is a new block added to the blockchain after your transfer. More confirmations means it is safer. Waiting takes a few minutes.
+                  </HelpTip>
+                </Row>
               </dl>
               {data.wallet ? (
                 <>
@@ -258,26 +286,26 @@ export default function WalletPage() {
                   <CopyField value={data.deposits.address ?? ""} />
                   <p className="text-xs text-muted-foreground">
                     Send only from <span className="font-mono">{data.wallet.address}</span>. A transfer from any other
-                    address is not credited automatically, and the tokens cannot be returned by this page.
-                    Amounts are rounded down to a whole cent of credit.
+                    address will not turn into credits, and this page cannot give the tokens back.
+                    Amounts are rounded down to the nearest cent of credit.
                   </p>
                 </>
               ) : (
-                <p className="text-sm text-muted-foreground">Link your wallet above first. Deposits are only credited from a wallet you have linked.</p>
+                <p className="text-sm text-muted-foreground">Connect your wallet above first. We only add credits for transfers from a wallet you have connected.</p>
               )}
               <div>
-                <h3 className="mb-2 text-sm font-medium">Your deposits</h3>
+                <h3 className="mb-2 text-sm font-medium">Your transfers</h3>
                 {depositsQuery.isLoading ? (
                   <Skeleton className="h-10 w-full" />
                 ) : (depositsQuery.data ?? []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No deposits yet.</p>
+                  <p className="text-sm text-muted-foreground">You have not sent any tokens yet.</p>
                 ) : (
                   <ul className="divide-y divide-border text-sm" data-testid="deposit-list">
                     {(depositsQuery.data ?? []).map((d) => (
                       <li key={d.tx_hash} className="flex items-center justify-between gap-3 py-2">
                         <span className="min-w-0">
                           <span className="font-mono tabular-nums">{d.amount} {data.chain.symbol}</span>
-                          <span className="ml-2 text-xs text-muted-foreground">{formatRelativeTime(d.created_at)}</span>
+                          <span className="ml-2 text-xs text-muted-foreground"><RelativeTime iso={d.created_at} /></span>
                         </span>
                         <span className="flex items-center gap-2">
                           {d.status === "credited" ? (
@@ -296,6 +324,32 @@ export default function WalletPage() {
           </Card>
         ) : null}
       </div>
+
+      <Dialog open={confirmUnlink} onOpenChange={(open) => { if (!open) setConfirmUnlink(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disconnect this wallet?</DialogTitle>
+            <DialogDescription>
+              Your tokens stay in your wallet. Nothing is moved or spent. You will need to connect a wallet
+              again before you can turn tokens into credits.
+            </DialogDescription>
+          </DialogHeader>
+          {unlinkMut.isError ? (
+            <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+              {errorMessage(unlinkMut.error)}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmUnlink(false)} disabled={unlinkMut.isPending}>
+              Keep it connected
+            </Button>
+            <Button variant="danger" onClick={() => unlinkMut.mutate()} disabled={unlinkMut.isPending}>
+              {unlinkMut.isPending ? <Loader2 className="animate-spin" /> : null}
+              Disconnect wallet
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

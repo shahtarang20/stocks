@@ -1,0 +1,61 @@
+{
+  "kit": "llm-finetune-lora",
+  "schema": 1,
+  "purpose": "U12: smoke test of llm-finetune-lora on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models; the fleet is the owner's decision.",
+  "fixture": {
+    "script": "kits/llm-finetune-lora/smoke/make_fixture.py",
+    "how": "python make_fixture.py dataset.jsonl",
+    "input_name": "dataset",
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {
+      "epochs": 1,
+      "global_batch_size": 8,
+      "micro_batch_size": 2,
+      "max_seq_len": 128
+    }
+  },
+  "limits": {
+    "max_seconds": 900
+  },
+  "checks": [
+    {
+      "id": "exit_zero",
+      "expect": "container exit code 0 and output.json ok=true on 1 GPU and again on 4 GPUs of one host (U13.1 run record)"
+    },
+    {
+      "id": "adapter_files",
+      "expect": "adapter/adapter_model.safetensors and adapter/adapter_config.json exist"
+    },
+    {
+      "id": "loss_sane",
+      "expect": "metrics.json final_loss is finite and below the first-step loss on the fixture"
+    },
+    {
+      "id": "accumulation",
+      "expect": "global_batch_size not divisible by micro_batch_size*world_size is refused with invalid_param"
+    },
+    {
+      "id": "resume",
+      "expect": "rerun with COMPUTECOIN_RESUME=1 skips committed epochs"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds per unit",
+    "peak vram",
+    "sha256 of every output"
+  ]
+}

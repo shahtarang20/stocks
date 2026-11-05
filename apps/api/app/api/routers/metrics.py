@@ -10,6 +10,8 @@ scrape over a private network).
 """
 from __future__ import annotations
 
+import hmac
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +34,7 @@ async def metrics(
 ) -> Response:
     if settings.METRICS_TOKEN:
         expected = f"Bearer {settings.METRICS_TOKEN}"
-        if authorization != expected:
+        if not hmac.compare_digest((authorization or "").encode(), expected.encode()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="metrics_unauthorized")
 
     lines: list[str] = []

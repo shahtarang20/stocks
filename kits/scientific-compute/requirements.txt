@@ -1,0 +1,5 @@
+# Versions are pinned but NOT yet checked against PyPI or against each other (L4). CI must resolve and
+# freeze with hashes (pip-compile --generate-hashes) and the Dockerfile must then use --require-hashes.
+numpy==2.2.2
+scipy==1.15.1
+pandas==2.2.3

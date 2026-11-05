@@ -23,6 +23,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Uuid,
+    false as sa_false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -104,6 +105,17 @@ class ProviderMachine(Base, TimestampMixin):
     kyc_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tpm_ek_pub: Mapped[str | None] = mapped_column(String(512), nullable=True)
     is_banned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Stake sync (A1): true when the vault's provider address is not one of the owner's linked wallets.
+    stake_unverified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false()
+    )
+    stake_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # U13: admin-approved label of a datacenter whose hosts may run multi-node jobs together. NULL = none (default).
+    datacenter_group: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # A6: the last machine-level signed Sealed/Sealed Pro verdict (expires on its own expires_at; read by gpu_runtime).
+    sealed_verdict: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # U13: private address other hosts of the group use to reach this host (reported with a benchmark round).
+    cluster_addr: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     provider: Mapped["Provider"] = relationship(back_populates="machines")
     hardware: Mapped["HardwareInventory | None"] = relationship(

@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "slug": "scientific-compute",
+  "version": "1.0.0",
+  "name": "Scientific compute (untrusted Python script)",
+  "description": "Runs ONE customer-supplied Python script (numpy, scipy, pandas) as UNTRUSTED code inside the hardened container: no network, wall-clock cap, memory and output caps. Output files are collected. Exact-hash verification applies only when params.deterministic is true. See kits/scientific-compute/README.md.",
+  "category": "science",
+  "image": "ghcr.io/computecoin/kit-scientific-compute@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "maxItems": 16,
+        "default": []
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3600,
+        "default": 600
+      },
+      "max_output_mb": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1024,
+        "default": 256
+      },
+      "max_memory_mb": {
+        "type": "integer",
+        "minimum": 128,
+        "maximum": 32768,
+        "default": 4096
+      },
+      "deterministic": {
+        "type": "boolean",
+        "default": false
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+        "default": 0
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "script",
+      "kind": "file",
+      "required": true
+    },
+    {
+      "name": "data",
+      "kind": "file",
+      "required": false
+    }
+  ],
+  "outputs": [
+    {
+      "name": "results",
+      "path": "/out/results"
+    },
+    {
+      "name": "logs",
+      "path": "/out/logs"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 0,
+    "min_vram_gb": 0,
+    "cpu": 4,
+    "ram_gb": 8,
+    "disk_gb": 10
+  },
+  "billing_hints": {
+    "unit": "cpu_second",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "exact_deterministic",
+    "sample_fraction": 0.05,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "OWNER DECISION: byte-for-byte comparison of results and logs against an independent re-run, applied only when the re-run's logs/determinism.json says deterministic=true (params.deterministic); otherwise the outcome is inconclusive, never a failure of the host. Determinism is only as good as the customer's script (threads, hash order, time, randomness): the kit pins seeds and thread counts but cannot prove a script is reproducible. Sample fraction also pending owner approval."
+  }
+}

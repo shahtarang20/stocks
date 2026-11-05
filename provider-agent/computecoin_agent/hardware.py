@@ -17,7 +17,7 @@ import os
 import platform
 import shutil
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 

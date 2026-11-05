@@ -20,7 +20,11 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
-from cryptography.hazmat.decrepit.ciphers.modes import CFB
+
+try:  # cryptography >=44 files CFB under "decrepit"; the project pins <44 for signxml (see pyproject.toml)
+    from cryptography.hazmat.decrepit.ciphers.modes import CFB
+except ImportError:
+    from cryptography.hazmat.primitives.ciphers.modes import CFB
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker

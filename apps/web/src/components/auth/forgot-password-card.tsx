@@ -14,7 +14,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { plainAuthError } from "./auth-errors";
 
 export function ForgotPasswordCard() {
   const [email, setEmail] = useState("");
@@ -26,7 +27,7 @@ export function ForgotPasswordCard() {
     e.preventDefault();
     setError(null);
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
-      setError("Enter a valid email");
+      setError("That does not look like an email address. Check it and try again.");
       return;
     }
     setPending(true);
@@ -34,7 +35,7 @@ export function ForgotPasswordCard() {
       await api.requestPasswordReset(email.trim());
       setSent(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+      setError(plainAuthError(err, "forgot"));
     } finally {
       setPending(false);
     }
@@ -45,7 +46,7 @@ export function ForgotPasswordCard() {
       <CardHeader>
         <CardTitle className="text-xl">Reset your password</CardTitle>
         <CardDescription>
-          Enter your account email and we&apos;ll send a reset link.
+          Type the email you signed up with. We will send you a link to choose a new password.
         </CardDescription>
       </CardHeader>
       <form onSubmit={onSubmit} noValidate>
@@ -53,7 +54,7 @@ export function ForgotPasswordCard() {
           {sent ? (
             <p role="status" className="flex items-start gap-2 text-sm text-success">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-              If an account exists for that email, a reset link is on its way.
+              If an account uses that email, a reset link is on its way. Check your inbox and your spam folder.
             </p>
           ) : null}
           {error ? (
@@ -68,7 +69,7 @@ export function ForgotPasswordCard() {
               id="email"
               type="email"
               autoComplete="email"
-              placeholder="you@dev.io"
+              placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />

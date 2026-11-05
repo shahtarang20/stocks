@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "slug": "comfyui-workflow-runner",
+  "version": "1.0.0",
+  "name": "ComfyUI workflow runner",
+  "description": "Runs one customer ComfyUI workflow (API format JSON) headless inside the container against baked-in models and an allowlist of node classes, and collects the produced images. Licences: see kits/comfyui-workflow-runner/README.md.",
+  "category": "generative",
+  "image": "ghcr.io/computecoin/kit-comfyui-workflow-runner@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 3600,
+        "default": 900
+      },
+      "max_outputs": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "workflow",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "outputs",
+      "path": "/out/outputs"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 12,
+    "min_compute_capability": "7.0",
+    "cpu": 4,
+    "ram_gb": 32,
+    "disk_gb": 60
+  },
+  "billing_hints": {
+    "unit": "workflow_run",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "perceptual",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "Only meaningful when every sampler seed in the workflow is fixed; workflows with random seeds cannot be verified. Thresholds pending U5.3 data."
+  }
+}

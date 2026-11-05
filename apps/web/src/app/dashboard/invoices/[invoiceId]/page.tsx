@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, apiAbsoluteUrl, ApiError, CREDITS_LABEL, type Invoice } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { invoiceStatusVariant, humanizeStatus } from "@/lib/billing";
+import { invoiceStatusVariant, invoiceStatusText } from "@/lib/billing";
 import { formatRelativeTime } from "@/lib/utils";
 import { shortId } from "@/lib/jobs";
 
@@ -119,14 +119,14 @@ export default function InvoiceDetailPage() {
               <AlertCircle className="h-5 w-5" />
             </span>
             <h3 className="font-semibold">
-              {notFound ? "Invoice not found" : "Couldn't load this invoice"}
+              {notFound ? "We could not find this invoice" : "We could not load this invoice"}
             </h3>
             <p className="max-w-md text-sm text-muted-foreground">
               {notFound
-                ? "This invoice doesn't exist, or it belongs to another account."
+                ? "This invoice does not exist, or it belongs to a different account. Go back to your invoices to find the right one."
                 : query.error instanceof ApiError
                   ? query.error.message
-                  : "An unexpected error occurred."}
+                  : "Something went wrong on our side. Try again in a moment."}
             </p>
             <Button asChild variant="outline">
               <Link href="/dashboard/invoices">
@@ -146,7 +146,7 @@ export default function InvoiceDetailPage() {
     <>
       <ConsolePageHeader
         title={`Invoice ${shortId(invoice.invoice_id)}`}
-        description="Itemized invoice for a settled job. Amounts are simulated credits, shown verbatim."
+        description="What you were charged for one finished job, line by line. Amounts are in test credits."
         action={
           <div className="flex gap-2">
             <Button asChild variant="outline">
@@ -160,7 +160,7 @@ export default function InvoiceDetailPage() {
             >
               {downloadMut.isPending ? (
                 <>
-                  <Loader2 className="animate-spin" /> Linking…
+                  <Loader2 className="animate-spin" /> Preparing…
                 </>
               ) : (
                 <>
@@ -177,7 +177,7 @@ export default function InvoiceDetailPage() {
           <CardContent className="p-6">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={invoiceStatusVariant(invoice.status)}>
-                {humanizeStatus(invoice.status)}
+                {invoiceStatusText(invoice.status)}
               </Badge>
               <Badge variant="neutral">{CREDITS_LABEL}</Badge>
               <span className="font-mono text-xs text-muted-foreground">
@@ -202,7 +202,7 @@ export default function InvoiceDetailPage() {
                 </dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Issued</dt>
+                <dt className="text-muted-foreground">Date</dt>
                 <dd className="mt-0.5">{formatRelativeTime(invoice.created_at)}</dd>
               </div>
             </dl>
@@ -216,7 +216,7 @@ export default function InvoiceDetailPage() {
                 <span>
                   {downloadMut.error instanceof ApiError
                     ? downloadMut.error.message
-                    : "Couldn't get a download link for this invoice."}
+                    : "We could not prepare the download. Press Download to try again."}
                 </span>
               </div>
             ) : null}
@@ -226,20 +226,19 @@ export default function InvoiceDetailPage() {
         <Card>
           <CardContent className="space-y-3 p-6">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Receipt className="h-4 w-4 text-muted-foreground" /> Breakdown
+              <Receipt className="h-4 w-4 text-muted-foreground" /> What you paid for
             </div>
             {lineItems.length > 0
               ? lineItems.map((li, i) => (
                   <Row key={i} label={li.label} value={li.amount} />
                 ))
               : null}
-            <Row label="Estimated total" value={invoice.estimated_total} muted />
-            <Row label="Platform fee" value={invoice.platform_fee} muted />
-            <Row label="Actual total" value={invoice.actual_total} strong />
+            <Row label="Our estimate before the job" value={invoice.estimated_total} muted />
+            <Row label="ComputeCoin fee" value={invoice.platform_fee} muted />
+            <Row label="Total charged" value={invoice.actual_total} strong />
             <p className="pt-1 text-xs text-muted-foreground">
-              {currency} · {CREDITS_LABEL}. Estimated and actual are tracked
-              separately; you are billed the actual metered amount, capped at the
-              authorized hold.
+              {currency === "USDC_CREDITS" ? CREDITS_LABEL : `${currency} · ${CREDITS_LABEL}`}. You are charged for the time the job really used, and never more than the
+              credits we set aside for it.
             </p>
           </CardContent>
         </Card>

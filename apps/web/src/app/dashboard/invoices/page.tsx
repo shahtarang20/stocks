@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, FileText, RefreshCw } from "lucide-react";
+import { FileText, RefreshCw } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
 import {
   Table,
   TableBody,
@@ -18,8 +18,7 @@ import {
 } from "@/components/ui/table";
 import { api, ApiError, CREDITS_LABEL, type Invoice } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { invoiceStatusVariant, humanizeStatus } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
+import { invoiceStatusVariant, invoiceStatusText } from "@/lib/billing";
 import { shortId } from "@/lib/jobs";
 
 export default function InvoicesPage() {
@@ -38,7 +37,7 @@ export default function InvoicesPage() {
     <>
       <ConsolePageHeader
         title="Invoices"
-        description="Itemized invoices per settled job from GET /v1/invoices. Estimated vs actual are tracked separately. Amounts are simulated credits."
+        description="One invoice for each job that finished. It shows what we estimated, what you were charged, and the ComputeCoin fee. Amounts are in test credits."
         action={
           <Button
             variant="outline"
@@ -52,45 +51,26 @@ export default function InvoicesPage() {
       />
 
       {query.isLoading ? (
-        <Card>
-          <CardContent className="space-y-3 p-6">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </CardContent>
-        </Card>
+        <TableSkeleton rows={4} label="Loading invoices" />
       ) : query.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load invoices</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {query.error instanceof ApiError
-                ? query.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => query.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your invoices"
+          message={query.error instanceof ApiError ? query.error.message : undefined}
+          onRetry={() => query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : invoices.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-              <FileText className="h-6 w-6" />
-            </span>
-            <h3 className="font-semibold">No invoices yet</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              A settled job produces an itemized invoice here. {CREDITS_LABEL}.
-            </p>
+        <EmptyState
+          icon={FileText}
+          title="You have no invoices yet"
+          action={
             <Button asChild>
-              <Link href="/dashboard/jobs/new">Submit a job</Link>
+              <Link href="/dashboard/jobs/new">Start a job</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          When a job finishes, its invoice appears here. {CREDITS_LABEL}.
+        </EmptyState>
       ) : (
         <Card>
           <Table>
@@ -98,9 +78,9 @@ export default function InvoicesPage() {
               <TableRow>
                 <TableHead>Invoice</TableHead>
                 <TableHead>Job</TableHead>
-                <TableHead className="text-right">Estimated</TableHead>
-                <TableHead className="text-right">Actual</TableHead>
-                <TableHead className="text-right">Platform fee</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Estimate</TableHead>
+                <TableHead className="text-right">Charged (credits)</TableHead>
+                <TableHead className="hidden text-right md:table-cell">ComputeCoin fee</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Date</TableHead>
               </TableRow>
@@ -111,6 +91,7 @@ export default function InvoicesPage() {
                   <TableCell>
                     <Link
                       href={`/dashboard/invoices/${inv.invoice_id}`}
+                      title={inv.invoice_id}
                       className="font-mono text-xs text-primary hover:underline"
                     >
                       {shortId(inv.invoice_id)}
@@ -120,6 +101,7 @@ export default function InvoicesPage() {
                     {inv.job_id ? (
                       <Link
                         href={`/dashboard/jobs/${inv.job_id}`}
+                        title={inv.job_id}
                         className="font-mono text-xs text-muted-foreground hover:underline"
                       >
                         {shortId(inv.job_id)}
@@ -128,22 +110,22 @@ export default function InvoicesPage() {
                       "—"
                     )}
                   </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
+                  <TableCell className="hidden text-right font-mono tabular-nums text-muted-foreground sm:table-cell">
                     {inv.estimated_total}
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums font-medium">
                     {inv.actual_total}
                   </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-muted-foreground">
+                  <TableCell className="hidden text-right font-mono tabular-nums text-muted-foreground md:table-cell">
                     {inv.platform_fee}
                   </TableCell>
                   <TableCell>
                     <Badge variant={invoiceStatusVariant(inv.status)}>
-                      {humanizeStatus(inv.status)}
+                      {invoiceStatusText(inv.status)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {formatRelativeTime(inv.created_at)}
+                    <RelativeTime iso={inv.created_at} />
                   </TableCell>
                 </TableRow>
               ))}

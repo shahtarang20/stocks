@@ -6,6 +6,7 @@
  * taken verbatim from the API as decimal strings; only the chart series are
  * converted to numbers, because a chart needs them.
  */
+import { parseApiDate } from "@/lib/format";
 import type { Job, UsageRecord } from "@/lib/api";
 
 export interface DayPoint {
@@ -57,7 +58,7 @@ export function lastDaysSeries(records: UsageRecord[], days = 7, now = new Date(
   }
   for (const r of records) {
     if (!r.created_at) continue;
-    const p = points.find((x) => x.k === key(new Date(r.created_at as string)));
+    const p = points.find((x) => x.k === key(parseApiDate(r.created_at as string)));
     if (!p) continue;
     p.spend += Number(r.actual_cost ?? 0) || 0;
     p.hours += (Number(r.actual_seconds ?? r.duration_seconds ?? 0) || 0) / 3600;

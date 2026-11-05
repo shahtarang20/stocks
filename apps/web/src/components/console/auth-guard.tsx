@@ -29,7 +29,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!isReady || !isAuthenticated) {
     return (
       <div className="flex min-h-dvh items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Checking your session…
         </div>

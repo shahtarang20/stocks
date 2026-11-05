@@ -1,0 +1,14 @@
+[Unit]
+Description=Print PCRs 4, 7, 11 to the console (public values; used by the boot test and operators)
+After=sysinit.target tpm2.target
+ConditionPathExists=/dev/tpmrm0
+
+[Service]
+Type=oneshot
+# The kernel command line has no console=ttyS0 (it is measured, so it is not changed for a test), so /dev/console is the
+# VGA tty; the QEMU boot test reads the serial port, hence both. The leading '-' ignores a host without a serial port.
+ExecStart=-/bin/sh -c 'tpm2_pcrread sha256:4,7,11 | sed "s/^/COMPUTECOIN-PCR /" | tee /dev/console /dev/ttyS0 >/dev/null'
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

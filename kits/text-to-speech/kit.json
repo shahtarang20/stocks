@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "slug": "text-to-speech",
+  "version": "1.0.0",
+  "name": "Text to speech (Kokoro-82M)",
+  "description": "Synthesises each input text to a 24 kHz mono 16-bit WAV with the open Kokoro-82M model (Apache-2.0, OWNER DECISION to confirm) using weights baked into the image. Verified by log-mel spectrogram similarity. See kits/text-to-speech/README.md.",
+  "category": "audio",
+  "image": "ghcr.io/computecoin/kit-text-to-speech@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "texts"
+    ],
+    "properties": {
+      "texts": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 64,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "voice": {
+        "type": "string",
+        "enum": [
+          "af_heart",
+          "af_bella",
+          "am_michael",
+          "bf_emma",
+          "bm_george"
+        ],
+        "default": "af_heart"
+      },
+      "speed": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 2,
+        "default": 1
+      }
+    }
+  },
+  "inputs": [],
+  "outputs": [
+    {
+      "name": "audio",
+      "path": "/out/audio"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 4,
+    "min_compute_capability": "6.1",
+    "cpu": 2,
+    "ram_gb": 8,
+    "disk_gb": 15
+  },
+  "billing_hints": {
+    "unit": "audio_second",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "audio_spectral",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {
+      "min_cosine": 0.9,
+      "max_duration_diff_s": 0.25
+    },
+    "owner_decision": "OWNER DECISION: log-mel spectrogram cosine similarity between the host's WAV and an independent re-run must be at least min_cosine (0.90) and durations within max_duration_diff_s (0.25 s); conservative placeholders to be tuned with cross-GPU benchmark data (U5.3). Unreadable or missing reference data is inconclusive, never a failure of the host. Sample fraction also pending owner approval."
+  }
+}

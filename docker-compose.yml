@@ -61,11 +61,15 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     container_name: computecoin-api
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false   # CI (load-test workflow) has no .env; the dev defaults below are enough to boot
     environment:
       DATABASE_URL: postgresql+asyncpg://computecoin:computecoin@db:5432/computecoin
       REDIS_URL: redis://redis:6379/0
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_ACCESS_KEY: minioadmin
+      OBJECT_STORAGE_SECRET_KEY: minioadmin
     ports:
       - "8000:8000"
     depends_on:

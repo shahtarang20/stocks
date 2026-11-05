@@ -1,0 +1,61 @@
+{
+  "kit": "video-upscale-frames",
+  "schema": 1,
+  "purpose": "U12: smoke test of video-upscale-frames on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models; the fleet is the owner's decision.",
+  "fixture": {
+    "script": "kits/video-upscale-frames/smoke/make_fixture.py",
+    "how": "python make_fixture.py frames.zip  (four synthetic 64x48 PNG frames)",
+    "input_name": "frames",
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {
+      "model": "realesrgan-x4plus",
+      "scale": 4,
+      "tile": 64,
+      "fps": 24
+    }
+  },
+  "limits": {
+    "max_seconds": 300
+  },
+  "checks": [
+    {
+      "id": "exit_zero",
+      "expect": "container exit code 0 and output.json ok=true"
+    },
+    {
+      "id": "order",
+      "expect": "frame_0000001.png..frame_0000004.png exist, 4x the input size, manifest frame_count 4"
+    },
+    {
+      "id": "cross_gpu",
+      "expect": "outputs of different GPU models pass the perceptual verification against each other"
+    },
+    {
+      "id": "gap",
+      "expect": "a zip with a missing frame number is refused with invalid_input"
+    },
+    {
+      "id": "resume",
+      "expect": "rerun with COMPUTECOIN_RESUME=1 does not recompute committed frames"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds per unit",
+    "peak vram",
+    "sha256 of every output"
+  ]
+}

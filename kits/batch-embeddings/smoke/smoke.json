@@ -1,0 +1,59 @@
+{
+  "kit": "batch-embeddings",
+  "schema": 1,
+  "purpose": "U12: smoke test of batch-embeddings on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models; the fleet is the owner's decision.",
+  "fixture": {
+    "script": "kits/batch-embeddings/smoke/make_fixture.py",
+    "how": "python make_fixture.py texts.jsonl  (100 deterministic sentences)",
+    "input_name": "texts",
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {
+      "max_length": 64,
+      "batch_size": 8
+    }
+  },
+  "limits": {
+    "max_seconds": 300
+  },
+  "checks": [
+    {
+      "id": "exit_zero",
+      "expect": "container exit code 0 and output.json ok=true"
+    },
+    {
+      "id": "shape",
+      "expect": "embeddings.npy has one row per fixture text and ids.json the same ids"
+    },
+    {
+      "id": "norm",
+      "expect": "with normalize=true every row has unit norm within 1e-3"
+    },
+    {
+      "id": "cross_gpu",
+      "expect": "outputs of different GPU models agree after rounding (cosine similarity at least 0.9999)"
+    },
+    {
+      "id": "resume",
+      "expect": "rerun with COMPUTECOIN_RESUME=1 reuses committed chunks"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds per unit",
+    "peak vram",
+    "sha256 of every output"
+  ]
+}

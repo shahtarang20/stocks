@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   CheckCircle2,
@@ -18,6 +18,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -48,11 +49,11 @@ const refundSchema = z
     amount: z
       .string()
       .trim()
-      .refine((v) => amountRe.test(v), { message: "Enter a decimal like 5.00" }),
-    reason: z.string().trim().min(3, "Give a reason for the audit log"),
+      .refine((v) => amountRe.test(v), { message: "Enter an amount with up to 2 decimals, like 5.00." }),
+    reason: z.string().trim().min(3, "Write a short reason (at least 3 letters). It is saved in the audit log."),
   })
   .refine((v) => Boolean(v.job_id) || Boolean(v.invoice_id), {
-    message: "Provide a job ID or an invoice ID",
+    message: "Enter a job ID or an invoice ID so we know which charge to refund.",
     path: ["job_id"],
   });
 
@@ -70,6 +71,7 @@ function RefundForm() {
     defaultValues: { job_id: "", invoice_id: "", amount: "", reason: "" },
   });
 
+  const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: (v: RefundValues) =>
       api.postRefund(accessToken as string, {
@@ -78,14 +80,19 @@ function RefundForm() {
         amount: v.amount,
         reason: v.reason,
       }),
-    onSuccess: () => reset({ job_id: "", invoice_id: "", amount: "", reason: "" }),
+    onSuccess: () => {
+      reset({ job_id: "", invoice_id: "", amount: "", reason: "" });
+      // Money moved: the books check and the jobs/disputes lists are now out of date.
+      void queryClient.invalidateQueries({ queryKey: ["reconciliation"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin"] });
+    },
   });
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Undo2 className="h-4 w-4 text-muted-foreground" /> Issue a refund
+          <Undo2 className="h-4 w-4 text-muted-foreground" /> Refund a charge
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -98,8 +105,7 @@ function RefundForm() {
             <div className="flex items-start gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
               <span className="text-muted-foreground">
-                Refund posted. It reverses the charge as a balanced ledger
-                transaction and is recorded in the audit log.
+                Refund sent. The credits went back to the customer, and the refund is saved in the audit log.
               </span>
             </div>
           ) : null}
@@ -115,14 +121,14 @@ function RefundForm() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="refund-job">Job ID</Label>
+              <Label htmlFor="refund-job">Job ID (from the Jobs page)</Label>
               <Input id="refund-job" placeholder="job_…" {...register("job_id")} />
               {errors.job_id ? (
                 <p className="text-xs text-danger">{errors.job_id.message}</p>
               ) : null}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="refund-invoice">Invoice ID</Label>
+              <Label htmlFor="refund-invoice">Invoice ID (or use the job ID)</Label>
               <Input
                 id="refund-invoice"
                 placeholder="inv_…"
@@ -131,11 +137,11 @@ function RefundForm() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Provide either a job ID or an invoice ID to target the charge.
+            Fill in a job ID or an invoice ID. You do not need both.
           </p>
 
           <div className="space-y-1.5">
-            <Label htmlFor="refund-amount">Amount</Label>
+            <Label htmlFor="refund-amount">Amount to refund</Label>
             <Input
               id="refund-amount"
               inputMode="decimal"
@@ -151,10 +157,10 @@ function RefundForm() {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="refund-reason">Reason (audited)</Label>
+            <Label htmlFor="refund-reason">Reason (saved in the audit log)</Label>
             <Input
               id="refund-reason"
-              placeholder="Why this refund is authorized"
+              placeholder="Why you are refunding this charge"
               aria-invalid={Boolean(errors.reason)}
               {...register("reason")}
             />
@@ -166,10 +172,10 @@ function RefundForm() {
           <Button type="submit" disabled={mutation.isPending}>
             {mutation.isPending ? (
               <>
-                <Loader2 className="animate-spin" /> Posting refund…
+                <Loader2 className="animate-spin" /> Sending refund…
               </>
             ) : (
-              "Post refund"
+              "Refund this charge"
             )}
           </Button>
         </form>
@@ -183,29 +189,32 @@ function AuthorizePayoutForm() {
   const { accessToken } = useAuth();
   const [payoutId, setPayoutId] = useState("");
 
+  const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: (id: string) => api.authorizePayout(accessToken as string, id),
-    onSuccess: () => setPayoutId(""),
+    onSuccess: () => {
+      setPayoutId("");
+      void queryClient.invalidateQueries({ queryKey: ["reconciliation"] });
+    },
   });
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-muted-foreground" /> Authorize a
+          <CheckCircle2 className="h-4 w-4 text-muted-foreground" /> Approve a
           payout
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Settle a requested payout by its ID (payout_settle: debit
-          payout_pending, credit external). Audited, authorized role only.
+          A host asks for a payout when they want to cash out their earnings. Paste the payout ID here to approve it. Only admins can do this, and it is saved in the audit log.
         </p>
         {mutation.isSuccess ? (
           <div className="flex items-start gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
             <span className="text-muted-foreground">
-              Payout authorized and settled.
+              Payout approved.
             </span>
           </div>
         ) : null}
@@ -219,7 +228,7 @@ function AuthorizePayoutForm() {
           </div>
         ) : null}
         <div className="space-y-1.5">
-          <Label htmlFor="authorize-payout">Payout ID</Label>
+          <Label htmlFor="authorize-payout">Payout ID (from the host&apos;s request)</Label>
           <Input
             id="authorize-payout"
             placeholder="payout_…"
@@ -233,10 +242,10 @@ function AuthorizePayoutForm() {
         >
           {mutation.isPending ? (
             <>
-              <Loader2 className="animate-spin" /> Authorizing…
+              <Loader2 className="animate-spin" /> Approving…
             </>
           ) : (
-            "Authorize payout"
+            "Approve payout"
           )}
         </Button>
       </CardContent>
@@ -246,13 +255,13 @@ function AuthorizePayoutForm() {
 
 // --------------------------- Resolve dispute ---------------------------
 const resolveSchema = z.object({
-  dispute_id: z.string().trim().min(1, "Enter a dispute ID"),
-  resolution: z.string().trim().min(3, "Describe the resolution"),
+  dispute_id: z.string().trim().min(1, "Enter the dispute ID so we know which dispute to close."),
+  resolution: z.string().trim().min(3, "Write a short note on how you decided (at least 3 letters)."),
   refund_amount: z
     .string()
     .trim()
     .refine((v) => v === "" || amountRe.test(v), {
-      message: "Enter a decimal like 5.00 (or leave blank)",
+      message: "Enter an amount with up to 2 decimals, like 5.00, or leave it empty.",
     }),
 });
 
@@ -270,21 +279,26 @@ function ResolveDisputeForm() {
     defaultValues: { dispute_id: "", resolution: "", refund_amount: "" },
   });
 
+  const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: (v: ResolveValues) =>
       api.resolveDispute(accessToken as string, v.dispute_id, {
         resolution: v.resolution,
         refund_amount: v.refund_amount || undefined,
       }),
-    onSuccess: () =>
-      reset({ dispute_id: "", resolution: "", refund_amount: "" }),
+    onSuccess: () => {
+      reset({ dispute_id: "", resolution: "", refund_amount: "" });
+      // A dispute may carry a refund: refresh the books check and the disputes list.
+      void queryClient.invalidateQueries({ queryKey: ["reconciliation"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin"] });
+    },
   });
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-muted-foreground" /> Resolve a
+          <ShieldAlert className="h-4 w-4 text-muted-foreground" /> Close a
           dispute
         </CardTitle>
       </CardHeader>
@@ -298,7 +312,7 @@ function ResolveDisputeForm() {
             <div className="flex items-start gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
               <span className="text-muted-foreground">
-                Dispute resolved and recorded in the audit log.
+                Dispute closed and saved in the audit log.
               </span>
             </div>
           ) : null}
@@ -313,7 +327,7 @@ function ResolveDisputeForm() {
           ) : null}
 
           <div className="space-y-1.5">
-            <Label htmlFor="resolve-id">Dispute ID</Label>
+            <Label htmlFor="resolve-id">Dispute ID (from the Disputes page)</Label>
             <Input
               id="resolve-id"
               placeholder="dispute_…"
@@ -326,10 +340,10 @@ function ResolveDisputeForm() {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="resolve-resolution">Resolution</Label>
+            <Label htmlFor="resolve-resolution">Your decision</Label>
             <Input
               id="resolve-resolution"
-              placeholder="e.g. upheld — partial refund issued"
+              placeholder="e.g. customer was right, part refunded"
               aria-invalid={Boolean(errors.resolution)}
               {...register("resolution")}
             />
@@ -353,7 +367,7 @@ function ResolveDisputeForm() {
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Leave blank to resolve without a refund. {CREDITS_LABEL}.
+                Leave empty to close the dispute without a refund. {CREDITS_LABEL}.
               </p>
             )}
           </div>
@@ -361,10 +375,10 @@ function ResolveDisputeForm() {
           <Button type="submit" disabled={mutation.isPending}>
             {mutation.isPending ? (
               <>
-                <Loader2 className="animate-spin" /> Resolving…
+                <Loader2 className="animate-spin" /> Closing…
               </>
             ) : (
-              "Resolve dispute"
+              "Close dispute"
             )}
           </Button>
         </form>
@@ -393,7 +407,10 @@ function ReconciliationPanel() {
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
         <CardTitle className="flex items-center gap-2">
-          <Scale className="h-4 w-4 text-muted-foreground" /> Reconciliation
+          <Scale className="h-4 w-4 text-muted-foreground" /> Books check
+          <HelpTip term="books check">
+            Every credit that leaves one account must arrive in another. This check adds up all money movements and makes sure nothing is missing or extra.
+          </HelpTip>
         </CardTitle>
         <Button
           variant="ghost"
@@ -416,20 +433,20 @@ function ReconciliationPanel() {
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
               {forbidden
-                ? "Your account does not have admin access. Authorization is enforced server-side (RBAC)."
+                ? "Your account does not have admin access, so this check cannot be shown. Ask an admin to give you access."
                 : query.error instanceof ApiError
                   ? query.error.message
-                  : "Couldn't load reconciliation."}
+                  : "We could not load the books check. Select Refresh to try again."}
             </span>
           </div>
         ) : data ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
               <Badge variant={data.balanced ? "success" : "danger"}>
-                {data.balanced ? "Balanced" : "IMBALANCED"}
+                {data.balanced ? "Balanced" : "Does not add up"}
               </Badge>
               <span className="text-sm text-muted-foreground">
-                Imbalance:{" "}
+                Difference:{" "}
                 <span className="font-mono tabular-nums text-foreground">
                   {data.imbalance}
                 </span>
@@ -437,21 +454,20 @@ function ReconciliationPanel() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-md border border-border p-4">
-                <p className="text-sm text-muted-foreground">Total debits</p>
+                <p className="text-sm text-muted-foreground">Total taken out (debits)</p>
                 <p className="mt-1 font-mono text-xl font-semibold tabular-nums">
                   {data.total_debits}
                 </p>
               </div>
               <div className="rounded-md border border-border p-4">
-                <p className="text-sm text-muted-foreground">Total credits</p>
+                <p className="text-sm text-muted-foreground">Total put in (credits)</p>
                 <p className="mt-1 font-mono text-xl font-semibold tabular-nums">
                   {data.total_credits}
                 </p>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              INVARIANT 2 — across the whole ledger, total debits must equal total
-              credits (imbalance 0.00). {CREDITS_LABEL}.
+              The two totals must match, so the difference should be 0.00. If it is not, stop and tell the engineering team. {CREDITS_LABEL}.
             </p>
 
             {data.accounts && data.accounts.length > 0 ? (
@@ -460,7 +476,7 @@ function ReconciliationPanel() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Account</TableHead>
-                      <TableHead>Owner</TableHead>
+                      <TableHead>Belongs to</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead className="text-right">Balance</TableHead>
                     </TableRow>
@@ -499,8 +515,8 @@ export default function AdminBillingPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Billing & reconciliation"
-        description="Operator tools: ledger reconciliation, refunds, payout authorization and dispute resolution. Every money move is a balanced, audited ledger transaction."
+        title="Billing and checks"
+        description="Check that the books add up, refund a charge, approve a host payout, or close a dispute. Each action is saved in the audit log."
       />
 
       <div className="space-y-6">
@@ -509,11 +525,9 @@ export default function AdminBillingPage() {
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
             <span className="text-muted-foreground">
               <span className="font-medium text-foreground">
-                This is an operator surface.
+                This page is for admins.
               </span>{" "}
-              Your token doesn&apos;t appear to carry an admin role. This client
-              check is a UX convenience only — the API enforces RBAC server-side
-              and will reject unauthorized calls below.
+              Your account does not look like an admin account. The actions below will be refused unless you have admin access.
             </span>
           </div>
         ) : null}

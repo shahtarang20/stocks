@@ -138,7 +138,7 @@ try {
       max_cost: "5.00",
       max_runtime_seconds: 300,
       retry_policy: { max_retries: 1 },
-      gpu_runtime: "cuda", // "cuda" | "rocm" | "any" (default: "cuda")
+      gpu_runtime: "cuda", // "cuda" | "rocm" | "any" (default: "cuda"). ROCm: container, or sealed/sealed_pro only on hosts proving a Sealed image (owner decision D5 pending); never confidential
     },
     "my-job-1", // Idempotency-Key
   );
@@ -153,10 +153,10 @@ try {
   throw err;
 }
 
-job = await client.waitForJob(job.id, { poll: 2, timeout: 300 });
+job = await client.waitForJob(job.job_id, { poll: 2, timeout: 300 });
 console.log(job.status, job.execution_mode); // e.g. "completed" "simulated"
-for (const art of await client.getJobArtifacts(job.id)) {
-  const { url } = await client.getArtifactDownloadUrl(job.id, art.artifact_id);
+for (const art of await client.getJobArtifacts(job.job_id)) {
+  const { url } = await client.getArtifactDownloadUrl(job.job_id, art.artifact_id);
 }
 ```
 
@@ -225,6 +225,40 @@ overspend, no fake top-up, no fake payout.
 Types added: `BillingAccount`, `LedgerEntry`, `UsageRecord`, `Usage`,
 `Invoice`/`InvoiceLineItem`, `Dispute`, `ProviderEarnings`, `Payout` — every
 money field is a `string`.
+
+## Private chat streaming and private Kit fan-out (U18, Node only)
+
+These helpers use `node:crypto` and are loaded lazily, so browser bundles of the plain client are unaffected. They need a
+platform with privacy on; with `PRIVACY_STREAMING_ENABLED` off the server answers `400 streaming_not_supported_for_private`
+(thrown as an `ApiError`).
+
+```ts
+for await (const delta of client.chat.completions.create({
+  model: "llama-3-8b", messages: [{ role: "user", content: "hi" }],
+  stream: true, isolation_tier: "sealed",
+})) process.stdout.write(delta);
+```
+
+Messages are encrypted here; each chunk is opened with a per-call result private key and AAD
+`ccpp-v1|stream|<job_id>|<seq>|<final>`, then the `u32 big-endian length || text || zeros` frame is stripped (a length past
+the payload or any non-zero padding byte throws `PrivateStreamError`; so does a stream with no final chunk). `padBytes`
+(default 256) must equal the platform's `PRIVACY_STREAM_PAD_BYTES`; `0` = unpadded. Without a private `isolation_tier`,
+`stream: true` yields plain text deltas.
+
+```ts
+import { buildPrivateKitInput } from "@computecoin/sdk";
+
+const parts = [
+  buildPrivateKitInput({ image: pngBytes, note: "text input" }, { scale: 2 }),
+  buildPrivateKitInput({ image: otherBytes }, { scale: 2 }),
+];
+const { fanout, resultPrivateKeys } = await client.submitPrivateFanout({ spec, parts, isolationTier: "sealed" });
+// resultPrivateKeys[i] opens part i's sealed outputs: keep them.
+```
+
+The plaintext is `{"inputs": {name: {"b64": ...} | {"text": ...}}, "params": {...}}` (spec ccpp-v1.md, "Private Kit input").
+Every part gets its own Data Key, guardian shares and result keypair; the number of parts must equal the fan-out's part count.
+Set `guardianPin` (and `requireGuardianPin`) in the client options to check the guardian set against the published fingerprint.
 
 ## Endpoints not yet implemented
 

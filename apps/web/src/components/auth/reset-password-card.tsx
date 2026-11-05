@@ -15,7 +15,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { plainAuthError } from "./auth-errors";
 
 export function ResetPasswordCard() {
   const token = useSearchParams().get("token");
@@ -29,15 +30,15 @@ export function ResetPasswordCard() {
     e.preventDefault();
     setError(null);
     if (!token) {
-      setError("This reset link is missing its token.");
+      setError("This reset link is not complete. Open the link from your email again, or ask for a new one.");
       return;
     }
     if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+      setError("That password is too short. Use at least 8 characters.");
       return;
     }
     if (password !== confirm) {
-      setError("Passwords do not match");
+      setError("The two passwords are not the same. Type them again.");
       return;
     }
     setPending(true);
@@ -45,7 +46,7 @@ export function ResetPasswordCard() {
       await api.confirmPasswordReset(token, password);
       setDone(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+      setError(plainAuthError(err, "reset"));
     } finally {
       setPending(false);
     }
@@ -62,7 +63,7 @@ export function ResetPasswordCard() {
           <CardContent>
             <p role="status" className="flex items-start gap-2 text-sm text-success">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-              Your password has been changed. Log in with the new password.
+              Your password is changed. Log in with your new password.
             </p>
           </CardContent>
           <CardFooter>

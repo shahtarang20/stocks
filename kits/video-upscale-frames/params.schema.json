@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "string",
+      "enum": [
+        "realesrgan-x4plus",
+        "realesrgan-x4plus-anime"
+      ],
+      "default": "realesrgan-x4plus"
+    },
+    "scale": {
+      "type": "integer",
+      "enum": [
+        2,
+        4
+      ],
+      "default": 4
+    },
+    "tile": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1024,
+      "default": 512
+    },
+    "fps": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 240,
+      "default": 30
+    }
+  }
+}

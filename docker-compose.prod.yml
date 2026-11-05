@@ -6,6 +6,35 @@
 #   docker compose -f docker-compose.prod.yml up -d --build
 # ==============================================================================
 
+# Environment shared by the API and the worker. Both import app.core.config, whose production
+# validator refuses to boot on dev defaults, so the worker MUST receive the same security-relevant
+# settings (settlement, secrets, object storage) as the API.
+x-api-env: &api-env
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+  STRUCTURED_LOGGING: "true"
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://computecoin:${POSTGRES_PASSWORD}@postgres:5432/computecoin}
+  REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+  OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+  OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-computecoin-artifacts}
+  FRONTEND_URL: ${FRONTEND_URL:-https://computecoin.ai}
+  AUTH_SECRET: ${AUTH_SECRET}
+  SESSION_SECRET: ${SESSION_SECRET}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-resend}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  EMAIL_FROM: ${EMAIL_FROM:-ComputeCoin <noreply@computecoin.ai>}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  SETTLEMENT_ENABLED: ${SETTLEMENT_ENABLED:-true}
+  SETTLEMENT_CHAIN_ID: ${SETTLEMENT_CHAIN_ID:-11155111}
+  SETTLEMENT_CONTRACT_ADDRESS: ${SETTLEMENT_CONTRACT_ADDRESS:-}
+  COMPUTE_TOKEN_ADDRESS: ${COMPUTE_TOKEN_ADDRESS:-}
+  PLATFORM_SIGNER_PRIVATE_KEY: ${PLATFORM_SIGNER_PRIVATE_KEY:-}
+  PLATFORM_TREASURY_ADDRESS: ${PLATFORM_TREASURY_ADDRESS:-}
+  OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-${MINIO_ROOT_USER:-computecoinadmin}}
+  OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
+
 services:
   # ----------------------------------------------------------------------------
   # Caddy Reverse Proxy & Automatic SSL
@@ -56,30 +85,9 @@ services:
     container_name: computecoin-prod-api
     restart: unless-stopped
     environment:
-      ENVIRONMENT: production
+      <<: *api-env
       PORT: 8000
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
-      LOG_LEVEL: INFO
-      STRUCTURED_LOGGING: "true"
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://computecoin:${POSTGRES_PASSWORD}@postgres:5432/computecoin}
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
-      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
-      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-computecoin-artifacts}
-      FRONTEND_URL: ${FRONTEND_URL:-https://computecoin.ai}
-      AUTH_SECRET: ${AUTH_SECRET}
-      SESSION_SECRET: ${SESSION_SECRET}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-resend}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      EMAIL_FROM: ${EMAIL_FROM:-ComputeCoin <noreply@computecoin.ai>}
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      SETTLEMENT_ENABLED: ${SETTLEMENT_ENABLED:-true}
-      SETTLEMENT_CHAIN_ID: ${SETTLEMENT_CHAIN_ID:-11155111}
-      SETTLEMENT_CONTRACT_ADDRESS: ${SETTLEMENT_CONTRACT_ADDRESS:-}
-      COMPUTE_TOKEN_ADDRESS: ${COMPUTE_TOKEN_ADDRESS:-}
-      PLATFORM_SIGNER_PRIVATE_KEY: ${PLATFORM_SIGNER_PRIVATE_KEY:-}
-      PLATFORM_TREASURY_ADDRESS: ${PLATFORM_TREASURY_ADDRESS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,15 +112,8 @@ services:
     command: ["python", "-m", "app.worker"]
     restart: unless-stopped
     environment:
-      ENVIRONMENT: production
-      LOG_LEVEL: INFO
-      STRUCTURED_LOGGING: "true"
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://computecoin:${POSTGRES_PASSWORD}@postgres:5432/computecoin}
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      <<: *api-env
       SWEEP_INTERVAL_SECONDS: 15
-      AUTH_SECRET: ${AUTH_SECRET}
-      SESSION_SECRET: ${SESSION_SECRET}
-      SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
       postgres:
         condition: service_healthy

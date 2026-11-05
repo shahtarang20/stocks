@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "epochs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 1
+    },
+    "learning_rate": {
+      "type": "number",
+      "minimum": 1e-06,
+      "maximum": 0.01,
+      "default": 0.0002
+    },
+    "lora_r": {
+      "type": "integer",
+      "enum": [
+        8,
+        16,
+        32,
+        64
+      ],
+      "default": 16
+    },
+    "lora_alpha": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "default": 32
+    },
+    "lora_dropout": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 0.5,
+      "default": 0.05
+    },
+    "max_seq_len": {
+      "type": "integer",
+      "minimum": 128,
+      "maximum": 8192,
+      "default": 1024
+    },
+    "micro_batch_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 1
+    },
+    "global_batch_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1024,
+      "default": 16
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "default": 0
+    }
+  }
+}

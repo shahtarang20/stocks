@@ -47,7 +47,7 @@ from app.models.billing import (
 # Accounts that must never go negative. provider_earnings is floored so a payout
 # or refund cannot overdraw a provider (platform_revenue is intentionally NOT
 # listed: the platform may absorb a refund beyond its collected fee).
-_NON_NEGATIVE_TYPES = frozenset({"customer_credits", "holding", "provider_earnings"})
+_NON_NEGATIVE_TYPES = frozenset({"customer_credits", "holding", "provider_earnings", "withdrawal_pending"})
 # DEBIT-normal accounts (balance = debits - credits). Everything else is
 # CREDIT-normal (balance = credits - debits).
 _DEBIT_NORMAL_TYPES = frozenset({"external"})
@@ -235,6 +235,8 @@ async def get_platform_account(db: AsyncSession, account_type: str) -> BillingAc
         "holding": "holding",
         "platform_revenue": "platform",
         "payout_pending": "platform",
+        "withdrawal_pending": "platform",  # B1
+        "paid_out": "platform",  # B1
     }[account_type]
     account = (
         await db.execute(

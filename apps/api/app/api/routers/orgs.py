@@ -249,7 +249,7 @@ async def invite_member(
     invitation, raw_token = await create_invitation(
         db, org=org, email=str(body.email), role=role, invited_by=current
     )
-    accept_url = f"{settings.FRONTEND_URL.rstrip('/')}/orgs/accept-invite?token={raw_token}"
+    accept_url = f"{settings.frontend_base_url}/orgs/accept-invite?token={raw_token}"
     await send_email(
         to_email=invitation.email,
         subject=f"You've been invited to {org.name} on ComputeCoin",

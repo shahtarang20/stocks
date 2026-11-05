@@ -480,3 +480,37 @@ async def test_deregistered_hostname_can_be_enrolled_again(client):
     t2 = await mint_token(client, access)
     again = await enroll_machine(client, t2["enrollment_token"], hostname="reinstalled-box")
     assert again["machine_id"] != out["machine_id"]
+
+
+# ---------------------------------------------------------------------------
+# 8. host-owned availability is not overridden by the next heartbeat (QA host/admin)
+# ---------------------------------------------------------------------------
+async def test_heartbeat_does_not_override_owner_maintenance_or_offline(client: AsyncClient):
+    access = await become_provider(client, "prov-hold@example.com")
+    raw = (await mint_token(client, access))["enrollment_token"]
+    out = await enroll_machine(client, raw, hostname="gpu-hold")
+    mid, secret = out["machine_id"], out["machine_secret"]
+
+    async def beat(avail: str = "online"):
+        headers, body = heartbeat_headers(mid, secret, _hb_body(avail))
+        resp = await client.post("/v1/agents/heartbeat", content=body, headers=headers)
+        assert resp.status_code == 200, resp.text
+
+    async def status() -> tuple[str, str]:
+        d = (await client.get(f"/provider/machines/{mid}", headers=auth_headers(access))).json()
+        return d["availability"], d["status"]
+
+    await beat()  # first heartbeat after enroll brings it online
+    assert await status() == ("online", "online")
+
+    for owner_choice in ("maintenance", "offline"):
+        r = await client.patch(f"/provider/machines/{mid}", json={"availability": owner_choice}, headers=auth_headers(access))
+        assert r.status_code == 200
+        await beat()
+        await beat("throttled")
+        assert (await status())[0] == owner_choice, f"heartbeat overrode owner-set {owner_choice}"
+        # the owner can still bring it back
+        r = await client.patch(f"/provider/machines/{mid}", json={"availability": "online"}, headers=auth_headers(access))
+        assert r.status_code == 200
+        await beat()
+        assert await status() == ("online", "online")

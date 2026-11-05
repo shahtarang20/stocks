@@ -7,9 +7,10 @@ never touch the network.
 
 from __future__ import annotations
 
+import json
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import httpx
 
@@ -53,6 +54,41 @@ TERMINAL_JOB_STATES = frozenset(
 )
 
 DEFAULT_BASE_URL = "https://api.computecoin.example"
+
+
+def _error_message(body: Any) -> str:
+    """A readable message from an error body. ``detail`` is a string for most errors, but a structured object
+    (``{"error": {"message", "code"}}`` for inference) or a list (request validation) for others."""
+    if not isinstance(body, dict):
+        return str(body)
+    detail = body.get("detail")
+    if isinstance(detail, str) and detail:
+        return detail
+    if isinstance(detail, dict):
+        err = detail.get("error") if isinstance(detail.get("error"), dict) else detail
+        return str(err.get("message") or json.dumps(detail, default=str))
+    if detail:
+        return json.dumps(detail, default=str)
+    return str(body.get("message") or body)
+
+
+def _error_code(body: Any, prefer_body_code: bool = False) -> Optional[str]:
+    """The machine-readable reason (``insufficient_credits``, ``budget_exceeded``...), or None. Always a string."""
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("detail")
+    from_detail: Any = None
+    if isinstance(detail, str):
+        from_detail = detail
+    elif isinstance(detail, dict):
+        err = detail.get("error") if isinstance(detail.get("error"), dict) else detail
+        from_detail = err.get("code")
+    from_body = body.get("code")
+    order = (from_body, from_detail) if prefer_body_code else (from_detail, from_body)
+    for c in order:
+        if isinstance(c, str) and c:
+            return c
+    return None
 
 
 class ComputeCoinClient:
@@ -127,7 +163,7 @@ class ComputeCoinClient:
         # Try to extract a useful message without assuming JSON.
         try:
             body = resp.json()
-            message = body.get("detail") or body.get("message") or str(body)
+            message = _error_message(body)
         except Exception:
             body = resp.text
             message = resp.text or resp.reason_phrase
@@ -142,22 +178,13 @@ class ComputeCoinClient:
         if status in (401, 403):
             raise AuthenticationError(status, message, body)
         if status == 402:
-            code = None
-            if isinstance(body, dict):
-                code = body.get("detail") or body.get("code")
-            raise PaymentRequiredError(status, message, body, code=code)
+            raise PaymentRequiredError(status, message, body, code=_error_code(body))
         if status == 429:
             raise RateLimitError(status, message, body)
         if status == 409:
-            code = None
-            if isinstance(body, dict):
-                code = body.get("detail") or body.get("code")
-            raise ConflictError(status, message, body, code=code)
+            raise ConflictError(status, message, body, code=_error_code(body))
         if status == 422:
-            code = None
-            if isinstance(body, dict):
-                code = body.get("code") or body.get("detail")
-            raise ValidationError(status, message, body, code=code)
+            raise ValidationError(status, message, body, code=_error_code(body, prefer_body_code=True))
         raise ApiError(status, message, body)
 
     def set_access_token(self, token: str) -> None:
@@ -166,13 +193,13 @@ class ComputeCoinClient:
     # -- auth ---------------------------------------------------------------- #
     def register(self, email: str, password: str) -> dict[str, Any]:
         return self._request(
-            "POST", "/v1/auth/register",
+            "POST", "/auth/register",
             json={"email": email, "password": password}, auth=False,
         )
 
     def login(self, email: str, password: str) -> TokenPair:
         data = self._request(
-            "POST", "/v1/auth/login",
+            "POST", "/auth/login",
             json={"email": email, "password": password}, auth=False,
         )
         pair = TokenPair.model_validate(data)
@@ -181,7 +208,7 @@ class ComputeCoinClient:
 
     def refresh(self, refresh_token: str) -> TokenPair:
         data = self._request(
-            "POST", "/v1/auth/refresh",
+            "POST", "/auth/refresh",
             json={"refresh_token": refresh_token}, auth=False,
         )
         pair = TokenPair.model_validate(data)
@@ -190,16 +217,16 @@ class ComputeCoinClient:
 
     # -- projects ------------------------------------------------------------ #
     def list_projects(self) -> list[Project]:
-        data = self._request("GET", "/v1/projects")
+        data = self._request("GET", "/projects")
         return [Project.model_validate(p) for p in data]
 
     def create_project(self, name: str) -> Project:
-        data = self._request("POST", "/v1/projects", json={"name": name})
+        data = self._request("POST", "/projects", json={"name": name})
         return Project.model_validate(data)
 
     def create_api_key(self, project_id: str, name: Optional[str] = None) -> ApiKey:
         data = self._request(
-            "POST", f"/v1/projects/{project_id}/api-keys",
+            "POST", f"/projects/{project_id}/api-keys",
             json={"name": name},
         )
         return ApiKey.model_validate(data)
@@ -474,10 +501,15 @@ class ComputeCoinClient:
         )
         return BillingAccount.model_validate(data)
 
-    def get_ledger(self) -> list[LedgerEntry]:
-        """The customer's own double-entry ledger entries (append-only)."""
-        data = self._request("GET", "/v1/billing/ledger")
-        return [LedgerEntry.model_validate(e) for e in data]
+    def get_ledger(self, *, page: Optional[int] = None, page_size: Optional[int] = None) -> list[LedgerEntry]:
+        """The customer's own double-entry ledger entries (append-only), newest first.
+
+        The API paginates (``{"items": [...], "page", "page_size", "total"}``, 50 per page by default); this returns
+        the entries of the requested page."""
+        params = {k: v for k, v in (("page", page), ("page_size", page_size)) if v is not None}
+        data = self._request("GET", "/v1/billing/ledger", params=params or None)
+        items = data.get("items", []) if isinstance(data, dict) else data
+        return [LedgerEntry.model_validate(e) for e in items]
 
     def get_usage(self) -> Usage:
         """Spend summary + per-job usage records (estimated vs actual separate)."""
@@ -644,3 +676,163 @@ class ComputeCoinClient:
             rpc_url=rpc_url,
             vault_address=vault_address,
         )
+
+    # -- U18: private Kit fan-out and private chat streaming ------------------ #
+    def _guardian_set(self, guardians: Optional[dict[str, str]], threshold: Optional[int]) -> tuple[dict[str, str], int]:
+        from .crypto import check_guardian_pin
+
+        if guardians is None or threshold is None:
+            keys = self.get_privacy_verifier_key()
+            guardians = guardians or keys.get("guardians", {})
+            threshold = threshold or keys.get("threshold", 2)
+            check_guardian_pin(guardians, threshold, self.guardian_pin, require_pin=self.require_guardian_pin)
+        elif self.guardian_pin:
+            check_guardian_pin(guardians, threshold, self.guardian_pin)
+        return guardians, threshold
+
+    def submit_private_fanout(
+        self,
+        *,
+        spec: dict[str, Any],
+        parts: Sequence[dict[str, Any]],
+        isolation_tier: str = "sealed",
+        guardians: Optional[dict[str, str]] = None,
+        threshold: Optional[int] = None,
+        project_id: Optional[str] = None,
+        machine_id: Optional[str] = None,
+        required_gpu_runtime: str = "cuda",
+        idempotency_key: Optional[str] = None,
+    ) -> "PrivateFanoutSubmission":
+        """Encrypt one plaintext per part client-side and POST ``/v1/jobs/v2/fanout`` with ``private_parts``.
+
+        ``parts``: one ``{"inputs": ..., "params": ...}`` per part, as built by ``build_private_kit_input``. The number must
+        equal the part count the fan-out ``spec`` produces (the server answers 422 ``private_parts_count_mismatch``
+        otherwise). The returned ``result_private_keys`` (same order) are NOT stored anywhere else: keep them."""
+        from .private_kit import prepare_private_fanout_parts
+
+        if isolation_tier not in ("sealed", "sealed_pro", "confidential"):
+            raise ValueError("a private fan-out needs isolation_tier sealed, sealed_pro or confidential")
+        guardians, threshold = self._guardian_set(guardians, threshold)
+        private_parts, private_keys = prepare_private_fanout_parts(parts, guardians=guardians, threshold=threshold)
+        body: dict[str, Any] = {
+            "spec": spec,
+            "isolation_tier": isolation_tier,
+            "required_gpu_runtime": required_gpu_runtime,
+            "private_parts": private_parts,
+        }
+        if project_id is not None:
+            body["project_id"] = project_id
+        if machine_id is not None:
+            body["machine_id"] = machine_id
+        extra = {"Idempotency-Key": idempotency_key} if idempotency_key is not None else None
+        data = self._request("POST", "/v1/jobs/v2/fanout", json=body, extra_headers=extra)
+        return PrivateFanoutSubmission(fanout=data, result_private_keys=private_keys)
+
+    @property
+    def chat(self) -> "_Chat":
+        return _Chat(self)
+
+    def _chat_create(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        stream: bool = False,
+        isolation_tier: Optional[str] = None,
+        guardians: Optional[dict[str, str]] = None,
+        threshold: Optional[int] = None,
+        pad_bytes: int = 256,
+        **kwargs: Any,
+    ) -> Any:
+        private = (isolation_tier or "").lower() in ("sealed", "sealed_pro", "confidential")
+        if not stream:
+            if private:
+                raise ValueError("private chat is streamed: use stream=True (or submit_private_job for a one-shot result)")
+            if isolation_tier is not None:
+                kwargs["isolation_tier"] = isolation_tier
+            return self.chat_completions(model=model, messages=messages, **kwargs)
+        if not private:
+            if isolation_tier is not None:
+                kwargs["isolation_tier"] = isolation_tier
+            return self._iter_plain_stream(model, messages, kwargs)
+        return self._iter_private_stream(model, messages, isolation_tier, guardians, threshold, pad_bytes, kwargs)
+
+    def _stream_lines(self, payload: dict[str, Any]) -> Any:
+        with self._client.stream("POST", "/v1/chat/completions", json=payload, headers=self._headers(True)) as resp:
+            if not resp.is_success:
+                resp.read()
+                self._handle(resp)  # raises the typed error (e.g. 400 streaming_not_supported_for_private)
+            for line in resp.iter_lines():
+                yield line
+
+    def _iter_plain_stream(self, model: str, messages: list[dict[str, Any]], extra: dict[str, Any]) -> Any:
+        """Non-private streaming: OpenAI-style ``chat.completion.chunk`` events, yields the text deltas."""
+        from .private_stream import iter_sse_data
+
+        payload = {"model": model, "messages": messages, "stream": True, **extra}
+        for event in iter_sse_data(self._stream_lines(payload)):
+            if isinstance(event, dict) and isinstance(event.get("error"), dict):
+                raise ApiError(200, str(event["error"].get("message") or event["error"].get("code")), event)
+            for choice in (event.get("choices") or []) if isinstance(event, dict) else []:
+                delta = (choice.get("delta") or {}).get("content")
+                if delta:
+                    yield delta
+
+    def _iter_private_stream(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        isolation_tier: Optional[str],
+        guardians: Optional[dict[str, str]],
+        threshold: Optional[int],
+        pad_bytes: int,
+        extra: dict[str, Any],
+    ) -> Any:
+        """Private streaming: the messages are encrypted here, the stream comes back sealed; yields decrypted text deltas.
+
+        Needs the server flags (PRIVACY_STREAMING_ENABLED and PRIVACY_ENABLED); with a flag off the server answers 400
+        ``streaming_not_supported_for_private`` and that error is raised unchanged. ``pad_bytes`` must equal the
+        platform's PRIVACY_STREAM_PAD_BYTES (default 256; 0 = unpadded)."""
+        from .crypto import build_private_chat_input, generate_customer_keypair, prepare_private_job
+        from .private_stream import iter_private_text, iter_sse_data  # noqa: F401
+
+        guardians, threshold = self._guardian_set(guardians, threshold)
+        priv, pub = generate_customer_keypair()
+        plain = build_private_chat_input(messages, max_tokens=extra.get("max_tokens"), temperature=extra.get("temperature"))
+        prepared = prepare_private_job(plain, guardians=guardians, threshold=threshold, result_public_key=pub, canonical=True)
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "sealed"}],  # placeholder; the real messages are in encrypted_input
+            "stream": True,
+            "isolation_tier": isolation_tier,
+            "encrypted_input": prepared["encrypted_input"],
+            "dk_shares": prepared["dk_shares"],
+            "result_public_key": pub,
+            **extra,
+        }
+        yield from iter_private_text(self._stream_lines(payload), priv, pad_bytes=pad_bytes)
+
+
+class PrivateFanoutSubmission:
+    """Result of :meth:`ComputeCoinClient.submit_private_fanout`: the server's fan-out view and the per-part result keys."""
+
+    def __init__(self, fanout: dict[str, Any], result_private_keys: list[str]) -> None:
+        self.fanout = fanout
+        self.result_private_keys = result_private_keys
+
+
+class _Completions:
+    def __init__(self, client: "ComputeCoinClient") -> None:
+        self._client = client
+
+    def create(self, **kwargs: Any) -> Any:
+        """``client.chat.completions.create(model=..., messages=..., stream=True, isolation_tier="sealed")``.
+
+        ``stream=False`` returns a ``ChatCompletion`` (same as ``chat_completions``). ``stream=True`` returns an iterator of
+        text deltas; with a private ``isolation_tier`` they are decrypted (and un-padded) client-side."""
+        return self._client._chat_create(**kwargs)
+
+
+class _Chat:
+    def __init__(self, client: "ComputeCoinClient") -> None:
+        self.completions = _Completions(client)

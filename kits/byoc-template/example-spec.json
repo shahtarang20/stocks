@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "mode": "byoc",
+  "image": "registry.example.com/acme/tool@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "command": [],
+  "args": [],
+  "env": {"APP_MODE": "fast"},
+  "isolation": "gvisor",
+  "inputs": [{"name": "scene", "source": "dataset:00000000-0000-0000-0000-000000000000"}],
+  "outputs": [{"name": "result", "path": "result/out.json"}],
+  "resources": {"gpu": {"count": 1}, "cpu": 2, "ram_gb": 4},
+  "network": {"egress": []},
+  "max_runtime_seconds": 3600,
+  "billing": {"max_cost": "5.00"}
+}

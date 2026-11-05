@@ -21,6 +21,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -113,13 +114,13 @@ export default function AdminSettlementPage() {
     onSuccess: (res) => {
       if (res) {
         setSelectedVoucher(res.signature);
-        setActionSuccess(`Cryptographic voucher generated for job ${res.job_id}`);
+        setActionSuccess(`Payment voucher created for job ${res.job_id}. It is shown below.`);
         setActionError(null);
         queryClient.invalidateQueries({ queryKey: ["settlementEscrows"] });
       }
     },
     onError: (err: any) => {
-      setActionError(err?.message || "Failed to generate settlement voucher");
+      setActionError(err?.message || "We could not create the voucher. Check the job ID and the amounts, then try again.");
       setActionSuccess(null);
     },
   });
@@ -134,13 +135,13 @@ export default function AdminSettlementPage() {
       });
     },
     onSuccess: () => {
-      setActionSuccess("Settlement transaction confirmed and reconciled with ledger!");
+      setActionSuccess("Marked as paid out. ComputeCoin's records are updated.");
       queryClient.invalidateQueries({ queryKey: ["settlementEscrows"] });
       queryClient.invalidateQueries({ queryKey: ["settlementReconciliation"] });
       queryClient.invalidateQueries({ queryKey: ["settlementTransactions"] });
     },
     onError: (err: any) => {
-      setActionError(err?.message || "Failed to confirm settlement");
+      setActionError(err?.message || "We could not mark this as paid out. Refresh the page and try again.");
     },
   });
 
@@ -154,13 +155,13 @@ export default function AdminSettlementPage() {
       });
     },
     onSuccess: () => {
-      setActionSuccess("Refund transaction confirmed and escrow refunded.");
+      setActionSuccess("Marked as refunded. The held amount is released in ComputeCoin's records.");
       queryClient.invalidateQueries({ queryKey: ["settlementEscrows"] });
       queryClient.invalidateQueries({ queryKey: ["settlementReconciliation"] });
       queryClient.invalidateQueries({ queryKey: ["settlementTransactions"] });
     },
     onError: (err: any) => {
-      setActionError(err?.message || "Failed to confirm refund");
+      setActionError(err?.message || "We could not mark this as refunded. Refresh the page and try again.");
     },
   });
 
@@ -179,12 +180,12 @@ export default function AdminSettlementPage() {
   return (
     <div className="space-y-6">
       <ConsolePageHeader
-        title="On-Chain Settlement & Smart Contracts"
-        description="Phase 10: Native COMPUTE token governance, escrow locking, platform vouchers, and off-chain ↔ on-chain double-entry ledger reconciliation."
+        title="Blockchain payments"
+        description="This page tracks job payments made with the COMPUTE token on the blockchain. Check that the numbers match ComputeCoin's own records, and settle or refund a held payment when a job ends."
         action={
           <Button variant="outline" size="sm" onClick={handleRefreshAll}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh State
+            Refresh
           </Button>
         }
       />
@@ -209,14 +210,14 @@ export default function AdminSettlementPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg">Smart Contract Architecture</CardTitle>
+              <CardTitle className="text-lg">Blockchain contracts</CardTitle>
             </div>
             <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
-              {contracts?.network_name || "EVM Cancun Target (Solidity 0.8.24)"}
+              {contracts?.network_name || "Network not shown"}
             </Badge>
           </div>
           <CardDescription>
-            Smart contracts governing compute budget locking, platform fee split, and cryptographic voucher settlement. Development deployment, not independently audited.
+            Smart contracts are small programs on the blockchain. These ones hold a customer&apos;s payment while a job runs, take the platform fee, and pay the host. They are a test setup and have not been checked by an outside security firm.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -231,7 +232,7 @@ export default function AdminSettlementPage() {
               <div className="rounded-lg border border-border/50 bg-background/50 p-3 space-y-1">
                 <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
                   <Coins className="h-3 w-3 text-amber-400" />
-                  ERC-20 Token ({contracts.token_symbol})
+                  COMPUTE token ({contracts.token_symbol})
                 </span>
                 <div className="font-mono text-xs truncate flex items-center justify-between">
                   <span title={contracts.token_address}>{truncateAddress(contracts.token_address)}</span>
@@ -248,7 +249,7 @@ export default function AdminSettlementPage() {
               <div className="rounded-lg border border-border/50 bg-background/50 p-3 space-y-1">
                 <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
                   <Lock className="h-3 w-3 text-cyan-400" />
-                  ComputeSettlement Escrow
+                  Payment holding contract
                 </span>
                 <div className="font-mono text-xs truncate flex items-center justify-between">
                   <span title={contracts.settlement_contract_address}>{truncateAddress(contracts.settlement_contract_address)}</span>
@@ -259,13 +260,13 @@ export default function AdminSettlementPage() {
                     <Copy className="h-3 w-3" />
                   </button>
                 </div>
-                <div className="text-[10px] text-muted-foreground">Non-custodial Voucher Escrow</div>
+                <div className="text-[10px] text-muted-foreground">Holds payments until a job ends</div>
               </div>
 
               <div className="rounded-lg border border-border/50 bg-background/50 p-3 space-y-1">
                 <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
                   <Key className="h-3 w-3 text-purple-400" />
-                  Platform Signer Identity
+                  Platform signing key
                 </span>
                 <div className="font-mono text-xs truncate flex items-center justify-between">
                   <span title={contracts.platform_signer_address}>{truncateAddress(contracts.platform_signer_address)}</span>
@@ -276,13 +277,13 @@ export default function AdminSettlementPage() {
                     <Copy className="h-3 w-3" />
                   </button>
                 </div>
-                <div className="text-[10px] text-muted-foreground">ECDSA EIP-191 Voucher Authority</div>
+                <div className="text-[10px] text-muted-foreground">Signs payment vouchers</div>
               </div>
 
               <div className="rounded-lg border border-border/50 bg-background/50 p-3 space-y-1">
                 <span className="text-xs text-muted-foreground flex items-center gap-1 font-mono">
                   <Scale className="h-3 w-3 text-emerald-400" />
-                  Treasury Vault
+                  Platform fee wallet
                 </span>
                 <div className="font-mono text-xs truncate flex items-center justify-between">
                   <span title={contracts.treasury_address}>{truncateAddress(contracts.treasury_address)}</span>
@@ -293,7 +294,7 @@ export default function AdminSettlementPage() {
                     <Copy className="h-3 w-3" />
                   </button>
                 </div>
-                <div className="text-[10px] text-muted-foreground">Protocol Fee Routing</div>
+                <div className="text-[10px] text-muted-foreground">Where platform fees go</div>
               </div>
             </div>
           ) : null}
@@ -305,7 +306,7 @@ export default function AdminSettlementPage() {
         <Card className="border-border/60 bg-card/60">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Total Escrows
+              Held payments
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -315,7 +316,7 @@ export default function AdminSettlementPage() {
               <div className="text-2xl font-bold">{recon?.total_escrows ?? 0}</div>
             )}
             <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              <Layers className="h-3 w-3" /> Locked & audited jobs
+              <Layers className="h-3 w-3" /> Jobs with a held payment
             </div>
           </CardContent>
         </Card>
@@ -323,7 +324,7 @@ export default function AdminSettlementPage() {
         <Card className="border-border/60 bg-card/60">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Active Locked Budget
+              Amount held now
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -335,7 +336,7 @@ export default function AdminSettlementPage() {
               </div>
             )}
             <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              <Lock className="h-3 w-3 text-cyan-400" /> Held in contract escrow
+              <Lock className="h-3 w-3 text-cyan-400" /> Waiting for jobs to end
             </div>
           </CardContent>
         </Card>
@@ -343,7 +344,7 @@ export default function AdminSettlementPage() {
         <Card className="border-border/60 bg-card/60">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Settled to Providers
+              Paid out to hosts
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -355,7 +356,7 @@ export default function AdminSettlementPage() {
               </div>
             )}
             <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              <TrendingUp className="h-3 w-3 text-emerald-400" /> Disbursed via voucher
+              <TrendingUp className="h-3 w-3 text-emerald-400" /> Paid using vouchers
             </div>
           </CardContent>
         </Card>
@@ -363,7 +364,7 @@ export default function AdminSettlementPage() {
         <Card className="border-border/60 bg-card/60">
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Ledger Parity Status
+              Records match
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -372,16 +373,16 @@ export default function AdminSettlementPage() {
             ) : recon?.ledger_parity_verified ? (
               <div className="flex items-center gap-2 text-emerald-400 font-semibold text-lg">
                 <CheckCircle2 className="h-5 w-5" />
-                VERIFIED IN-SYNC
+                Records match
               </div>
             ) : (
               <div className="flex items-center gap-2 text-amber-400 font-semibold text-lg">
                 <AlertCircle className="h-5 w-5" />
-                RECONCILIATION PENDING
+                Check still running
               </div>
             )}
             <div className="text-xs text-muted-foreground mt-1">
-              Off-chain Postgres ↔ On-chain EVM
+              ComputeCoin records compared with the blockchain
             </div>
           </CardContent>
         </Card>
@@ -392,16 +393,16 @@ export default function AdminSettlementPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Key className="h-4 w-4 text-primary" />
-            Issue Cryptographic Settlement Voucher
+            Create a payment voucher
           </CardTitle>
           <CardDescription>
-            Authorizes provider payout on-chain via EIP-191 ECDSA signature from the platform authority.
+            A voucher is a signed note that lets a host collect their payment from the holding contract. Enter the job and the amounts, then create it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-1">
-              <Label className="text-xs">Job UUID</Label>
+              <Label className="text-xs">Job ID</Label>
               <Input
                 placeholder="Job ID (e.g. 550e8400-e29b-41d4-a716-446655440000)"
                 value={voucherJobId}
@@ -410,7 +411,10 @@ export default function AdminSettlementPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Final Cost (in Wei)</Label>
+              <Label className="text-xs">
+                Final cost (smallest units)
+                <HelpTip term="smallest units">The token is counted in very small units. 1 COMPUTE is 1,000,000,000,000,000,000 of them (also called wei). The box starts at 40 COMPUTE.</HelpTip>
+              </Label>
               <Input
                 placeholder="40000000000000000000"
                 value={finalCost}
@@ -419,7 +423,7 @@ export default function AdminSettlementPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Platform Fee (in Wei)</Label>
+              <Label className="text-xs">Platform fee (smallest units)</Label>
               <Input
                 placeholder="4000000000000000000"
                 value={platformFee}
@@ -435,11 +439,11 @@ export default function AdminSettlementPage() {
               disabled={!voucherJobId || issueVoucherMutation.isPending}
               onClick={() => issueVoucherMutation.mutate()}
             >
-              Generate Platform Voucher
+              Create voucher
             </Button>
             {selectedVoucher && (
               <span className="text-xs font-mono text-muted-foreground truncate max-w-xl">
-                Signature: {selectedVoucher.slice(0, 32)}...
+                Voucher signature: {selectedVoucher.slice(0, 32)}...
               </span>
             )}
           </div>
@@ -451,10 +455,10 @@ export default function AdminSettlementPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Lock className="h-4 w-4 text-cyan-400" />
-            On-Chain Escrow Locks
+            Held payments
           </CardTitle>
           <CardDescription>
-            Real-time smart contract escrow allocations deposited for active and completed compute workloads.
+            Each row is a payment held by the contract for one job. Settle pays the host. Refund gives the payment back to the customer. These two buttons only update ComputeCoin&apos;s records. They do not send anything to the blockchain, and the transaction code they save is a placeholder.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -466,19 +470,22 @@ export default function AdminSettlementPage() {
             </div>
           ) : !escrows || escrows.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
-              No on-chain escrows recorded yet. Escrows are automatically created when jobs lock on-chain budget.
+              No held payments yet. A row appears here when a job&apos;s payment is locked in the contract.
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Job ID</TableHead>
+                  <TableHead>Job</TableHead>
                   <TableHead>Customer</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Locked Budget</TableHead>
+                  <TableHead>Host</TableHead>
+                  <TableHead>Amount held</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Reconciled</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>
+                    Matches records
+                    <HelpTip term="matches records">Yes means this payment was checked against ComputeCoin&apos;s own records and they agree.</HelpTip>
+                  </TableHead>
+                  <TableHead className="text-right">What to do</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -507,7 +514,7 @@ export default function AdminSettlementPage() {
                             : "border-cyan-500/30 text-cyan-400 bg-cyan-500/10"
                         }
                       >
-                        {escrow.status.toUpperCase()}
+                        {escrow.status === "locked" ? "Held" : escrow.status === "settled" ? "Paid out" : escrow.status === "refunded" ? "Refunded" : escrow.status}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -530,7 +537,7 @@ export default function AdminSettlementPage() {
                             className="text-xs h-7"
                             onClick={() => confirmSettlementMutation.mutate(escrow.job_id)}
                           >
-                            Settle
+                            Pay the host
                           </Button>
                           <Button
                             size="sm"
@@ -538,7 +545,7 @@ export default function AdminSettlementPage() {
                             className="text-xs h-7 text-rose-400 hover:text-rose-300"
                             onClick={() => confirmRefundMutation.mutate(escrow.job_id)}
                           >
-                            Refund
+                            Refund the customer
                           </Button>
                         </>
                       )}
@@ -556,10 +563,10 @@ export default function AdminSettlementPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Layers className="h-4 w-4 text-purple-400" />
-            On-Chain Ledger & Transaction Audit
+            Blockchain transactions
           </CardTitle>
           <CardDescription>
-            Cryptographic transactions verified against PostgreSQL ledger transactions for ADR-0001 compliance.
+            Payments seen on the blockchain, compared with ComputeCoin&apos;s own records. A check mark means they agree.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -571,18 +578,21 @@ export default function AdminSettlementPage() {
             </div>
           ) : !txs || txs.length === 0 ? (
             <div className="text-center py-6 text-muted-foreground text-sm">
-              No on-chain transactions logged yet.
+              No blockchain transactions yet. They appear here after a payment is made.
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Tx Hash</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Sender</TableHead>
+                  <TableHead>
+                    Transaction code
+                    <HelpTip term="transaction code">A unique code that identifies one payment on the blockchain.</HelpTip>
+                  </TableHead>
+                  <TableHead>Kind</TableHead>
+                  <TableHead>Sent from</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Reconciled</TableHead>
+                  <TableHead>Matches records</TableHead>
                   <TableHead className="text-right">Time</TableHead>
                 </TableRow>
               </TableHeader>

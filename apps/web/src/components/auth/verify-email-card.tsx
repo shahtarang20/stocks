@@ -13,7 +13,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { plainAuthError } from "./auth-errors";
 
 type State = "verifying" | "done" | "error";
 
@@ -21,7 +22,7 @@ export function VerifyEmailCard() {
   const token = useSearchParams().get("token");
   const [state, setState] = useState<State>(token ? "verifying" : "error");
   const [message, setMessage] = useState(
-    token ? "" : "This verification link is missing its token.",
+    token ? "" : "This link is not complete. Open the link from your email again, or log in and ask for a new email.",
   );
   // Tokens are single-use: React strict mode runs effects twice in dev, and a
   // second call would turn a success into "invalid or expired".
@@ -36,7 +37,7 @@ export function VerifyEmailCard() {
       .catch((err) => {
         setState("error");
         setMessage(
-          err instanceof ApiError ? err.message : "Could not verify your email. Please try again.",
+          plainAuthError(err, "verify"),
         );
       });
   }, [token]);
@@ -45,7 +46,7 @@ export function VerifyEmailCard() {
     <Card>
       <CardHeader>
         <CardTitle className="text-xl">Verify your email</CardTitle>
-        <CardDescription>Confirming your address for ComputeCoin.</CardDescription>
+        <CardDescription>We are checking your email address.</CardDescription>
       </CardHeader>
       <CardContent>
         {state === "verifying" ? (
@@ -56,7 +57,7 @@ export function VerifyEmailCard() {
         {state === "done" ? (
           <p role="status" className="flex items-start gap-2 text-sm text-success">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-            Your email is verified. You can now use billing and submit jobs.
+            Your email is verified. You can now add credits and run jobs.
           </p>
         ) : null}
         {state === "error" ? (

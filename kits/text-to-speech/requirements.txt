@@ -1,0 +1,6 @@
+# Versions are pinned but NOT yet checked against PyPI or against each other (L4). CI must resolve and
+# freeze with hashes (pip-compile --generate-hashes) and the Dockerfile must then use --require-hashes.
+# torch comes from the pinned CUDA base image, not from here.
+kokoro==0.9.4
+misaki[en]==0.9.4
+numpy==2.2.2

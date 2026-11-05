@@ -7,6 +7,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, apiErrorCode, ApiError } from "@/lib/api";
@@ -15,9 +16,9 @@ import { formatRelativeTime } from "@/lib/utils";
 
 function message(err: unknown): string {
   const code = apiErrorCode(err);
-  if (code === "token_deposits_disabled") return "Token deposits are not enabled on this server.";
-  if (code === "chain_unavailable") return "The blockchain could not be reached right now.";
-  return err instanceof ApiError ? err.message : "Something went wrong.";
+  if (code === "token_deposits_disabled") return "Token deposits are turned off on this server. Ask the engineering team to turn them on.";
+  if (code === "chain_unavailable") return "We could not reach the blockchain right now. Wait a minute and select Scan now again.";
+  return err instanceof ApiError ? err.message : "Something went wrong. Please try again.";
 }
 
 export default function TokenDepositsPage() {
@@ -51,8 +52,8 @@ export default function TokenDepositsPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Token deposits"
-        description="COMPUTE tokens received at the platform address, and whether the chain and the ledger agree."
+        title="Token deposits (COMPUTE)"
+        description="People can pay with COMPUTE tokens and get credits in return. See the tokens that arrived, and check that the blockchain and ComputeCoin's records agree. Select Scan now to look for new deposits."
         action={
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => { recQuery.refetch(); listQuery.refetch(); }} disabled={recQuery.isFetching}>
@@ -61,7 +62,7 @@ export default function TokenDepositsPage() {
             </Button>
             <Button onClick={() => scanMut.mutate()} disabled={scanMut.isPending || disabled}>
               {scanMut.isPending ? <Loader2 className="animate-spin" /> : null}
-              Scan now
+              Look for new deposits
             </Button>
           </div>
         }
@@ -71,14 +72,13 @@ export default function TokenDepositsPage() {
         {forbidden ? (
           <Card className="border-dashed">
             <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              Administrator access is required to view token deposits.
+              Only admins can see token deposits. Ask an admin to give you access.
             </CardContent>
           </Card>
         ) : disabled ? (
           <Card className="border-dashed">
             <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              Token deposits are switched off. They are enabled only when the server has a deposit address, a
-              credits-per-token rate and a chain connection configured.
+              Token deposits are switched off. The engineering team turns them on once the server has a deposit address, a rate for how many credits one token is worth, and a blockchain connection.
             </CardContent>
           </Card>
         ) : null}
@@ -91,8 +91,8 @@ export default function TokenDepositsPage() {
         ) : null}
         {scanMut.data ? (
           <p role="status" className="text-sm text-muted-foreground" data-testid="scan-result">
-            Scan finished: {String(scanMut.data.credited ?? 0)} credited, {String(scanMut.data.unclaimed ?? 0)} unclaimed,{" "}
-            {String(scanMut.data.rejected ?? 0)} rejected.
+            Scan finished: {String(scanMut.data.credited ?? 0)} turned into credits, {String(scanMut.data.unclaimed ?? 0)} waiting for the sender to link a wallet,{" "}
+            {String(scanMut.data.rejected ?? 0)} turned away.
           </p>
         ) : null}
 
@@ -100,16 +100,16 @@ export default function TokenDepositsPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                Reconciliation
+                Records check
+                <HelpTip term="records check">Compares the tokens on the blockchain with the credits ComputeCoin has given out. They should agree.</HelpTip>
                 {rec ? (
                   <Badge variant={rec.ok ? "success" : "danger"} data-testid="rec-status">
-                    {rec.ok ? "Balanced" : "MISMATCH"}
+                    {rec.ok ? "Balanced" : "Does not match"}
                   </Badge>
                 ) : null}
               </CardTitle>
               <CardDescription>
-                The deposit address must hold at least what has been recorded as received, and the credits issued
-                must equal the ledger entries posted for them.
+                The deposit address must hold at least as many tokens as we have recorded, and the credits we gave out must match our records of them.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -120,14 +120,14 @@ export default function TokenDepositsPage() {
               ) : rec ? (
                 <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
                   {[
-                    ["On-chain balance of the deposit address", rec.on_chain_balance],
-                    ["Recorded as received", rec.recorded_deposits],
-                    ["Not yet recorded (still confirming)", rec.not_yet_recorded],
-                    ["Credited to accounts", rec.credited_tokens],
-                    ["Unclaimed (sender not linked)", rec.unclaimed_tokens],
-                    ["Rejected (outside limits)", rec.rejected_tokens],
+                    ["Tokens held at the deposit address (blockchain)", rec.on_chain_balance],
+                    ["Tokens recorded as received", rec.recorded_deposits],
+                    ["Tokens still confirming", rec.not_yet_recorded],
+                    ["Tokens turned into credits", rec.credited_tokens],
+                    ["Tokens waiting (sender has not linked a wallet)", rec.unclaimed_tokens],
+                    ["Tokens turned away (outside the allowed amounts)", rec.rejected_tokens],
                     ["Credits issued", rec.credits_issued],
-                    ["Ledger credits posted", rec.ledger_credits],
+                    ["Credits in our records", rec.ledger_credits],
                   ].map(([k, v]) => (
                     <div key={k} className="flex justify-between gap-4 border-b border-border py-1.5">
                       <dt className="text-muted-foreground">{k}</dt>
@@ -139,13 +139,13 @@ export default function TokenDepositsPage() {
               {rec && !rec.ok ? (
                 <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-danger">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  {!rec.tokens_ok ? "The deposit address holds less than what was credited. " : ""}
-                  {!rec.ledger_ok ? "Credits issued do not match the ledger. " : ""}
-                  Investigate before crediting anything more.
+                  {!rec.tokens_ok ? "The deposit address holds fewer tokens than we turned into credits. " : ""}
+                  {!rec.ledger_ok ? "The credits we gave out do not match our records. " : ""}
+                  Stop and tell the engineering team before any more credits are given out.
                 </p>
               ) : rec ? (
                 <p className="mt-3 flex items-center gap-2 text-sm text-success">
-                  <CheckCircle2 className="h-4 w-4" /> Chain and ledger agree.
+                  <CheckCircle2 className="h-4 w-4" /> The blockchain and ComputeCoin&apos;s records agree. Nothing to do.
                 </p>
               ) : null}
             </CardContent>
@@ -164,25 +164,25 @@ export default function TokenDepositsPage() {
                 className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm"
               >
                 <option value="">All</option>
-                <option value="credited">Credited</option>
-                <option value="unclaimed">Unclaimed</option>
-                <option value="rejected">Rejected</option>
+                <option value="credited">Turned into credits</option>
+                <option value="unclaimed">Waiting for wallet link</option>
+                <option value="rejected">Turned away</option>
               </select>
             </CardHeader>
             <CardContent>
               {listQuery.isLoading ? (
                 <Skeleton className="h-20 w-full" />
               ) : (listQuery.data ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">No deposits.</p>
+                <p className="text-sm text-muted-foreground">No deposits yet. They show up here after someone sends COMPUTE tokens to the deposit address.</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>When</TableHead>
-                      <TableHead>From</TableHead>
+                      <TableHead>Sent from</TableHead>
                       <TableHead className="text-right">COMPUTE</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Credits</TableHead>
+                      <TableHead>Result</TableHead>
+                      <TableHead className="text-right">Credits given</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -192,7 +192,7 @@ export default function TokenDepositsPage() {
                         <TableCell className="font-mono text-xs">{d.from_address ? `${d.from_address.slice(0, 8)}…${d.from_address.slice(-4)}` : "—"}</TableCell>
                         <TableCell className="text-right font-mono tabular-nums">{d.amount}</TableCell>
                         <TableCell>
-                          <Badge variant={d.status === "credited" ? "success" : "warning"}>{d.status}</Badge>
+                          <Badge variant={d.status === "credited" ? "success" : "warning"}>{d.status === "credited" ? "Turned into credits" : d.status === "unclaimed" ? "Waiting" : d.status === "rejected" ? "Turned away" : d.status}</Badge>
                           {d.reason ? <span className="ml-2 text-xs text-muted-foreground">{d.reason.replace(/_/g, " ")}</span> : null}
                         </TableCell>
                         <TableCell className="text-right font-mono tabular-nums">{d.credits ?? "—"}</TableCell>

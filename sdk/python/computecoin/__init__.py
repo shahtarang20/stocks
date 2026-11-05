@@ -12,6 +12,7 @@ from .ccverify import verify_receipt
 from .crypto import (
     GuardianPinError,
     UnpinnedGuardianWarning,
+    build_private_chat_input,
     check_guardian_pin,
     guardian_manifest_fingerprint,
     decrypt_job_output,
@@ -21,6 +22,8 @@ from .crypto import (
     seal_shares_for_guardians,
     split_data_key,
 )
+from .private_kit import build_private_kit_input, prepare_private_fanout_parts
+from .private_stream import PrivateStreamError, PrivateStreamReader, iter_private_text, unpad_stream_plaintext
 from .errors import (
     ApiError,
     AuthenticationError,
@@ -63,6 +66,13 @@ from .models import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "build_private_kit_input",
+    "build_private_chat_input",
+    "prepare_private_fanout_parts",
+    "PrivateStreamError",
+    "PrivateStreamReader",
+    "iter_private_text",
+    "unpad_stream_plaintext",
     "ComputeCoinClient",
     "ComputeCoinError",
     "ApiError",

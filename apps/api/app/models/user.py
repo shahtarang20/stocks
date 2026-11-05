@@ -30,6 +30,9 @@ class User(Base, TimestampMixin):
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # U16: Acceptable Use Policy acceptance record (DRAFT text; legal sign-off pending).
+    aup_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    aup_accepted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, name="user_status"), default=UserStatus.active, nullable=False
     )

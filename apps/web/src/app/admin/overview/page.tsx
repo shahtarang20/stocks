@@ -17,6 +17,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -28,6 +29,7 @@ import {
 } from "@/components/ui/table";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { jobTypeLabel } from "@/lib/jobs";
 import { formatRelativeTime } from "@/lib/utils";
 
 function statusIcon(status: string) {
@@ -67,7 +69,7 @@ export default function AdminOverviewPage() {
 
   const liveStats = [
     { label: "Total users", value: stats ? stats.total_users.toLocaleString() : "—", icon: Users, note: "live" },
-    { label: "Active providers", value: stats ? stats.active_providers.toLocaleString() : "—", icon: Server, note: "online" },
+    { label: "Hosts online", value: stats ? stats.active_providers.toLocaleString() : "—", icon: Server, note: "online" },
     { label: "Total jobs", value: stats ? stats.total_jobs.toLocaleString() : "—", icon: Activity, note: "live" },
     { label: "Success rate", value: stats ? `${stats.success_rate}%` : "—", icon: CheckCircle2, note: "completion" },
   ];
@@ -76,7 +78,7 @@ export default function AdminOverviewPage() {
     <>
       <ConsolePageHeader
         title="Admin overview"
-        description="Platform-wide operational telemetry fetched live from GET /v1/admin/stats and GET /v1/admin/jobs."
+        description="A quick look at how many people, hosts and jobs are on ComputeCoin. Check that jobs are finishing, then open a page below if something looks wrong."
         action={
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
             <RefreshCw className={isRefreshing ? "animate-spin" : undefined} />
@@ -87,7 +89,7 @@ export default function AdminOverviewPage() {
 
       <div className="space-y-6">
         {/* Stats */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {liveStats.map((stat) => (
             <Card key={stat.label}>
               <CardContent className="flex items-start justify-between p-5">
@@ -110,11 +112,11 @@ export default function AdminOverviewPage() {
         <div className="grid gap-3 sm:grid-cols-3">
           {[
             { href: "/admin/users", label: "Manage users" },
-            { href: "/admin/providers", label: "Manage providers" },
-            { href: "/admin/jobs", label: "All jobs" },
-            { href: "/admin/disputes", label: "Open disputes" },
-            { href: "/admin/audit-logs", label: "Audit logs" },
-            { href: "/admin/configuration", label: "Configuration" },
+            { href: "/admin/providers", label: "Manage hosts" },
+            { href: "/admin/jobs", label: "See all jobs" },
+            { href: "/admin/disputes", label: "Review disputes" },
+            { href: "/admin/audit-logs", label: "Read the audit log" },
+            { href: "/admin/configuration", label: "See settings" },
           ].map((l) => (
             <Link
               key={l.href}
@@ -129,7 +131,7 @@ export default function AdminOverviewPage() {
         {/* Recent jobs */}
         <Card>
           <CardHeader>
-            <CardTitle>Recent jobs (live)</CardTitle>
+            <CardTitle>Latest jobs</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {jobsQuery.isLoading ? (
@@ -142,21 +144,26 @@ export default function AdminOverviewPage() {
               <div className="flex flex-col items-center gap-3 p-10 text-center">
                 <AlertCircle className="h-8 w-8 text-danger" />
                 <p className="text-sm text-muted-foreground">
-                  {jobsQuery.error instanceof ApiError ? jobsQuery.error.message : "Failed to load jobs"}
+                  {jobsQuery.error instanceof ApiError ? jobsQuery.error.message : "We could not load the jobs. Select Refresh to try again."}
                 </p>
               </div>
             ) : recentJobs.length === 0 ? (
-              <p className="p-6 text-sm text-muted-foreground">No jobs found across the network.</p>
+              <p className="p-6 text-sm text-muted-foreground">No jobs yet. Jobs show up here as soon as a customer sends one.</p>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Job ID</TableHead>
-                    <TableHead>Workload</TableHead>
+                    <TableHead>Job</TableHead>
+                    <TableHead>Type of work</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Mode</TableHead>
+                    <TableHead>
+                      How it ran
+                      <HelpTip term="practice mode">
+                        Practice mode means the job was only acted out. The result is a placeholder, not real work.
+                      </HelpTip>
+                    </TableHead>
                     <TableHead>Created</TableHead>
-                    <TableHead>Cost</TableHead>
+                    <TableHead>Cost (credits)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -172,7 +179,7 @@ export default function AdminOverviewPage() {
                             {id.slice(0, 8)}…
                           </Link>
                         </TableCell>
-                        <TableCell className="text-sm">{job.workload_type}</TableCell>
+                        <TableCell className="text-sm">{jobTypeLabel(job.workload_type)}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1.5">
                             {statusIcon(job.status)}
@@ -181,7 +188,7 @@ export default function AdminOverviewPage() {
                         </TableCell>
                         <TableCell>
                           <Badge variant={job.execution_mode === "simulated" ? "warning" : "neutral"}>
-                            {job.execution_mode ?? "simulated"}
+                            {(job.execution_mode ?? "simulated") === "simulated" ? "Practice mode" : job.execution_mode}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">

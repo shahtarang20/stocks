@@ -347,9 +347,134 @@ Each tier accepts one evidence type: Sealed / Sealed Pro only `tpm2` (6d); Confi
   chained to a pinned Intel root; TCB level and QE must be UpToDate). SEV-SNP: 6d-style report
   checks (VCEK -> ASK -> pinned ARK).
 - Measurements for the trusted-image match: `cpu.<mrtd|rtmr0..3|measurement>` and `gpu.<index>`.
-- Not implemented (required before production): PCK / device certificate revocation (CRL, OCSP),
-  the TDX-module identity check, NVIDIA RIM parsing (golden GPU values come from the trusted image),
-  SPDM 1.2+ signing contexts. Built from published formats and tested on synthetic evidence only.
+- **Collateral (P2, trusted by signature to a pinned root, never by origin).**
+  - CPU TDX `collateral.crls`, SEV-SNP `crls`, GPU `crls` / `ocsp_responses`: PEM, hex DER or base64
+    DER. Every link of every certificate path needs a CRL signed by its issuer with
+    `thisUpdate <= now < nextUpdate` (SEV-SNP: the VCEK link; upper links when present), or for the
+    GPU a current OCSP response signed by the issuer or its delegated responder. A listed serial
+    gives `<flavor>_certificate_revoked`; no usable statement gives `<flavor>_revocation_unknown`.
+    Forged, expired, delta or wrong-issuer CRLs are ignored, never trusted.
+  - TDX module identity: quote MRSIGNERSEAM / SEAMATTRIBUTES against the Intel-signed TCB Info
+    (`tdxModule` for major 0, else `tdxModuleIdentities[TDX_<major>]`, masked attributes), ISVSVN
+    (TEE_TCB_SVN[0]) level must be `UpToDate` (`tdx_bad_tdx_module`, `tdx_module_identity_unknown`).
+  - GPU `rims`: NVIDIA signed SWID/XML RIMs (driver, VBIOS). XML signature verified, its certificate
+    chain pinned and not revoked; every `Resource` index must equal one of its alternatives in the
+    signed SPDM blocks (`nvidia_rim_missing`, `nvidia_invalid_rim_signature`, `nvidia_measurement_mismatch`).
+- Not implemented / unverified: SPDM 1.2+ signing contexts. The vendor CRL, OCSP, TCB Info module
+  identity and RIM formats are coded from documentation and memory and have not been checked against
+  recorded real collateral (R7, R8); synthetic evidence only.
+---
+
+## 6h. Vault machine id (`machine_id_to_bytes32`)
+
+`ComputeStakeVault` keys stake by a `bytes32` machine id. The platform and the provider derive it identically:
+
+    machineId = keccak256( UTF8("computecoin-machine:" || machine_uuid_canonical_lowercase_hyphenated) )
+
+The `computecoin-machine:` domain prefix keeps machine ids from colliding with job ids, which hash the bare
+UUID string. The provider registers this value with `registerMachine(machineId, provider)`; the stake sync
+(A1) reads `stakes(machineId)` at `latest - STAKE_SYNC_CONFIRMATIONS`. Reference: `machine_id_to_bytes32` in
+`apps/api/app/services/settlement.py`. Test vector: left to the first run of the test suite (not computed here).
+
+## 6g. Job-level receipt for private fan-out (`ccpp-fanout-v1`) and sealed stream chunks
+
+Added for U18 (docs/architecture/U18-privacy-modes-design.md). Vectors: section `fanout_v1` of `ccpp-v1-vectors.json`,
+produced by `scripts/gen_fanout_vectors.py` (UNVERIFIED until that script has been run and the implementations pass them).
+
+### Part receipt hash
+
+For each part job, take the part's privacy receipt and build the object with exactly the fields `job_id` (string),
+`isolation_tier`, `image_hash`, `attestation_verdict`, `wipe_receipt` (object or `null`), `merkle_root`,
+`inclusion_proofs`. `receipt_hash = hex(SHA-256(CanonicalJSON(object)))`.
+
+### Job-level receipt
+
+```json
+{
+  "v": "ccpp-fanout-v1",
+  "parent_job_id": "<uuid>",
+  "isolation_tier": "sealed | sealed_pro | confidential",
+  "part_count": 3,
+  "part_receipts": [ {"index": 0, "job_id": "<uuid>", "receipt_hash": "<hex>"}, ... ],
+  "merkle_root": "<hex>",
+  "verifier_public_key": "<hex Ed25519 public key>",
+  "signature": "<hex Ed25519 signature>"
+}
+```
+
+1. `part_receipts` is ordered by `index`, which must be exactly `0..part_count-1`.
+2. Leaf `i` = `leaf_hash("FANOUT_PART_RECEIPT", {"index": i, "job_id": <part job id>, "receipt_hash": <hash>})`, using the
+   transparency-log leaf rule of section 6a/log (`SHA-256(0x00 || event_type || ":" || canonical_json(payload))`).
+3. `merkle_root` = RFC 6962 Merkle tree hash over the ordered leaves.
+4. `signature` = Ed25519 over CanonicalJSON of `v, parent_job_id, isolation_tier, part_count, part_receipts, merkle_root,
+   verifier_public_key` (the platform verifier key, the same key that signs attestation verdicts).
+
+Verification (offline): check `v`; check indices; recompute every leaf and the root; check the signature against a
+pinned verifier key; check part job ids are distinct. If the part receipts are available also check, for each part,
+that its `receipt_hash` matches, its `job_id` and `isolation_tier` match, and it passes the single-job receipt check.
+A group missing any part receipt has no job-level receipt. The receipt proves the platform committed to this ordered
+list of part receipts; it does not prove anything about the hosts beyond what each part receipt proves.
+
+When a job-level receipt is issued the platform appends one transparency-log entry, event type `FANOUT_RECEIPT`, payload
+`{parent_job_id, isolation_tier, part_count, merkle_root, receipt_sha256, verifier_public_key}` where `receipt_sha256` =
+`hex(SHA-256(CanonicalJSON(job receipt including signature)))`. One entry per parent job (a repeated merge finds it).
+
+### Merge output
+
+`merge = "ordered_ciphertext"`: per part `{index, job_id, encrypted_output, output_commitment, receipt_hash}`. The
+`encrypted_output` opens with that part's result private key and AAD `ccpp-v1|job-output|<part job_id>`.
+
+### Sealed stream chunks (private chat streaming)
+
+Each chunk is a section 3.1 sealed envelope to the customer's result public key, plaintext = the UTF-8 text piece, AAD
+`ccpp-v1|stream|<job_id>|<seq>|<final>` where `<seq>` is the decimal chunk number from 0 and `<final>` is `1` for the last
+chunk and `0` otherwise. The receiver opens chunk `seq` only with its own expected `seq`, and treats a stream with no
+`final = 1` chunk as truncated.
+
+Padding (`PRIVACY_STREAM_PAD_BYTES`, default 256, `0` = off): with padding on, the plaintext is NOT the raw text but
+`u32 big-endian length || UTF-8 text || zero bytes`, extended to a multiple of the block size, so chunk sizes do not leak
+token lengths. The receiver reads the length and takes that many bytes. The relay can only check that the ciphertext
+length minus the 16-byte tag is a non-zero multiple of the block size. Customer and platform must use the same value.
+
+Reader rules (the Python SDK, TypeScript SDK and web client implement them): open chunk `seq` with the customer's result
+private key and the AAD above; with padding on, read the u32 big-endian length `n` from the first 4 bytes, return exactly
+the next `n` bytes, and REJECT the chunk if `n` exceeds the remaining payload or any byte after `4 + n` is non-zero. Decode
+the text as strict UTF-8. Also reject a `job_id` that differs from the first chunk's, a `seq` that is not the next number
+and any chunk after `final = 1`. The `job_id` is taken from the first event (`chat.completion.chunk.sealed`, fields `job_id`,
+`seq`, `final`, `sealed`) because the customer cannot know it before submitting. A stream that ends without a `final = 1`
+chunk is truncated and is an error, not shorter text. Test vector: `fanout_v1.expected.stream_chunk` (padded plaintext hex,
+AAD, envelope) once `scripts/gen_fanout_vectors.py --write` has been run.
+
+### Private Kit input (decrypted input of a private Kit part)
+
+The plaintext the customer encrypts into the part's `encrypted_input` (section 3.2 data envelope, AAD `ccpp-v1|job-input`;
+the Data Key is split and sealed to the guardians as in section 5) is one JSON object:
+
+```json
+{
+  "inputs": { "<name>": { "b64": "<standard base64 of the file bytes>" } | { "text": "<UTF-8 text>" } },
+  "params": { "<kit param>": "<value>" }
+}
+```
+
+* `<name>` matches `[A-Za-z0-9._-]{1,128}`; the agent mounts it read-only at `/in/<name>` in the Kit container (no network).
+* Exactly one of `b64` or `text` per input. `params` is the Kit's parameter object (it reaches the Kit as `/out/input.json`).
+* A dict with neither `inputs` nor `params` is taken as `params` by the agent; clients should always send the full shape.
+* Total decrypted size is capped by the agent (`MAX_PRIVATE_INPUT_BYTES`, 256 MiB); the envelope is one-shot.
+
+Private fan-out submit (`POST /v1/jobs/v2/fanout`, `isolation_tier` one of `sealed | sealed_pro | confidential`): the body
+carries `private_parts`, exactly one entry per part, each exactly `{"encrypted_input", "dk_shares", "result_public_key"}`.
+Every part needs its OWN Data Key, share set and result keypair (the API refuses a reused key set, `key_set_reused_across_parts`,
+and a wrong count, `private_parts_count_mismatch`). Each part's sealed outputs open with that part's result private key.
+Helpers: Python `build_private_kit_input` / `ComputeCoinClient.submit_private_fanout`, TypeScript `buildPrivateKitInput` /
+`client.submitPrivateFanout`.
+
+### Sealed Kit output files (private Kit job)
+
+Each declared output is sealed (section 3.1) to the part's result public key with AAD
+`ccpp-v1|job-output-file|<job_id>|<output name>`; only that ciphertext (the envelope as canonical JSON) is uploaded through
+the data plane. The job's `encrypted_output` (AAD `ccpp-v1|job-output|<job_id>`) lists per output `{name, kind, file_id,
+ciphertext_sha256, ciphertext_size, plaintext_sha256, plaintext_size, aad}`.
 
 ---
 

@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "slug": "ai-image",
+  "version": "1.0.0",
+  "name": "AI image generation (FLUX.1 schnell)",
+  "description": "Text-to-image with a fixed seed per prompt (seed + prompt index) so a sampled re-run can be compared. Model: FLUX.1-schnell (Apache-2.0); see kits/ai-image/README.md.",
+  "category": "generative",
+  "image": "ghcr.io/computecoin/kit-ai-image@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "prompts"
+    ],
+    "properties": {
+      "prompts": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 64,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+        "default": 0
+      },
+      "width": {
+        "type": "integer",
+        "minimum": 256,
+        "maximum": 1536,
+        "multipleOf": 16,
+        "default": 1024
+      },
+      "height": {
+        "type": "integer",
+        "minimum": 256,
+        "maximum": 1536,
+        "multipleOf": 16,
+        "default": 1024
+      },
+      "steps": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 8,
+        "default": 4
+      }
+    }
+  },
+  "inputs": [],
+  "outputs": [
+    {
+      "name": "images",
+      "path": "/out/images"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 24,
+    "min_compute_capability": "8.0",
+    "cpu": 4,
+    "ram_gb": 32,
+    "disk_gb": 60
+  },
+  "billing_hints": {
+    "unit": "image",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "perceptual",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {},
+    "owner_decision": "thresholds and sample fraction are conservative defaults pending honest cross-GPU benchmark data (U5.3); empty thresholds use the verify_plugins defaults"
+  }
+}

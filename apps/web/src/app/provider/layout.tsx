@@ -15,20 +15,20 @@ import { ProviderGate } from "@/components/provider/provider-gate";
 
 const SECTIONS: NavSection[] = [
   {
-    title: "Provider",
+    title: "Hosting",
     items: [
       { href: "/provider/dashboard", label: "Overview", icon: LayoutDashboard },
-      { href: "/provider/onboarding", label: "Onboarding", icon: Rocket },
-      { href: "/provider/hardware", label: "Hardware", icon: Cpu },
+      { href: "/provider/onboarding", label: "Add my computer", icon: Rocket },
+      { href: "/provider/hardware", label: "My computers", icon: Cpu },
       { href: "/provider/earnings", label: "Earnings", icon: Wallet },
       { href: "/provider/payouts", label: "Payouts", icon: Banknote },
-      { href: "/dashboard/wallet", label: "Wallet", icon: WalletCards },
+      { href: "/dashboard/wallet", label: "Crypto wallet", icon: WalletCards },
     ],
   },
   {
     title: "Account",
     items: [
-      { href: "/dashboard", label: "Back to console", icon: ArrowLeft },
+      { href: "/dashboard", label: "Back to my console", icon: ArrowLeft },
     ],
   },
 ];

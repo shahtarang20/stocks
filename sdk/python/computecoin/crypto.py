@@ -24,7 +24,7 @@ import hashlib
 import json
 import secrets
 import warnings
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from .privacy_crypto import (
     INPUT_AAD,
@@ -90,10 +90,37 @@ def generate_customer_keypair() -> tuple[str, str]:
     return generate_x25519_keypair()
 
 
-def encrypt_job_input(input_dict: dict[str, Any]) -> tuple[dict[str, str], bytes]:
-    """Encrypt the input with a fresh Data Key. Returns (encrypted_input, data_key)."""
+def encrypt_job_input(input_dict: dict[str, Any], *, canonical: bool = False) -> tuple[dict[str, str], bytes]:
+    """Encrypt the input with a fresh Data Key. Returns (encrypted_input, data_key).
+
+    ``canonical=True`` encrypts the compact sorted-key JSON (the same bytes the TypeScript SDK produces)."""
     data_key = secrets.token_bytes(32)
-    return encrypt_data(data_key, json.dumps(input_dict, sort_keys=True).encode("utf-8"), INPUT_AAD), data_key
+    raw = canonical_json(input_dict) if canonical else json.dumps(input_dict, sort_keys=True).encode("utf-8")
+    return encrypt_data(data_key, raw, INPUT_AAD), data_key
+
+
+def build_private_chat_input(
+    messages: Sequence[dict[str, Any]], *, max_tokens: Optional[int] = None, temperature: Optional[float] = None
+) -> dict[str, Any]:
+    """The decrypted input contract of a private chat job (text-generation):
+    ``{"prompt": str, "messages": [{"role","content"}], "max_tokens"?: int, "temperature"?: number}``.
+
+    ``prompt`` is the plain ``"role: content"`` rendering (fallback for hosts that ignore ``messages``); the workload
+    prefers ``messages`` and applies the model's chat template. Integral floats are emitted as ints so the canonical
+    JSON is identical to the TypeScript SDK's."""
+    if not messages:
+        raise ValueError("a chat needs at least one message")
+    msgs = [{"role": str(m["role"]), "content": str(m["content"])} for m in messages]
+    out: dict[str, Any] = {"prompt": "\n".join(f"{m['role']}: {m['content']}" for m in msgs), "messages": msgs}
+    if max_tokens is not None:
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        out["max_tokens"] = max_tokens
+    if temperature is not None:
+        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
+            raise ValueError("temperature must be a number between 0 and 2")
+        out["temperature"] = int(temperature) if float(temperature).is_integer() else float(temperature)
+    return out
 
 
 def split_data_key(data_key: bytes, n: int = 3, k: int = 2) -> list[dict[str, Any]]:
@@ -117,9 +144,10 @@ def prepare_private_job(
     threshold: int,
     result_public_key: str,
     data_policy: dict[str, Any] | None = None,
+    canonical: bool = False,
 ) -> dict[str, Any]:
     """The privacy fields of a ``POST /v1/jobs`` body. The plaintext input is not included."""
-    encrypted_input, data_key = encrypt_job_input(input_dict)
+    encrypted_input, data_key = encrypt_job_input(input_dict, canonical=canonical)
     return {
         "input": {},
         "encrypted_input": encrypted_input,

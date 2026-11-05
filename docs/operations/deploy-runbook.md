@@ -93,7 +93,8 @@ Railway runs both the HTTP REST API and the dedicated background worker process:
 | `REDIS_URL` | Upstash Redis TLS URL | `rediss://default:...@...upstash.io:6379` |
 | `AUTH_SECRET` | 64+ char random hex string | Generate: `openssl rand -hex 32` |
 | `SESSION_SECRET` | 64+ char random hex string | Generate: `openssl rand -hex 32` |
-| `FRONTEND_URL` | Public production frontend URL | `https://computecoin.ai` |
+| `FRONTEND_URL` | Public production frontend URL; a comma-separated list is the CORS allow-list (the first entry is the link base in emails) | `https://computecoin.ai` |
+| `CORS_ALLOW_ORIGIN_REGEX` | Optional regex of EXTRA credentialed origins (e.g. your own Vercel preview domain). Empty by default: there is no blanket `*.vercel.app` allowance any more, so a preview deployment is refused unless it is listed in `FRONTEND_URL` or matches this regex | `^https://computecoin-[a-z0-9-]+-myteam\.vercel\.app$` |
 | `COOKIE_SECURE` | Enforce Secure cookie attribute | `true` |
 | `COOKIE_SAMESITE` | Cookie SameSite attribute | `lax` |
 | `EMAIL_PROVIDER` | Transactional email provider | `resend` |

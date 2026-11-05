@@ -8,6 +8,8 @@
  *   GET  {API}/projects       (Authorization: Bearer ...)  -> Project[]
  */
 
+import { parseApiDate } from "./format";
+
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   "http://localhost:8000";
@@ -22,6 +24,9 @@ export interface TokenPair {
 export interface AuthCredentials {
   email: string;
   password: string;
+  /** U16: explicit Acceptable Use Policy acceptance (sign-up only). */
+  accept_aup?: boolean;
+  aup_version?: string;
 }
 
 export interface RegisteredUser {
@@ -102,7 +107,7 @@ export interface MachineHardware {
 }
 
 export type MachineStatus = "online" | "offline" | "maintenance";
-export type MachineAvailability = "online" | "offline" | "maintenance";
+export type MachineAvailability = "online" | "offline" | "maintenance" | "throttled";
 
 export interface Machine {
   machine_id: string;
@@ -968,6 +973,7 @@ export function apiAbsoluteUrl(url: string): string {
 let _memoryAccessToken: string | null = null;
 let _memoryRefreshToken: string | null = null;
 let _memoryCsrfToken: string | null = null;
+const _retiredAccessTokens = new Set<string>();
 
 export function setStoredTokens(
   accessToken: string | null,
@@ -978,6 +984,12 @@ export function setStoredTokens(
   // backend's httpOnly cookies (sent via `credentials: "include"`), so nothing
   // sensitive is ever written to JS-accessible storage (localStorage) where an
   // XSS could read it. The CSRF token is read from its (non-httpOnly) cookie.
+  if (_memoryAccessToken && _memoryAccessToken !== accessToken) {
+    // Callers (React state) keep passing the access token they captured at render; remember the
+    // ones we replaced so request() can swap in the live one instead of sending a dead JWT.
+    _retiredAccessTokens.add(_memoryAccessToken);
+    if (_retiredAccessTokens.size > 20) _retiredAccessTokens.delete(_retiredAccessTokens.values().next().value as string);
+  }
   _memoryAccessToken = accessToken;
   if (refreshToken !== undefined) _memoryRefreshToken = refreshToken;
   if (csrfToken !== undefined) _memoryCsrfToken = csrfToken;
@@ -1010,10 +1022,71 @@ function getCsrfToken(): string | null {
 interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   token?: string | null;
+  /** Internal: set on the single replay after a silent refresh. */
+  retriedAfterRefresh?: boolean;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { body, token, headers, method = "GET", ...rest } = options;
+/** Fired when the session cannot be renewed, so the auth provider can sign the user out. */
+export const SESSION_EXPIRED_EVENT = "cc:session-expired";
+
+let _sessionRefresh: Promise<boolean> | null = null;
+
+/** Renew the session once for all concurrent callers. true = new tokens are in memory. */
+function refreshSessionOnce(): Promise<boolean> {
+  if (!_sessionRefresh) {
+    _sessionRefresh = api
+      .refresh()
+      .then(() => true)
+      .catch(() => false)
+      .finally(() => {
+        _sessionRefresh = null;
+      });
+  }
+  return _sessionRefresh;
+}
+
+/** FastAPI 422 bodies carry detail: [{loc, msg}]. Turn them into one readable line (e.g. "email: value is not a valid email address"). */
+function validationMessage(payload: unknown): string | null {
+  const detail = payload && typeof payload === "object" ? (payload as { detail?: unknown }).detail : null;
+  if (!Array.isArray(detail) || detail.length === 0) return null;
+  const parts = detail
+    .map((d) => {
+      if (!d || typeof d !== "object") return null;
+      const { loc, msg } = d as { loc?: unknown; msg?: unknown };
+      if (typeof msg !== "string") return null;
+      const field = Array.isArray(loc) ? loc.filter((x) => x !== "body" && x !== "query").join(".") : "";
+      return field ? `${field}: ${msg}` : msg;
+    })
+    .filter((x): x is string => Boolean(x));
+  return parts.length ? parts.slice(0, 3).join("; ") : null;
+}
+
+// Calls that carry no session cookie yet (or deliberately none): never worth a CSRF lookup.
+const CSRF_FREE_PATHS =
+  /^\/auth\/(login|register|verify-email|resend-verification|password-reset|sso|forgot-password|reset-password)/;
+
+let _csrfRecovery: Promise<boolean> | null = null;
+
+/** GET /auth/csrf -> memory. One request at a time; a 401 (no session) simply leaves it unset. */
+function recoverCsrfToken(): Promise<boolean> {
+  if (!_csrfRecovery) {
+    _csrfRecovery = fetch(`${API_BASE_URL}/auth/csrf`, { credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const body = (await res.json().catch(() => null)) as { csrf_token?: string } | null;
+        if (body?.csrf_token) _memoryCsrfToken = body.csrf_token;
+        return Boolean(body?.csrf_token);
+      })
+      .catch(() => false)
+      .finally(() => {
+        _csrfRecovery = null;
+      });
+  }
+  return _csrfRecovery;
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { body, token, headers, method = "GET", retriedAfterRefresh, ...rest } = options;
 
   const finalHeaders: Record<string, string> = {
     "Content-Type": "application/json",
@@ -1021,8 +1094,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   };
 
   // 1. Bearer header resolution: explicit token (if not sentinel) or stored token fallback
-  const effectiveToken =
-    token && token !== "cookie-session" ? token : getStoredAccessToken();
+  let effectiveToken = token && token !== "cookie-session" ? token : getStoredAccessToken();
+  const liveToken = getStoredAccessToken();
+  if (effectiveToken && liveToken && effectiveToken !== liveToken && _retiredAccessTokens.has(effectiveToken)) {
+    effectiveToken = liveToken;
+  }
   if (effectiveToken) {
     finalHeaders.Authorization = `Bearer ${effectiveToken}`;
   }
@@ -1030,6 +1106,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   // 2. Double-submit CSRF protection on mutating requests
   const upperMethod = method.toUpperCase();
   if (upperMethod !== "GET" && upperMethod !== "HEAD" && !finalHeaders["X-CSRF-Token"]) {
+    // Cookie session after a reload with web and API on different origins: the csrf cookie
+    // is not readable here and the in-memory copy is gone, so ask the API for it first.
+    if ((!effectiveToken || path === "/auth/refresh") && !getCsrfToken() && !getStoredCsrfToken() && !CSRF_FREE_PATHS.test(path)) {
+      const recovered = await recoverCsrfToken();
+      // No session cookie at all: the cookie refresh would only 401 too, so answer that locally.
+      if (!recovered && path === "/auth/refresh") {
+        throw new ApiError("Not authenticated", 401);
+      }
+    }
     const csrf = getCsrfToken() || getStoredCsrfToken();
     if (csrf) {
       finalHeaders["X-CSRF-Token"] = csrf;
@@ -1048,7 +1133,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   } catch (err) {
     // Network-level failure (backend down, CORS, offline).
     throw new ApiError(
-      "Unable to reach the ComputeCoin API. Is the backend running?",
+      "We could not reach ComputeCoin. Check your internet connection and try again. If it keeps happening, the service may be down for a short time.",
       0,
       err,
     );
@@ -1060,6 +1145,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     .includes("application/json");
   const payload = isJson ? await res.json().catch(() => null) : await res.text();
 
+  if (res.status === 401 && !retriedAfterRefresh && !path.startsWith("/auth/") && typeof window !== "undefined") {
+    // The access token (15 min) ran out while the page stayed open: renew once and replay.
+    if (await refreshSessionOnce()) {
+      return request<T>(path, { ...options, token: getStoredAccessToken() ?? "cookie-session", retriedAfterRefresh: true });
+    }
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+
   if (!res.ok) {
     const message =
       (isJson &&
@@ -1068,6 +1161,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         "detail" in payload &&
         typeof (payload as { detail: unknown }).detail === "string" &&
         (payload as { detail: string }).detail) ||
+      validationMessage(payload) ||
       `Request failed with status ${res.status}`;
     throw new ApiError(message, res.status, payload);
   }
@@ -1277,9 +1371,15 @@ export const api = {
   },
 
   async logout(): Promise<{ message: string }> {
+    // Read the credentials BEFORE they are cleared: with web and API on different
+    // origins the csrf_token cookie is not readable here, so the in-memory
+    // refresh token (sent in the body, which needs no CSRF header) is the only
+    // way to revoke the server-side session.
+    const rToken = getStoredRefreshToken();
     try {
       return await request<{ message: string }>("/auth/logout", {
         method: "POST",
+        body: rToken ? { refresh_token: rToken } : undefined,
       });
     } finally {
       clearStoredTokens();
@@ -2064,7 +2164,7 @@ export const api = {
 };
 
 /** Currency label — credits are simulated, never real money. */
-export const CREDITS_LABEL = "USDC_CREDITS — simulated credits";
+export const CREDITS_LABEL = "Test credits (not real money)";
 
 /** Pull a machine-readable error code (e.g. "no_capacity") from an ApiError. */
 export function apiErrorCode(err: unknown): string | null {
@@ -2087,7 +2187,7 @@ export function enrollmentTokenStatus(
 ): EnrollmentTokenStatus {
   if (token.revoked_at) return "revoked";
   if (token.used_at) return "used";
-  if (token.expires_at && new Date(token.expires_at).getTime() < Date.now()) {
+  if (token.expires_at && parseApiDate(token.expires_at).getTime() < Date.now()) {
     return "expired";
   }
   return "active";

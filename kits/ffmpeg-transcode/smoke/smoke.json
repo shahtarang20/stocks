@@ -1,0 +1,20 @@
+{
+  "kit": "ffmpeg-transcode",
+  "schema": 1,
+  "purpose": "U5.1: encode a short clip on at least 3 GPU models (NVENC) and once on CPU",
+  "gpu_models_required": ["NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090", "NVIDIA A100 80GB"],
+  "gpu_models_note": "Minimum is 3 distinct models. NVENC is absent on some datacentre GPUs (for example A100/H100 have no NVENC); a model without NVENC must pass the CPU path and the smoke report records encoder used. Replace that model in the list if the owner wants NVENC on all three.",
+  "fixture": {"how": "ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=10 -f lavfi -i sine=frequency=440:duration=10 -c:v libx264 -pix_fmt yuv420p -c:a aac source.mp4", "input_name": "source", "sha256": "PENDING"},
+  "input": {"params": {"codec": "h264", "encoder": "auto", "crf": 23, "preset": "fast", "height": 480, "audio": "aac"}},
+  "limits": {"max_seconds": 300},
+  "checks": [
+    {"id": "exit_zero", "expect": "container exit code 0 and output.json ok=true"},
+    {"id": "probe", "expect": "ffprobe: one video stream h264, height 480, one audio stream, duration within 0.3 s of 10 s"},
+    {"id": "encoder_recorded", "expect": "output.json encoder is nvenc on NVENC-capable GPUs, cpu otherwise; nvenc requested but unavailable fails with encoder_unavailable"},
+    {"id": "psnr_ssim", "expect": "output vs a CPU re-encode of the same window passes the kit's psnr_ssim verification"},
+    {"id": "truncated_fails", "expect": "the same output cut to 5 s FAILS psnr_ssim verification (negative control)"},
+    {"id": "protocol_whitelist", "expect": "a source that is an HLS playlist referencing http:// or another local file is not followed"},
+    {"id": "no_network", "expect": "run with --network none succeeds"}
+  ],
+  "record": ["gpu model", "driver", "encoder used", "realtime speed factor", "output bytes", "sha256"]
+}

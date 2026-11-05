@@ -15,10 +15,12 @@ import Link from "next/link";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { EditMachineDialog } from "@/components/provider/edit-machine-dialog";
 import { MachineStatusBadge } from "@/components/provider/machine-status-badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
 import {
   Dialog,
   DialogContent,
@@ -43,7 +45,8 @@ import {
 } from "@/components/ui/table";
 import { api, ApiError, type Machine } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { formatMbAsGb, formatRelativeTime, formatUsd } from "@/lib/utils";
+import { formatMbAsGb, formatUsd } from "@/lib/utils";
+import { capitalize } from "@/lib/format";
 
 function hardwareSummary(m: Machine): string {
   const hw = m.hardware;
@@ -52,7 +55,7 @@ function hardwareSummary(m: Machine): string {
     const count = hw.gpu_count > 1 ? `${hw.gpu_count}× ` : "";
     parts.push(`${count}${hw.gpu_model}`);
   } else {
-    parts.push("CPU-only");
+    parts.push("No graphics card (CPU only)");
   }
   return parts.join(" ");
 }
@@ -61,6 +64,7 @@ export default function ProviderHardwarePage() {
   const { accessToken } = useAuth();
   const token = accessToken as string;
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [editTarget, setEditTarget] = useState<Machine | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -75,6 +79,7 @@ export default function ProviderHardwarePage() {
   const deregisterMut = useMutation({
     mutationFn: (id: string) => api.deregisterMachine(token, id),
     onSuccess: () => {
+      toast.success("Computer removed.");
       setDeregisterTarget(null);
       queryClient.invalidateQueries({ queryKey: ["provider", "machines"] });
     },
@@ -85,10 +90,10 @@ export default function ProviderHardwarePage() {
   return (
     <>
       <ConsolePageHeader
-        title="Hardware"
-        description="Machines you have enrolled, fetched live from GET /provider/machines. Capability is self-reported by the agent (Detected)."
+        title="My computers"
+        description="The computers you have added. Check that each one is online, set its price, or remove it. What a computer says it has comes from the agent on that computer. ComputeCoin has not checked it yet."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               onClick={() => machinesQuery.refetch()}
@@ -100,72 +105,51 @@ export default function ProviderHardwarePage() {
               Refresh
             </Button>
             <Button asChild>
-              <Link href="/provider/onboarding">Add machine</Link>
+              <Link href="/provider/onboarding">Add my computer</Link>
             </Button>
           </div>
         }
       />
 
       {machinesQuery.isLoading ? (
-        <Card>
-          <CardContent className="space-y-3 p-6">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <Skeleton className="h-10 w-10 rounded-md" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-1/2" />
-                </div>
-                <Skeleton className="h-6 w-16 rounded-full" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TableSkeleton rows={3} label="Loading your computers" />
       ) : machinesQuery.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load machines</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {machinesQuery.error instanceof ApiError
-                ? machinesQuery.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => machinesQuery.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your computers"
+          message={machinesQuery.error instanceof ApiError ? machinesQuery.error.message : undefined}
+          onRetry={() => machinesQuery.refetch()}
+          retrying={machinesQuery.isFetching}
+        />
       ) : machines.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-              <Cpu className="h-6 w-6" />
-            </span>
-            <h3 className="font-semibold">No machines yet</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Install the agent and enroll a machine to see it here.
-            </p>
+        <EmptyState
+          icon={Cpu}
+          title="You have not added a computer yet"
+          action={
             <Button asChild>
-              <Link href="/provider/onboarding">Install the agent</Link>
+              <Link href="/provider/onboarding">Start the setup guide</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          Follow the setup guide to install the agent and connect your computer. It will show up here.
+        </EmptyState>
       ) : (
         <Card>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Machine</TableHead>
-                <TableHead>Hardware</TableHead>
-                <TableHead>Capability</TableHead>
+                <TableHead>Computer</TableHead>
+                <TableHead className="hidden md:table-cell">Parts</TableHead>
+                <TableHead className="hidden xl:table-cell">
+                  What it reports
+                  <HelpTip term="What it reports">
+                    The agent on your computer lists its parts. ComputeCoin has not checked this list yet, so it is marked &quot;Self-reported&quot;.
+                  </HelpTip>
+                </TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Last heartbeat</TableHead>
-                <TableHead className="text-right">Price / hr</TableHead>
-                <TableHead className="text-right">Max jobs</TableHead>
-                <TableHead className="w-10" />
+                <TableHead className="hidden lg:table-cell">Last seen</TableHead>
+                <TableHead className="text-right">Price per hour</TableHead>
+                <TableHead className="hidden text-right lg:table-cell">Jobs at once</TableHead>
+                <TableHead className="w-10"><span className="sr-only">Actions</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -177,18 +161,16 @@ export default function ProviderHardwarePage() {
                       {m.region ?? "—"}
                       {m.agent_version ? ` · v${m.agent_version}` : ""}
                     </div>
+                    {/* Hardware column is hidden on narrow screens, so repeat the summary here. */}
+                    <div className="mt-0.5 text-xs md:hidden">{hardwareSummary(m)}</div>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="hidden md:table-cell">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-sm font-medium">{hardwareSummary(m)}</span>
                       {m.hardware.gpu_vendor ? (
                         <Badge
                           variant="neutral"
-                          className={
-                            m.hardware.gpu_vendor === "amd"
-                              ? "border-red-500/30 text-red-400 bg-red-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
-                              : "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
-                          }
+                          className="text-[10px] uppercase font-mono px-1.5 py-0"
                         >
                           {m.hardware.gpu_vendor}
                         </Badge>
@@ -204,33 +186,33 @@ export default function ProviderHardwarePage() {
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {m.hardware.gpu_model
-                        ? `${formatMbAsGb(m.hardware.vram_mb)} VRAM · `
+                        ? `${formatMbAsGb(m.hardware.vram_mb)} video memory · `
                         : ""}
                       {m.hardware.cpu_cores
-                        ? `${m.hardware.cpu_cores} vCPU · `
+                        ? `${m.hardware.cpu_cores} CPU cores · `
                         : ""}
-                      {formatMbAsGb(m.hardware.ram_mb)} RAM
+                      {formatMbAsGb(m.hardware.ram_mb)} memory
                     </div>
                   </TableCell>
-                  <TableCell>
-                    <Badge variant="neutral" title="Self-reported by the agent">
+                  <TableCell className="hidden xl:table-cell">
+                    <Badge variant="neutral" title="Reported by the agent on your computer. Not checked by ComputeCoin yet.">
                       {m.verification_status === "detected"
-                        ? "Detected"
-                        : m.verification_status}
+                        ? "Self-reported"
+                        : capitalize(m.verification_status)}
                     </Badge>
                   </TableCell>
                   <TableCell>
                     <MachineStatusBadge status={m.status} />
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {formatRelativeTime(m.last_heartbeat_at)}
+                  <TableCell className="hidden text-sm text-muted-foreground lg:table-cell">
+                    <RelativeTime iso={m.last_heartbeat_at} empty="never" />
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
                     {m.asking_price_per_hour
                       ? formatUsd(Number(m.asking_price_per_hour))
                       : "—"}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-sm">
+                  <TableCell className="hidden text-right font-mono text-sm lg:table-cell">
                     {m.max_concurrent_jobs}
                   </TableCell>
                   <TableCell className="text-right">
@@ -239,7 +221,7 @@ export default function ProviderHardwarePage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="Machine actions"
+                          aria-label={`Actions for ${m.hostname}`}
                         >
                           <MoreHorizontal />
                         </Button>
@@ -251,13 +233,16 @@ export default function ProviderHardwarePage() {
                             setEditOpen(true);
                           }}
                         >
-                          <Pencil className="h-4 w-4" /> Edit
+                          <Pencil className="h-4 w-4" /> Edit price and availability
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-danger focus:bg-danger/10"
-                          onSelect={() => setDeregisterTarget(m)}
+                          onSelect={() => {
+                            deregisterMut.reset();
+                            setDeregisterTarget(m);
+                          }}
                         >
-                          <Trash2 className="h-4 w-4" /> Deregister
+                          <Trash2 className="h-4 w-4" /> Remove computer
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -283,13 +268,13 @@ export default function ProviderHardwarePage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Deregister machine?</DialogTitle>
+            <DialogTitle>Remove this computer?</DialogTitle>
             <DialogDescription>
               {deregisterTarget?.hostname
                 ? `"${deregisterTarget.hostname}" `
                 : "This machine "}
-              will be removed from the network and its agent credential revoked.
-              You&apos;ll need to re-enroll with a new token to bring it back.
+              will be taken off ComputeCoin and its connection key will stop working.
+              To add it again, create a new setup token and connect it from the beginning.
             </DialogDescription>
           </DialogHeader>
           {deregisterMut.isError ? (
@@ -301,7 +286,7 @@ export default function ProviderHardwarePage() {
               <span>
                 {deregisterMut.error instanceof ApiError
                   ? deregisterMut.error.message
-                  : "Couldn't deregister the machine."}
+                  : "We could not remove the computer. Try again in a moment."}
               </span>
             </div>
           ) : null}
@@ -319,10 +304,10 @@ export default function ProviderHardwarePage() {
             >
               {deregisterMut.isPending ? (
                 <>
-                  <Loader2 className="animate-spin" /> Deregistering…
+                  <Loader2 className="animate-spin" /> Removing…
                 </>
               ) : (
-                "Deregister"
+                "Remove computer"
               )}
             </Button>
           </DialogFooter>

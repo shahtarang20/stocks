@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -27,11 +27,13 @@ import {
   XCircle,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { HelpTip } from "@/components/ui/help-tip";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LivePanel } from "@/components/jobs/live-panel";
 import {
   Dialog,
   DialogContent,
@@ -55,12 +57,16 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { billingErrorMessage } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
+import { capitalize, formatDateTime } from "@/lib/format";
+import { CopyButton, RelativeTime } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
+import { ExecutionModeBadge, JobStatusBadge } from "@/components/jobs/status-badge";
 import {
   isJobActive,
   isSimulated,
-  jobStatusLabel,
-  jobStatusVariant,
+  jobErrorHelp,
+  jobStatusHelp,
+  jobTypeLabel,
   logLineText,
   shortId,
 } from "@/lib/jobs";
@@ -70,6 +76,7 @@ import {
   verifyReceiptLocal,
   type ReceiptVerificationResult,
 } from "@/lib/ccpp";
+import { KitJobPanel } from "@/components/kits/kit-job-panel";
 import { getCustomerKey, importCustomerKey, UnbackedKeyError } from "@/lib/customer-keys";
 
 function formatBytes(n: number): string {
@@ -91,6 +98,7 @@ export default function JobDetailPage() {
   const params = useParams<{ jobId: string }>();
   const jobId = params.jobId;
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
@@ -129,6 +137,20 @@ export default function JobDetailPage() {
     refetchInterval: active ? 5000 : false,
   });
 
+  // Polling stops the moment the job turns terminal, which used to freeze the timeline, logs
+  // and artifacts one step short (e.g. no "verifying -> completed"). Fetch them once more on that edge.
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (active) {
+      wasActive.current = true;
+    } else if (job && wasActive.current) {
+      wasActive.current = false;
+      for (const key of ["job-events", "job-logs", "job-artifacts"]) {
+        queryClient.invalidateQueries({ queryKey: [key, jobId] });
+      }
+    }
+  }, [active, job, jobId, queryClient]);
+
   const logsQuery = useQuery<JobLogs>({
     queryKey: ["job-logs", jobId],
     enabled: Boolean(accessToken) && Boolean(jobId),
@@ -148,6 +170,7 @@ export default function JobDetailPage() {
     mutationFn: () => api.cancelJob(token, jobId),
     onSuccess: () => {
       setConfirmCancel(false);
+      toast.success("We are cancelling your job. It will stop at the next safe moment.");
       queryClient.invalidateQueries({ queryKey: ["job", jobId] });
       queryClient.invalidateQueries({ queryKey: ["job-events", jobId] });
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -166,6 +189,7 @@ export default function JobDetailPage() {
     mutationFn: (reason: string) =>
       api.openDispute(token, jobId, { reason }),
     onSuccess: () => {
+      toast.success("Dispute opened. Our team will review the charge and reply on the Disputes page.");
       setDisputeOpen(false);
       setDisputeReason("");
       queryClient.invalidateQueries({ queryKey: ["job", jobId] });
@@ -199,7 +223,7 @@ export default function JobDetailPage() {
         if (!key) {
           if (!cancelled) {
             setDecryptionError(
-              "No private key found in this browser. Import the private key used to submit this job."
+              "This browser does not have the private key for this job. Use \"Import key\" and paste the key backup you saved when you started the job."
             );
             setIsDecrypting(false);
           }
@@ -218,7 +242,7 @@ export default function JobDetailPage() {
       } catch (err: any) {
         if (!cancelled) {
           setDecryptionError(
-            "Decryption failed: this browser's private key cannot decrypt this output. Make sure you are using the same browser that submitted the job, or import your private key backup."
+            "This browser's key cannot unlock this result. Open this page in the same browser you used to start the job, or use \"Import key\" with your key backup."
           );
         }
       } finally {
@@ -236,7 +260,7 @@ export default function JobDetailPage() {
     setKeyImportError(null);
     try {
       if (!keyImportInput.trim()) {
-        setKeyImportError("Enter a private key hex string or backup JSON");
+        setKeyImportError("Paste your key backup (the whole file) or your 64-character key first.");
         return;
       }
       let imported;
@@ -265,13 +289,13 @@ export default function JobDetailPage() {
           setDecryptedOutput(output);
           setDecryptionError(null);
         } catch (err: any) {
-          setDecryptionError("Decryption failed with imported key: " + (err?.message || ""));
+          setDecryptionError("That key could not unlock this result. Check that you pasted the key for this job. " + (err?.message || ""));
         } finally {
           setIsDecrypting(false);
         }
       }
     } catch (err: any) {
-      setKeyImportError("Invalid private key format: " + (err?.message || String(err)));
+      setKeyImportError("We could not read that key. Paste the whole backup file, or the 64-character key. " + (err?.message || String(err)));
     }
   }
 
@@ -321,20 +345,27 @@ export default function JobDetailPage() {
               <AlertCircle className="h-5 w-5" />
             </span>
             <h3 className="font-semibold">
-              {notFound ? "Job not found" : "Couldn't load this job"}
+              {notFound ? "We could not find this job" : "We could not load this job"}
             </h3>
             <p className="max-w-md text-sm text-muted-foreground">
               {notFound
-                ? "This job doesn't exist, or it belongs to another account."
+                ? "This job does not exist, or it belongs to a different account. Check the link, or go back to your jobs list."
                 : jobQuery.error instanceof ApiError
                   ? jobQuery.error.message
-                  : "An unexpected error occurred."}
+                  : "Something went wrong on our side. Try again in a moment."}
             </p>
-            <Button asChild variant="outline">
-              <Link href="/dashboard/jobs">
-                <ArrowLeft /> Back to jobs
-              </Link>
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              {!notFound ? (
+                <Button variant="outline" onClick={() => jobQuery.refetch()} disabled={jobQuery.isFetching}>
+                  <RefreshCw className={jobQuery.isFetching ? "animate-spin" : undefined} /> Try again
+                </Button>
+              ) : null}
+              <Button asChild variant="outline">
+                <Link href="/dashboard/jobs">
+                  <ArrowLeft /> Back to jobs
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </>
@@ -352,9 +383,9 @@ export default function JobDetailPage() {
     <>
       <ConsolePageHeader
         title={`Job ${shortId(id)}`}
-        description="Live job detail from GET /v1/jobs/{id}, its FSM history, logs and artifacts."
+        description="See how this job is going, what it cost, what happened step by step, and download your results. This page updates by itself while the job is running."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline">
               <Link href="/dashboard/jobs">
                 <ArrowLeft /> Back
@@ -375,18 +406,17 @@ export default function JobDetailPage() {
       />
 
       <div className="space-y-6">
+        {job.workload_type === "kit" ? <KitJobPanel job={job} token={token} /> : null}
+
         {/* ---- Header / summary ---- */}
         <Card>
           <CardContent className="p-6">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={jobStatusVariant(job.status)}>
-                {jobStatusLabel(job.status)}
-              </Badge>
-              <Badge variant={simulated ? "warning" : "neutral"}>
-                {simulated ? "Simulated" : "Hardware"}
-              </Badge>
-              <span className="font-mono text-xs text-muted-foreground">
-                {id}
+              <JobStatusBadge status={job.status} />
+              <ExecutionModeBadge mode={job.execution_mode} />
+              <span className="inline-flex min-w-0 items-center gap-1">
+                <span className="break-all font-mono text-xs text-muted-foreground">{id}</span>
+                <CopyButton value={id} label="Copy job id" />
               </span>
             </div>
 
@@ -395,21 +425,21 @@ export default function JobDetailPage() {
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                 <span className="text-muted-foreground">
                   <span className="font-medium text-foreground">
-                    Simulated execution — not real model output.
+                    Practice mode (simulated) — not real AI output.
                   </span>{" "}
-                  Outputs and artifacts below are a deterministic transform of the
-                  input, not genuine model inference.
+                  The results below are a simple placeholder made from your input. They
+                  were not made by a real AI model, so do not rely on them.
                 </span>
               </div>
             ) : null}
 
             <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <dt className="text-muted-foreground">Workload</dt>
-                <dd className="mt-0.5 font-medium">{job.workload_type}</dd>
+                <dt className="text-muted-foreground">Type of job</dt>
+                <dd className="mt-0.5 font-medium">{jobTypeLabel(job.workload_type)}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Isolation</dt>
+                <dt className="text-muted-foreground">Privacy level</dt>
                 <dd className="mt-0.5">
                   <Badge variant="outline" className="font-mono text-xs uppercase">
                     {job.isolation_tier || "container"}
@@ -417,22 +447,28 @@ export default function JobDetailPage() {
                 </dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Model</dt>
+                <dt className="text-muted-foreground">AI model</dt>
                 <dd className="mt-0.5 font-mono text-xs">{job.model}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Created</dt>
-                <dd className="mt-0.5">{formatRelativeTime(job.created_at)}</dd>
+                <dd className="mt-0.5">
+                  <RelativeTime iso={job.created_at} />
+                  <span className="block text-xs text-muted-foreground">{formatDateTime(job.created_at)}</span>
+                </dd>
               </div>
               {job.machine_id ? (
                 <div>
-                  <dt className="text-muted-foreground">Machine</dt>
-                  <dd className="mt-0.5 font-mono text-xs">{job.machine_id}</dd>
+                  <dt className="text-muted-foreground">Computer that ran it</dt>
+                  <dd className="mt-0.5 flex items-center gap-1">
+                    <span className="break-all font-mono text-xs">{job.machine_id}</span>
+                    <CopyButton value={job.machine_id} label="Copy machine id" />
+                  </dd>
                 </div>
               ) : null}
               {job.max_cost ? (
                 <div>
-                  <dt className="text-muted-foreground">Budget cap</dt>
+                  <dt className="text-muted-foreground">Most you agreed to pay</dt>
                   <dd className="mt-0.5 font-mono">{job.max_cost}</dd>
                 </div>
               ) : null}
@@ -450,40 +486,55 @@ export default function JobDetailPage() {
                   </dd>
                 ) : job.status === "completed" ? (
                   <dd className="mt-0.5 text-xs text-muted-foreground">
-                    settled — awaiting final amount
+                    The job is done. The final amount will show here soon.
                   </dd>
                 ) : (
                   <dd className="mt-0.5 text-xs text-muted-foreground">
-                    not charged
+                    Not charged yet. You are only charged for jobs that finish.
                   </dd>
                 )}
               </div>
             </dl>
 
+            <p className="mt-4 text-sm text-muted-foreground">{jobStatusHelp(job.status)}</p>
+
             {job.error_code || job.error_message ? (
               <div className="mt-4 flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  {job.error_code ? (
-                    <span className="font-mono">{job.error_code}</span>
-                  ) : null}
-                  {job.error_code && job.error_message ? " — " : ""}
-                  {job.error_message}
+                  <span className="block font-medium">What happened</span>
+                  <span className="block">{jobErrorHelp(job.error_code)}</span>
+                  <span className="mt-1 block text-xs opacity-90">
+                    Technical details for support:{" "}
+                    {job.error_code ? (
+                      <span className="font-mono">{job.error_code}</span>
+                    ) : null}
+                    {job.error_code && job.error_message ? " — " : ""}
+                    {job.error_message}
+                  </span>
                 </span>
               </div>
             ) : null}
           </CardContent>
         </Card>
 
+        {/* ---- U19 live data (running jobs only) ---- */}
+        <LivePanel jobId={job.job_id ?? job.id ?? jobId} running={job.status === "running"} />
+
         {/* ---- Match explanation ---- */}
         {match && (match.machine_id || match.score != null || match.factors) ? (
           <Card>
             <CardContent className="p-6">
-              <h2 className="mb-3 text-sm font-semibold">Match explanation</h2>
+              <h2 className="mb-3 text-sm font-semibold">
+                Why this computer was picked
+                <HelpTip term="match score">
+                  We pick the free computer that fits your job best, looking at price, speed and how reliable the host has been. A higher score means a better fit.
+                </HelpTip>
+              </h2>
               <dl className="grid gap-3 text-sm sm:grid-cols-2">
                 {match.machine_id ? (
                   <div>
-                    <dt className="text-muted-foreground">Chosen machine</dt>
+                    <dt className="text-muted-foreground">Chosen computer</dt>
                     <dd className="mt-0.5 font-mono text-xs">
                       {match.machine_id}
                     </dd>
@@ -491,7 +542,7 @@ export default function JobDetailPage() {
                 ) : null}
                 {match.score != null ? (
                   <div>
-                    <dt className="text-muted-foreground">Score</dt>
+                    <dt className="text-muted-foreground">Fit score</dt>
                     <dd className="mt-0.5 font-mono">{String(match.score)}</dd>
                   </div>
                 ) : null}
@@ -499,7 +550,7 @@ export default function JobDetailPage() {
               {match.factors && Object.keys(match.factors).length > 0 ? (
                 <div className="mt-3">
                   <p className="mb-1 text-xs text-muted-foreground">
-                    Score factors
+                    What counted (technical details)
                   </p>
                   <pre className="overflow-x-auto rounded-md border border-border bg-surface-2/40 p-3 text-xs">
                     {JSON.stringify(match.factors, null, 2)}
@@ -513,7 +564,7 @@ export default function JobDetailPage() {
         {/* ---- FSM timeline ---- */}
         <Card>
           <CardContent className="p-6">
-            <h2 className="mb-4 text-sm font-semibold">FSM timeline</h2>
+            <h2 className="mb-4 text-sm font-semibold">What happened, step by step</h2>
             {eventsQuery.isLoading ? (
               <div className="space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
@@ -522,11 +573,11 @@ export default function JobDetailPage() {
               </div>
             ) : eventsQuery.isError ? (
               <p className="text-sm text-muted-foreground">
-                Couldn&apos;t load the event history.
+                We could not load the step-by-step history. Refresh the page to try again.
               </p>
             ) : sortedEvents.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No transitions recorded yet.
+                Nothing has happened yet. Steps will appear here as your job moves along.
               </p>
             ) : (
               <ol className="relative space-y-0">
@@ -557,11 +608,11 @@ export default function JobDetailPage() {
                       </div>
                       {ev.reason ? (
                         <p className="mt-0.5 text-sm text-muted-foreground">
-                          {ev.reason}
+                          {/^[a-z0-9]+(_[a-z0-9]+)+$/.test(ev.reason) ? capitalize(ev.reason.replace(/_/g, " ")) : ev.reason}
                         </p>
                       ) : null}
                       <p className="mt-0.5 text-xs text-muted-foreground">
-                        {formatRelativeTime(ev.created_at)}
+                        <RelativeTime iso={ev.created_at} />
                       </p>
                     </div>
                   </li>
@@ -576,7 +627,7 @@ export default function JobDetailPage() {
           <CardContent className="p-6">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-sm font-semibold">
-                <Terminal className="h-4 w-4 text-muted-foreground" /> Logs
+                <Terminal className="h-4 w-4 text-muted-foreground" /> Log (what the computer reported)
               </h2>
               <Button
                 variant="ghost"
@@ -594,13 +645,13 @@ export default function JobDetailPage() {
               <Skeleton className="h-24 w-full" />
             ) : logsQuery.isError ? (
               <p className="text-sm text-muted-foreground">
-                Couldn&apos;t load logs.
+                We could not load the log. Press Refresh to try again.
               </p>
             ) : logLines.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {active
-                  ? "No log lines yet — this job is still working."
-                  : "No logs were recorded for this job."}
+                  ? "Nothing in the log yet. The job is still working, so check back in a moment."
+                  : "This job did not write anything to the log."}
               </p>
             ) : (
               <pre className="max-h-96 overflow-auto rounded-md border border-border bg-[#0b0f14] p-4 font-mono text-xs leading-relaxed text-green-300">
@@ -609,7 +660,7 @@ export default function JobDetailPage() {
             )}
             {active ? (
               <p className="mt-2 text-xs text-muted-foreground">
-                Live — logs refresh automatically while the job is active.
+                The log updates by itself while the job is running.
               </p>
             ) : null}
           </CardContent>
@@ -619,12 +670,11 @@ export default function JobDetailPage() {
         <Card>
           <CardContent className="p-6">
             <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold">
-              <FileText className="h-4 w-4 text-muted-foreground" /> Artifacts
+              <FileText className="h-4 w-4 text-muted-foreground" /> Result files
             </h2>
             {simulated ? (
               <p className="mb-3 text-xs text-warning">
-                Simulated execution — artifacts are deterministic output, not real
-                model inference.
+                Practice mode (simulated) — these files are a simple placeholder, not real AI output.
               </p>
             ) : null}
             {downloadMut.isError ? (
@@ -636,7 +686,7 @@ export default function JobDetailPage() {
                 <span>
                   {downloadMut.error instanceof ApiError
                     ? downloadMut.error.message
-                    : "Couldn't get a download link."}
+                    : "We could not make a download link. Press Download to try again."}
                 </span>
               </div>
             ) : null}
@@ -644,11 +694,11 @@ export default function JobDetailPage() {
               <Skeleton className="h-16 w-full" />
             ) : artifactsQuery.isError ? (
               <p className="text-sm text-muted-foreground">
-                Couldn&apos;t load artifacts.
+                We could not load the result files. Refresh the page to try again.
               </p>
             ) : artifacts.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No artifacts{active ? " yet" : ""}.
+                {active ? "No result files yet. They appear here when the job finishes." : "This job did not make any result files."}
               </p>
             ) : (
               <ul className="divide-y divide-border rounded-md border border-border">
@@ -668,7 +718,7 @@ export default function JobDetailPage() {
                         sha256 {a.sha256}
                       </p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
-                        {formatBytes(a.size)} · {formatRelativeTime(a.created_at)}
+                        {formatBytes(a.size)} · <RelativeTime iso={a.created_at} />
                       </p>
                     </div>
                     <Button
@@ -683,7 +733,7 @@ export default function JobDetailPage() {
                       {downloadMut.isPending &&
                       downloadMut.variables === a.artifact_id ? (
                         <>
-                          <Loader2 className="animate-spin" /> Linking…
+                          <Loader2 className="animate-spin" /> Preparing…
                         </>
                       ) : (
                         <>
@@ -705,12 +755,12 @@ export default function JobDetailPage() {
               <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {job.encrypted_output ? (
-                    <Lock className="h-4 w-4 text-emerald-400" />
+                    <Lock className="h-4 w-4 text-success" />
                   ) : (
                     <FileText className="h-4 w-4 text-muted-foreground" />
                   )}
                   <h2 className="text-sm font-semibold">
-                    {job.encrypted_output ? "Decrypted Output (In-Browser)" : "Job Output"}
+                    {job.encrypted_output ? "Your result (unlocked in this browser)" : "Your result"}
                   </h2>
                 </div>
                 {job.encrypted_output ? (
@@ -719,7 +769,7 @@ export default function JobDetailPage() {
                     size="sm"
                     onClick={() => setKeyImportOpen(true)}
                   >
-                    <Key className="mr-1.5 h-3.5 w-3.5" /> Import Key
+                    <Key className="mr-1.5 h-3.5 w-3.5" /> Import key
                   </Button>
                 ) : null}
               </div>
@@ -728,12 +778,12 @@ export default function JobDetailPage() {
                 <div>
                   {isDecrypting ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-                      <Loader2 className="h-4 w-4 animate-spin" /> Decrypting output with browser key…
+                      <Loader2 className="h-4 w-4 animate-spin" /> Unlocking your result with the key in this browser…
                     </div>
                   ) : decryptedOutput ? (
                     <div className="space-y-2">
-                      <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
-                        <CheckCircle2 className="h-4 w-4" /> Decrypted locally using your browser&apos;s private key.
+                      <div className="flex items-center gap-1.5 text-xs text-success font-medium">
+                        <CheckCircle2 className="h-4 w-4" /> Unlocked on your computer with the private key in this browser.
                       </div>
                       <pre className="max-h-96 overflow-auto rounded-md border border-border bg-[#0b0f14] p-4 font-mono text-xs leading-relaxed text-emerald-300">
                         {typeof decryptedOutput === "string"
@@ -749,12 +799,12 @@ export default function JobDetailPage() {
                       >
                         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                         <div>
-                          <p className="font-semibold">Unable to decrypt output</p>
+                          <p className="font-semibold">We could not unlock your result</p>
                           <p className="text-xs text-danger/90">{decryptionError}</p>
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Raw ciphertext stored on server:
+                        The locked (encrypted) result we are storing for you:
                       </p>
                       <pre className="max-h-32 overflow-auto rounded-md border border-border bg-surface-2/40 p-3 font-mono text-[11px] text-muted-foreground">
                         {JSON.stringify(job.encrypted_output, null, 2)}
@@ -778,11 +828,16 @@ export default function JobDetailPage() {
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="h-5 w-5" />
-                  <h2 className="text-sm font-semibold">Privacy receipt</h2>
+                  <h2 className="text-sm font-semibold">
+                    Privacy receipt
+                    <HelpTip term="privacy receipt">
+                      A record that shows when your job&apos;s keys were handed out and that the host promised to wipe your data afterwards. It is made only for private jobs.
+                    </HelpTip>
+                  </h2>
                 </div>
                 {receiptQuery.data ? (
                   <Badge variant="outline" className="font-mono text-xs">
-                    {receiptQuery.data.verified ? "Receipt issued · checked by the platform" : "Receipt issued · platform check FAILED"}
+                    {receiptQuery.data.verified ? "Receipt ready · checked by ComputeCoin" : "Receipt ready · ComputeCoin's check FAILED"}
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="font-mono text-xs">
@@ -797,23 +852,23 @@ export default function JobDetailPage() {
                 <div className="space-y-4">
                   <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
                     <div>
-                      <dt className="text-muted-foreground">Tier</dt>
+                      <dt className="text-muted-foreground">Privacy level</dt>
                       <dd className="mt-0.5 font-mono text-xs">{receiptQuery.data.isolation_tier}</dd>
                     </div>
                     <div>
-                      <dt className="text-muted-foreground">OS image</dt>
+                      <dt className="text-muted-foreground">Software the host ran</dt>
                       <dd className="mt-0.5 truncate font-mono text-[11px]" title={receiptQuery.data.image_hash}>
                         {receiptQuery.data.image_hash}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-muted-foreground">Log root</dt>
+                      <dt className="text-muted-foreground">Public log fingerprint</dt>
                       <dd className="mt-0.5 truncate font-mono text-[11px]" title={receiptQuery.data.merkle_root}>
                         {receiptQuery.data.merkle_root}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-muted-foreground">Wipe receipt</dt>
+                      <dt className="text-muted-foreground">Data wiped</dt>
                       <dd className="mt-0.5 font-mono text-xs">
                         {receiptQuery.data.wipe_receipt
                           ? String((receiptQuery.data.wipe_receipt as { wiped_items?: string[] }).wiped_items?.join(", ") ?? "present")
@@ -835,7 +890,7 @@ export default function JobDetailPage() {
                         URL.revokeObjectURL(url);
                       }}
                     >
-                      <Download className="mr-1.5 h-3.5 w-3.5" /> Download receipt JSON
+                      <Download className="mr-1.5 h-3.5 w-3.5" /> Download receipt
                     </Button>
                     <Button
                       variant="outline"
@@ -845,29 +900,29 @@ export default function JobDetailPage() {
                     >
                       {isVerifyingLocal ? (
                         <>
-                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Verifying…
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Checking…
                         </>
                       ) : (
                         <>
-                          <ShieldCheck className="mr-1.5 h-3.5 w-3.5 text-emerald-400" /> Verify receipt in browser
+                          <ShieldCheck className="mr-1.5 h-3.5 w-3.5 text-success" /> Check receipt in this browser
                         </>
                       )}
                     </Button>
                     <span className="text-xs text-muted-foreground">
-                      Check it yourself, without trusting us:{" "}
+                      For a check that does not rely on us (for technical users):{" "}
                       <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs">
                         python -m computecoin.ccverify privacy-receipt-{id}.json --verifier-key &lt;key from /v1/privacy/verifier-key&gt;
                       </code>
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    The receipt proves which signed attestation, key releases and wipe were logged. It does not
-                    prove the host&apos;s hardware: Sealed attestation currently runs only in development.
+                    The receipt shows which security checks, key hand-overs and wipe promise were logged. It does not
+                    prove the host&apos;s hardware is what it says: that hardware check only runs in test setups for now.
                   </p>
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  A receipt is created after a private job finishes on an attested host. Until then there is nothing to verify.
+                  A receipt is made after a private job finishes on a host that passed its security check. Until then there is nothing to check.
                 </p>
               )}
             </CardContent>
@@ -889,8 +944,7 @@ export default function JobDetailPage() {
           <DialogHeader>
             <DialogTitle>Cancel this job?</DialogTitle>
             <DialogDescription>
-              The scheduler stops the job at the next safe checkpoint and releases
-              any reserved capacity. This can&apos;t be undone.
+              We will stop the job at the next safe moment and give back the credits we set aside. You can&apos;t undo this. You are not charged for a cancelled job.
             </DialogDescription>
           </DialogHeader>
           {cancelMut.isError ? (
@@ -902,13 +956,13 @@ export default function JobDetailPage() {
               <span>
                 {cancelMut.error instanceof ApiError
                   ? cancelMut.error.message
-                  : "Couldn't request cancellation."}
+                  : "We could not cancel the job. Try again in a moment."}
               </span>
             </div>
           ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmCancel(false)}>
-              Keep running
+              Keep it running
             </Button>
             <Button
               variant="danger"
@@ -942,8 +996,8 @@ export default function JobDetailPage() {
           <DialogHeader>
             <DialogTitle>Dispute this charge?</DialogTitle>
             <DialogDescription>
-              Opening a dispute flags the settled charge for operator review. Tell
-              us what looks wrong — this is recorded on the job.
+              A dispute asks our team to look at this charge again. Tell us what looks wrong.
+              We save your message with the job and reply on the Disputes page.
             </DialogDescription>
           </DialogHeader>
           {disputeMut.isError ? (
@@ -956,7 +1010,7 @@ export default function JobDetailPage() {
             </div>
           ) : null}
           <div className="space-y-1.5">
-            <Label htmlFor="dispute-reason">Reason</Label>
+            <Label htmlFor="dispute-reason">What looks wrong?</Label>
             <textarea
               id="dispute-reason"
               rows={4}
@@ -976,7 +1030,7 @@ export default function JobDetailPage() {
             >
               {disputeMut.isPending ? (
                 <>
-                  <Loader2 className="animate-spin" /> Opening…
+                  <Loader2 className="animate-spin" /> Sending…
                 </>
               ) : (
                 "Open dispute"
@@ -998,26 +1052,26 @@ export default function JobDetailPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <div className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-400" />
-              <DialogTitle>In-Browser Privacy Receipt Check</DialogTitle>
+              <ShieldCheck className="h-5 w-5 text-success" />
+              <DialogTitle>Privacy receipt check</DialogTitle>
             </div>
             <DialogDescription className="text-left text-xs">
-              Signatures and Merkle proofs are checked here in your browser, not by our server.
-              The verifier key itself is fetched from ComputeCoin; for an independent check, run
-              ccverify with a key you obtained separately.
+              This check runs here in your browser, not on our server. The key it uses
+              comes from ComputeCoin. For a fully independent check, use the command-line tool
+              with a key you got from somewhere else.
             </DialogDescription>
           </DialogHeader>
 
           {isVerifyingLocal ? (
             <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" /> Verifying signatures and Merkle proofs…
+              <Loader2 className="h-5 w-5 animate-spin" /> Checking signatures and proofs…
             </div>
           ) : localVerificationResult ? (
             <div className="space-y-4">
               <div
                 className={`flex items-center justify-between rounded-md p-3 text-sm font-semibold ${
                   localVerificationResult.verified
-                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                    ? "bg-emerald-500/10 text-success border border-emerald-500/30"
                     : "bg-danger/10 text-danger border border-danger/30"
                 }`}
               >
@@ -1029,8 +1083,8 @@ export default function JobDetailPage() {
                   )}
                   <span>
                     {localVerificationResult.verified
-                      ? "ALL CHECKS PASSED (VERIFIED)"
-                      : "VERIFICATION FAILED"}
+                      ? "All checks passed"
+                      : "Some checks failed"}
                   </span>
                 </div>
                 <Badge variant="outline" className="font-mono text-xs">
@@ -1039,7 +1093,7 @@ export default function JobDetailPage() {
               </div>
 
               <div className="space-y-2 rounded-md border border-border bg-surface-2/40 p-3 text-xs">
-                <p className="font-medium text-foreground">Verification details:</p>
+                <p className="font-medium text-foreground">Details for each check:</p>
                 <ul className="space-y-1.5 font-mono text-[11px]">
                   {Object.entries(localVerificationResult.checks).map(([key, val]) => {
                     const pass = val === true || val === "absent";
@@ -1052,7 +1106,7 @@ export default function JobDetailPage() {
                         <span
                           className={
                             pass
-                              ? "text-emerald-400 font-bold"
+                              ? "text-success font-bold"
                               : "text-danger font-bold"
                           }
                         >
@@ -1071,10 +1125,10 @@ export default function JobDetailPage() {
               </div>
 
               <p className="text-xs text-muted-foreground">
-                A passing receipt shows that a host with a recorded verdict received this job&apos;s
-                keys, that every key release is in the public log, and that the host signed a wipe
-                statement. It does not prove the wipe happened: hardware attestation is not live
-                yet, so the verdict is not a hardware proof.
+                A passing receipt shows that the host received your job&apos;s keys, that every key
+                hand-over is in a public log, and that the host signed a promise to wipe your data. It does
+                not prove the wipe really happened. The hardware security check is not live yet, so this is
+                not proof about the host&apos;s hardware.
               </p>
             </div>
           ) : null}
@@ -1102,12 +1156,12 @@ export default function JobDetailPage() {
           <DialogHeader>
             <div className="flex items-center gap-2 text-warning">
               <Key className="h-5 w-5" />
-              <DialogTitle>Import Encryption Key</DialogTitle>
+              <DialogTitle>Import your private key</DialogTitle>
             </div>
             <DialogDescription className="text-left text-xs">
-              Paste the contents of your{" "}
+              Paste everything in the backup file you saved:{" "}
               <code className="text-foreground">computecoin-private-key-backup.json</code> file,
-              or your 64-character private key hex string.
+              or your 64-character private key.
             </DialogDescription>
           </DialogHeader>
 
@@ -1122,13 +1176,13 @@ export default function JobDetailPage() {
           ) : null}
 
           <div className="space-y-1.5">
-            <Label htmlFor="import-key-input">Key JSON or Hex</Label>
+            <Label htmlFor="import-key-input">Your key backup or key</Label>
             <textarea
               id="import-key-input"
               rows={4}
               value={keyImportInput}
               onChange={(e) => setKeyImportInput(e.target.value)}
-              placeholder="Paste JSON backup or private key hex..."
+              placeholder="Paste your key backup or private key here…"
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             />
           </div>
@@ -1145,7 +1199,7 @@ export default function JobDetailPage() {
               Cancel
             </Button>
             <Button variant="default" onClick={handleImportKey}>
-              Import &amp; Decrypt
+              Import key and unlock result
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -9,10 +10,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { CopyId, EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
+import { capitalize, parseApiDate } from "@/lib/format";
 import {
   Dialog,
   DialogContent,
@@ -36,14 +39,14 @@ import {
   type ReservationStatus,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { formatRelativeTime } from "@/lib/utils";
+import { HelpTip } from "@/components/ui/help-tip";
 
 /** Derive the effective status — an active lease past its expiry is expired. */
 function derivedStatus(r: Reservation): ReservationStatus {
   if (
     r.status === "active" &&
     r.expires_at &&
-    new Date(r.expires_at).getTime() < Date.now()
+    parseApiDate(r.expires_at).getTime() < Date.now()
   ) {
     return "expired";
   }
@@ -67,6 +70,7 @@ export default function ReservationsPage() {
   const { accessToken } = useAuth();
   const token = accessToken as string;
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [releaseTarget, setReleaseTarget] = useState<Reservation | null>(null);
 
@@ -79,6 +83,7 @@ export default function ReservationsPage() {
   const releaseMut = useMutation({
     mutationFn: (id: string) => api.releaseReservation(token, id),
     onSuccess: () => {
+      toast.success("Booking cancelled. The spot is free again.");
       setReleaseTarget(null);
       queryClient.invalidateQueries({ queryKey: ["reservations"] });
     },
@@ -89,8 +94,8 @@ export default function ReservationsPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Reservations"
-        description="Capacity slots you have reserved on marketplace machines, fetched live from GET /v1/reservations. Reservations hold a slot before job execution; no credits are charged here."
+        title="Bookings"
+        description="Time you have booked on a host's computer before running a job. A booking keeps a spot for you for a short time. You are not charged for a booking."
         action={
           <Button
             variant="outline"
@@ -104,63 +109,42 @@ export default function ReservationsPage() {
       />
 
       {query.isLoading ? (
-        <Card>
-          <CardContent className="space-y-3 p-6">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <Skeleton className="h-10 w-10 rounded-md" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-1/2" />
-                </div>
-                <Skeleton className="h-6 w-16 rounded-full" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TableSkeleton rows={3} label="Loading reservations" />
       ) : query.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load reservations</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {query.error instanceof ApiError
-                ? query.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => query.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your bookings"
+          message={query.error instanceof ApiError ? query.error.message : undefined}
+          onRetry={() => query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : reservations.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-              <CalendarClock className="h-6 w-6" />
-            </span>
-            <h3 className="font-semibold">No reservations yet</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Find a machine in the marketplace, request a quote, and reserve a
-              slot. Your reservations will appear here.
-            </p>
+        <EmptyState
+          icon={CalendarClock}
+          title="You have no bookings yet"
+          action={
             <Button asChild>
-              <a href="/marketplace/gpus">Browse the marketplace</a>
+              <Link href="/marketplace/gpus">Browse the marketplace</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          To book time, open the marketplace, pick a computer, ask for a price, and accept it. Your
+          bookings will appear here.
+        </EmptyState>
       ) : (
         <Card>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Machine</TableHead>
-                <TableHead className="text-right">Slots</TableHead>
+                <TableHead>Computer</TableHead>
+                <TableHead className="text-right">
+                  Slots
+                  <HelpTip term="slots">
+                    How many jobs you booked room for on this computer at the same time.
+                  </HelpTip>
+                </TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead>Reserved</TableHead>
+                <TableHead>Ends</TableHead>
+                <TableHead className="hidden sm:table-cell">Booked</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
@@ -171,24 +155,22 @@ export default function ReservationsPage() {
                 return (
                   <TableRow key={r.reservation_id}>
                     <TableCell>
-                      <div className="font-mono text-xs text-muted-foreground">
-                        {r.machine_id}
-                      </div>
-                      <div className="font-mono text-[11px] text-muted-foreground/70">
-                        quote {r.quote_id}
+                      <CopyId id={r.machine_id} label="Copy machine id" className="text-muted-foreground" />
+                      <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground/80">
+                        price quote <CopyId id={r.quote_id} label="Copy quote id" />
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-mono text-sm">
                       {r.slots}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={statusVariant(status)}>{status}</Badge>
+                      <Badge variant={statusVariant(status)}>{capitalize(status)}</Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {formatRelativeTime(r.expires_at)}
+                      <RelativeTime iso={r.expires_at} />
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatRelativeTime(r.created_at)}
+                    <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
+                      <RelativeTime iso={r.created_at} />
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
@@ -198,7 +180,7 @@ export default function ReservationsPage() {
                         className={releasable ? "text-danger" : undefined}
                         onClick={() => setReleaseTarget(r)}
                       >
-                        Release
+                        Cancel booking
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -220,11 +202,9 @@ export default function ReservationsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Release this reservation?</DialogTitle>
+            <DialogTitle>Cancel this booking?</DialogTitle>
             <DialogDescription>
-              Releasing frees the held slot immediately so other customers can
-              reserve it. This can&apos;t be undone — you&apos;d need a new quote
-              to reserve again.
+              Cancelling gives the spot back right away, so other people can book it. You can&apos;t undo this. To book again, you need to ask for a new price.
             </DialogDescription>
           </DialogHeader>
           {releaseMut.isError ? (
@@ -236,13 +216,13 @@ export default function ReservationsPage() {
               <span>
                 {releaseMut.error instanceof ApiError
                   ? releaseMut.error.message
-                  : "Couldn't release the reservation."}
+                  : "We could not cancel this booking. Please try again in a moment."}
               </span>
             </div>
           ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setReleaseTarget(null)}>
-              Keep it
+              Keep booking
             </Button>
             <Button
               variant="danger"
@@ -254,10 +234,10 @@ export default function ReservationsPage() {
             >
               {releaseMut.isPending ? (
                 <>
-                  <Loader2 className="animate-spin" /> Releasing…
+                  <Loader2 className="animate-spin" /> Cancelling…
                 </>
               ) : (
-                "Release slot"
+                "Cancel booking"
               )}
             </Button>
           </DialogFooter>

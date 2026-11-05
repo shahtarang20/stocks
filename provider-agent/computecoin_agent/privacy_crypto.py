@@ -182,6 +182,11 @@ def output_aad(job_id: str) -> bytes:
     return f"{VERSION}|job-output|{job_id}".encode()
 
 
+def stream_aad(job_id: str, seq: int, final: bool) -> bytes:
+    """AAD of one sealed stream chunk (ccpp-v1 section 6g): binds job, position and the final flag."""
+    return f"{VERSION}|stream|{job_id}|{int(seq)}|{1 if final else 0}".encode()
+
+
 def share_aad(guardian: str) -> bytes:
     """AAD for a Data Key share sealed by the customer to a guardian."""
     return f"{VERSION}|guardian-share|{guardian}".encode()

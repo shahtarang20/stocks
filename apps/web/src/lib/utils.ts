@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { parseApiDate } from "./format";
 
 /** Merge Tailwind class names, de-duplicating conflicting utilities. */
 export function cn(...inputs: ClassValue[]) {
@@ -23,7 +24,7 @@ export function formatNumber(value: number): string {
 /** Format an ISO timestamp as a compact relative time (e.g. "3m ago"). */
 export function formatRelativeTime(iso: string | null | undefined): string {
   if (!iso) return "never";
-  const then = new Date(iso).getTime();
+  const then = parseApiDate(iso).getTime();
   if (Number.isNaN(then)) return "—";
   const diffMs = Date.now() - then;
   const future = diffMs < 0;
@@ -47,4 +48,11 @@ export function formatRelativeTime(iso: string | null | undefined): string {
 export function formatMbAsGb(mb: number | null | undefined): string {
   if (!mb || mb <= 0) return "—";
   return `${(mb / 1024).toFixed(1)} GB`;
+}
+
+export function formatBytes(n: number | null | undefined): string {
+  if (!n || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
+  return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }

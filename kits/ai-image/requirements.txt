@@ -1,0 +1,11 @@
+# Versions are pinned but NOT yet checked against PyPI or against each other (L4). CI must resolve and
+# freeze with hashes (pip-compile --generate-hashes) and the Dockerfile must then use --require-hashes.
+# torch/torchvision come from the pinned CUDA base image, not from here.
+diffusers==0.32.2
+transformers==4.48.3
+accelerate==1.3.0
+safetensors==0.5.2
+sentencepiece==0.2.0
+protobuf==5.29.3
+Pillow==11.1.0
+numpy==2.2.2

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, FolderGit2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { FolderGit2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import {
   Card,
@@ -12,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { CopyId, EmptyState, ErrorState, TableSkeleton } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
+import { capitalize, formatDateTime } from "@/lib/format";
 import {
   Table,
   TableBody,
@@ -44,6 +46,7 @@ export default function ProjectsPage() {
   const { accessToken } = useAuth();
   const token = accessToken as string;
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
@@ -63,13 +66,14 @@ export default function ProjectsPage() {
     mutationFn: () => api.createProject(token, projectName.trim(), projectDescription.trim() || undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      toast.success(`Project "${projectName.trim()}" created.`);
       setCreateOpen(false);
       setProjectName("");
       setProjectDescription("");
       setErrorMessage(null);
     },
     onError: (err) => {
-      setErrorMessage(err instanceof ApiError ? err.message : "Failed to create project");
+      setErrorMessage(err instanceof ApiError ? err.message : "We could not create the project. Check the name and try again.");
     },
   });
 
@@ -77,11 +81,12 @@ export default function ProjectsPage() {
     mutationFn: (projectId: string) => api.deleteProject(token, projectId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      toast.success("Project deleted.");
       setDeleteTarget(null);
       setErrorMessage(null);
     },
     onError: (err) => {
-      setErrorMessage(err instanceof ApiError ? err.message : "Failed to delete project");
+      setErrorMessage(err instanceof ApiError ? err.message : "We could not delete the project. Try again in a moment.");
     },
   });
 
@@ -89,9 +94,9 @@ export default function ProjectsPage() {
     <>
       <ConsolePageHeader
         title="Projects"
-        description="Organize API keys, budgets, and workloads into isolated projects."
+        description="A project is a folder for one piece of work. It keeps its own API keys together (an API key lets a program send jobs for you). Most people only need one project, or none."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               onClick={() => refetch()}
@@ -100,60 +105,44 @@ export default function ProjectsPage() {
               <RefreshCw className={isFetching ? "animate-spin" : undefined} />
               Refresh
             </Button>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus /> New project
+            <Button
+              onClick={() => {
+                setErrorMessage(null);
+                setCreateOpen(true);
+              }}
+            >
+              <Plus /> Create a project
             </Button>
           </div>
         }
       />
 
       {isLoading ? (
-        <Card>
-          <CardContent className="space-y-3 p-6">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <Skeleton className="h-10 w-10 rounded-md" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-1/2" />
-                </div>
-                <Skeleton className="h-6 w-16 rounded-full" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TableSkeleton rows={4} label="Loading projects" />
       ) : isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load projects</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {error instanceof ApiError
-                ? error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your projects"
+          message={error instanceof ApiError ? error.message : undefined}
+          onRetry={() => refetch()}
+          retrying={isFetching}
+        />
       ) : !data || data.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-              <FolderGit2 className="h-6 w-6" />
-            </span>
-            <h3 className="font-semibold">No projects yet</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Create your first project to organize your compute jobs, datasets, and API keys.
-            </p>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus /> New project
+        <EmptyState
+          icon={FolderGit2}
+          title="You have no projects yet"
+          action={
+            <Button
+              onClick={() => {
+                setErrorMessage(null);
+                setCreateOpen(true);
+              }}
+            >
+              <Plus /> Create a project
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          You do not need a project to run jobs. Create one if you want to keep API keys for different work separate.
+        </EmptyState>
       ) : (
         <Card>
           <Table>
@@ -161,7 +150,7 @@ export default function ProjectsPage() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
+                <TableHead className="hidden sm:table-cell">Created</TableHead>
                 <TableHead>ID</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
@@ -179,24 +168,25 @@ export default function ProjectsPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(project.status)}>
-                      {project.status ?? "active"}
+                      {capitalize(project.status ?? "active")}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {project.created_at
-                      ? new Date(project.created_at).toLocaleDateString()
-                      : "—"}
+                  <TableCell className="hidden whitespace-nowrap text-sm text-muted-foreground sm:table-cell">
+                    {formatDateTime(project.created_at)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {project.id}
+                  <TableCell className="text-muted-foreground">
+                    <CopyId id={project.id} label="Copy project id" />
                   </TableCell>
                   <TableCell className="text-right">
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => setDeleteTarget(project)}
+                      onClick={() => {
+                        setErrorMessage(null);
+                        setDeleteTarget(project);
+                      }}
                       className="text-muted-foreground hover:text-danger"
-                      aria-label="Delete project"
+                      aria-label={`Delete project ${project.name}`}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -212,19 +202,26 @@ export default function ProjectsPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create new project</DialogTitle>
+            <DialogTitle>Create a project</DialogTitle>
             <DialogDescription>
-              Projects group compute jobs, billing quotas, and API keys.
+              A project keeps related API keys together.
             </DialogDescription>
           </DialogHeader>
 
           {errorMessage && (
-            <div className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+            <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
               {errorMessage}
             </div>
           )}
 
-          <div className="space-y-4 py-2">
+          <form
+            id="create-project-form"
+            className="space-y-4 py-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (projectName.trim() && !createMutation.isPending) createMutation.mutate();
+            }}
+          >
             <div className="space-y-1.5">
               <Label htmlFor="proj-name">Project name</Label>
               <Input
@@ -232,6 +229,8 @@ export default function ProjectsPage() {
                 placeholder="e.g. production-vllm"
                 value={projectName}
                 onChange={(e) => setProjectName(e.target.value)}
+                autoComplete="off"
+                required
               />
             </div>
             <div className="space-y-1.5">
@@ -241,16 +240,18 @@ export default function ProjectsPage() {
                 placeholder="e.g. LLM fine-tuning and inference pipelines"
                 value={projectDescription}
                 onChange={(e) => setProjectDescription(e.target.value)}
+                autoComplete="off"
               />
             </div>
-          </div>
+          </form>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>
               Cancel
             </Button>
             <Button
-              onClick={() => createMutation.mutate()}
+              type="submit"
+              form="create-project-form"
               disabled={!projectName.trim() || createMutation.isPending}
             >
               {createMutation.isPending ? "Creating…" : "Create project"}
@@ -265,9 +266,15 @@ export default function ProjectsPage() {
           <DialogHeader>
             <DialogTitle>Delete project</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete project &quot;{deleteTarget?.name}&quot;? All associated API keys will also be permanently revoked.
+              Delete the project &quot;{deleteTarget?.name}&quot;? Every API key in it will stop working for good. You can&apos;t undo this.
             </DialogDescription>
           </DialogHeader>
+
+          {errorMessage && deleteTarget ? (
+            <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+              {errorMessage}
+            </div>
+          ) : null}
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteMutation.isPending}>

@@ -20,6 +20,28 @@ from app.models.provider import HardwareInventory
 RUNTIMES = ("cuda", "rocm")
 # D5: tiers an AMD GPU job may use in v1. gVisor / microVM / privacy tiers are refused, never downgraded.
 ROCM_TIERS = ("container",)
+# A6 / P6 (owner decision on D5 PENDING, see ADR-0003 addendum): sealed and sealed_pro rest on the
+# TPM and the Sealed OS, which are GPU-vendor independent, so an AMD machine may serve them, but only
+# when its attestation verdict names a Sealed image. Confidential needs a GPU TEE: still refused.
+ROCM_SEALED_TIERS = ("sealed", "sealed_pro")
+
+
+def verdict_names_sealed_image(verdict: Any) -> bool:
+    """True when a machine's attestation verdict names a trusted Sealed image for a Sealed tier."""
+    if not isinstance(verdict, dict):
+        return False
+    if verdict.get("expires_at") is not None:  # an expired verdict names nothing
+        import datetime as _dt
+
+        try:
+            exp = _dt.datetime.fromisoformat(str(verdict["expires_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=_dt.timezone.utc)
+        if _dt.datetime.now(_dt.timezone.utc) >= exp:
+            return False
+    return bool(verdict.get("image_hash")) and str(verdict.get("tier_reached") or "").lower() in ROCM_SEALED_TIERS
 
 
 def machine_gpu_runtime(machine: Any) -> str | None:
@@ -59,6 +81,7 @@ def is_gpu_compatible(
     job_gpu_runtime: str | None = None,
     job_gpu_count: int | None = None,
     isolation_tier: str | None = None,
+    machine_verdict: dict | None = None,
 ) -> tuple[bool, str | None]:
     """Decide job/machine GPU compatibility (D3, D4, D5): the canonical helper.
 
@@ -70,7 +93,8 @@ def is_gpu_compatible(
       - 'gpus': machine has fewer GPUs than requested by the job.
       - 'no_gpu': machine has no GPUs for a GPU job.
       - 'gpu_runtime': runtime mismatch (e.g. cuda job on rocm machine, or rocm job on cuda machine).
-      - 'amd_isolation': AMD GPU job requested with non-container tier (D5).
+      - 'amd_isolation': AMD GPU job requested with a tier other than container, or sealed/sealed_pro
+        without a machine verdict naming a Sealed image (D5, A6).
       - 'no_image': a hardware job's model has no image for the machine's GPU runtime (D4).
 
     ``image_runtimes`` is the set of runtimes the job's model has an image for
@@ -112,7 +136,17 @@ def is_gpu_compatible(
                 else (getattr(job, "isolation_tier", None) or "container")
             ).lower().strip()
             if tier not in ("container", "open"):
-                return False, "amd_isolation"
+                # A6: sealed / sealed_pro only when the machine's verdict names a Sealed image.
+                # Confidential, gvisor and microvm stay refused.
+                verdict = machine_verdict if machine_verdict is not None else getattr(machine, "sealed_verdict", None)
+                from app.core.config import settings as _settings
+
+                if not (
+                    tier in ROCM_SEALED_TIERS
+                    and getattr(_settings, "AMD_SEALED_ENABLED", False)  # owner decision on D5; default off
+                    and verdict_names_sealed_image(verdict)
+                ):
+                    return False, "amd_isolation"
     else:
         hw = getattr(machine, "hardware", None)
         machine_rt = (hw.gpu_runtime or "cuda").lower().strip() if (hw and hw.gpu_count > 0) else "cuda"

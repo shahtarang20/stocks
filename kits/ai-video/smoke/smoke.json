@@ -1,0 +1,72 @@
+{
+  "kit": "ai-video",
+  "schema": 1,
+  "purpose": "U12: smoke test of ai-video on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models, each with >= min_vram_gb. List is a proposal; the owner decides the fleet.",
+  "fixture": {
+    "script": "kits/ai-video/smoke/make_fixture.py",
+    "how": "python make_fixture.py image.png  (deterministic 256x256 gradient PNG); only for an image-to-video (MODEL_KIND=i2v) build. The default text-to-video build takes no input file.",
+    "input_name": "image",
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {
+      "prompts": [
+        "a paper boat drifting on a calm pond, soft morning light"
+      ],
+      "seed": 7,
+      "width": 480,
+      "height": 320,
+      "num_frames": 9,
+      "steps": 20,
+      "guidance_scale": 6,
+      "fps": 8,
+      "crf": 18
+    }
+  },
+  "limits": {
+    "max_seconds": 1800
+  },
+  "checks": [
+    {
+      "id": "exit_zero",
+      "expect": "container exit code 0 and output.json ok=true"
+    },
+    {
+      "id": "file_count",
+      "expect": "videos/video_00000.mp4 exists"
+    },
+    {
+      "id": "video_shape",
+      "expect": "ffprobe: h264, yuv420p, 480x320, 9 frames, 8 fps, no audio stream"
+    },
+    {
+      "id": "non_blank",
+      "expect": "decoded frames differ from each other and pixel standard deviation of each frame > 8"
+    },
+    {
+      "id": "same_host_repeat",
+      "expect": "re-run on the same GPU gives psnr_ssim verification status 'passed'"
+    },
+    {
+      "id": "cross_gpu",
+      "expect": "outputs of different GPU models pass the kit's psnr_ssim verification against each other (OWNER DECISION thresholds)"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds per video",
+    "peak vram",
+    "sha256 of every output"
+  ]
+}

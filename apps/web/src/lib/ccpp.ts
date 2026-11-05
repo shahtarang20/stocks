@@ -806,3 +806,102 @@ export function verifyReceiptLocal(
     checks,
   };
 }
+
+// --------------------------------------------------------------------------- Sealed stream chunks (private chat, spec 6g)
+
+export const DEFAULT_STREAM_PAD_BYTES = 256;
+
+export class PrivateStreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PrivateStreamError";
+  }
+}
+
+/** AAD of one sealed stream chunk: `ccpp-v1|stream|<job_id>|<seq>|<final 0|1>`. */
+export function streamAad(jobId: string, seq: number, final: boolean): Uint8Array {
+  return new TextEncoder().encode(`${VERSION}|stream|${jobId}|${seq}|${final ? 1 : 0}`);
+}
+
+/** Frame like the agent: `u32 big-endian length || data || zero bytes` up to a multiple of `block` (<= 0 = raw). */
+export function padStreamPlaintext(data: Uint8Array, block: number): Uint8Array {
+  if (block <= 0) return data;
+  const framed = 4 + data.length;
+  const out = new Uint8Array(framed + ((block - (framed % block)) % block));
+  new DataView(out.buffer).setUint32(0, data.length, false);
+  out.set(data, 4);
+  return out;
+}
+
+/** Read the u32 length prefix and return exactly that many bytes; reject an over-long length or any non-zero padding byte. */
+export function unpadStreamPlaintext(data: Uint8Array): Uint8Array {
+  if (data.length < 4) throw new PrivateStreamError("padded chunk is shorter than its 4 byte length prefix");
+  const n = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, false);
+  if (n > data.length - 4) throw new PrivateStreamError("padded chunk length exceeds its payload");
+  for (let i = 4 + n; i < data.length; i++) {
+    if (data[i] !== 0) throw new PrivateStreamError("padded chunk has non-zero padding bytes");
+  }
+  return data.slice(4, 4 + n);
+}
+
+/** Open one sealed chunk with the customer's result private key and the chunk AAD, strip the padding, decode UTF-8. */
+export function openStreamChunk(
+  customerPrivateHex: string,
+  envelope: SealedEnvelope,
+  opts: { jobId: string; seq: number; final: boolean; padBytes?: number }
+): string {
+  let plain: Uint8Array;
+  try {
+    plain = openSealed(customerPrivateHex, envelope, streamAad(opts.jobId, opts.seq, opts.final));
+  } catch (err) {
+    throw new PrivateStreamError(`stream chunk ${opts.seq} does not open: ${(err as Error).message}`);
+  }
+  if ((opts.padBytes ?? DEFAULT_STREAM_PAD_BYTES) > 0) plain = unpadStreamPlaintext(plain);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(plain);
+  } catch {
+    throw new PrivateStreamError(`stream chunk ${opts.seq} is not valid UTF-8`);
+  }
+}
+
+/** Stateful reader over the parsed SSE events of one private chat stream. */
+export class PrivateStreamReader {
+  jobId: string | undefined;
+  nextSeq = 0;
+  finished = false;
+  constructor(
+    private readonly customerPrivateHex: string,
+    private readonly padBytes: number = DEFAULT_STREAM_PAD_BYTES,
+    jobId?: string
+  ) {
+    this.jobId = jobId;
+  }
+
+  /** Returns the text of this chunk. Throws on an error event, plaintext event, other job, wrong seq or a chunk that does not open. */
+  feed(event: unknown): string {
+    if (event === null || typeof event !== "object") throw new PrivateStreamError("stream event is not an object");
+    const e = event as Record<string, unknown>;
+    if (e.error && typeof e.error === "object") {
+      const er = e.error as Record<string, unknown>;
+      throw new PrivateStreamError(`stream error: ${String(er.code ?? er.message ?? "unknown")}`);
+    }
+    if (e.object !== "chat.completion.chunk.sealed") throw new PrivateStreamError("unexpected (possibly plaintext) event in a private stream");
+    if (this.finished) throw new PrivateStreamError("chunk after the final chunk");
+    const { job_id: jobId, seq, final, sealed } = e;
+    if (typeof jobId !== "string" || !jobId) throw new PrivateStreamError("sealed chunk has no job_id");
+    if (this.jobId === undefined) this.jobId = jobId;
+    else if (jobId !== this.jobId) throw new PrivateStreamError("sealed chunk belongs to another job");
+    if (typeof seq !== "number" || seq !== this.nextSeq) throw new PrivateStreamError(`expected chunk ${this.nextSeq}, got ${String(seq)}`);
+    if (typeof final !== "boolean") throw new PrivateStreamError("sealed chunk has no final flag");
+    const text = openStreamChunk(this.customerPrivateHex, sealed as SealedEnvelope, { jobId, seq, final, padBytes: this.padBytes });
+    this.nextSeq += 1;
+    this.finished = final;
+    return text;
+  }
+
+  /** Call when the stream ends: no final chunk means the stream was cut short. */
+  close(): void {
+    if (!this.finished) throw new PrivateStreamError("sealed stream ended without its final chunk (truncated)");
+  }
+}
+

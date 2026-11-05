@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "slug": "notebooks",
+  "version": "1.0.0",
+  "name": "JupyterLab notebooks (interactive session)",
+  "description": "JupyterLab with a GPU PyTorch stack for U10 interactive sessions. Bound to 127.0.0.1:8888 with no token, reachable only through the encrypted session channel. No network. Licences: see kits/notebooks/README.md.",
+  "category": "other",
+  "image": "ghcr.io/computecoin/kit-notebooks@sha256:PENDING",
+  "mode": "session",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "inputs": [],
+  "outputs": [],
+  "session": {
+    "mode": "tcp",
+    "tcp_port": 8888,
+    "command": [
+      "jupyter", "lab", "--ip=127.0.0.1", "--port=8888", "--no-browser", "--ServerApp.root_dir=/tmp/workspace",
+      "--IdentityProvider.token=", "--PasswordIdentityProvider.hashed_password=", "--ServerApp.password=",
+      "--ServerApp.disable_check_xsrf=False", "--ServerApp.allow_root=False"
+    ]
+  },
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 8,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 16,
+    "disk_gb": 20
+  },
+  "billing_hints": {
+    "unit": "gpu_second",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "exact",
+    "sample_fraction": 0,
+    "min_samples": 0,
+    "thresholds": {},
+    "owner_decision": "OWNER DECISION: an interactive session has no result to compare, so redundancy sampling is off (sample_fraction 0). The offline gate requires a method name, so 'exact' is a placeholder."
+  }
+}

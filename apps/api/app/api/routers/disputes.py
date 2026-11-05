@@ -256,5 +256,8 @@ async def admin_adjudicate_dispute(
     except ValueError as exc:
         # billing_svc.refund rejects over-cap / unfunded refunds.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except ledger.InsufficientFunds:
+        # Provider earnings already paid out / held: the ledger refused (nothing written). 409, never a 500.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="insufficient_provider_earnings")
     await db.commit()
     return out

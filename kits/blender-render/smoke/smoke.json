@@ -1,0 +1,21 @@
+{
+  "kit": "blender-render",
+  "schema": 1,
+  "purpose": "U5.1: render a 3-frame scene on at least 3 GPU models",
+  "gpu_models_required": ["NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090", "NVIDIA A100 80GB"],
+  "gpu_models_note": "Minimum is 3 distinct models; add a CPU-only run (device=CPU). A HIP run needs a ROCm-based image and is not part of wave 1.",
+  "fixture": {"script": "kits/blender-render/smoke/make_scene.py", "how": "blender -b --python make_scene.py -- scene.blend", "input_name": "scene", "sha256": "PENDING"},
+  "input": {"params": {"frame_start": 1, "frame_end": 3, "engine": "CYCLES", "device": "AUTO", "samples": 32, "resolution_percent": 100, "seed": 1}},
+  "limits": {"max_seconds": 600},
+  "checks": [
+    {"id": "exit_zero", "expect": "container exit code 0 and output.json ok=true"},
+    {"id": "frames", "expect": "frames/frame_0000001.png .. frame_0000003.png exist, 320x240"},
+    {"id": "non_blank", "expect": "each frame has pixel standard deviation > 5"},
+    {"id": "gpu_used", "expect": "when device=AUTO on a GPU host, log shows OPTIX or CUDA device selected (not silent CPU fallback)"},
+    {"id": "cross_gpu", "expect": "frames from different GPU models pass the kit's perceptual verification against each other"},
+    {"id": "resume", "expect": "kill after frame 2, rerun with COMPUTECOIN_RESUME=1 and the checkpoint dir: frames 1-2 are not re-rendered, output identical"},
+    {"id": "autoexec_off", "expect": "a scene with a driver/script that writes /out/pwned is rendered without creating that file"},
+    {"id": "no_network", "expect": "run with --network none succeeds"}
+  ],
+  "record": ["gpu model", "driver", "seconds per frame", "device used", "sha256 of every frame"]
+}

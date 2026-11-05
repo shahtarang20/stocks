@@ -6,6 +6,7 @@ import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -35,8 +36,8 @@ export default function AdminAuditLogsPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Audit logs"
-        description="Immutable record of sensitive administrative actions fetched live from GET /v1/admin/audit-logs. Every entry includes actor, action, target, IP and outcome."
+        title="Audit log"
+        description="A permanent list of important actions, such as refunds, suspensions and payouts. Each line shows who did it, what they did, and whether it worked. Use it to check what happened and who did it."
         action={
           <Button variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
@@ -59,7 +60,7 @@ export default function AdminAuditLogsPage() {
             <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
               <AlertCircle className="h-8 w-8 text-danger" />
               <p className="text-sm text-muted-foreground">
-                {query.error instanceof ApiError ? query.error.message : "Failed to load audit logs"}
+                {query.error instanceof ApiError ? query.error.message : "We could not load the audit log. Select Try again."}
               </p>
               <Button variant="outline" onClick={() => query.refetch()}>
                 <RefreshCw /> Try again
@@ -70,9 +71,9 @@ export default function AdminAuditLogsPage() {
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
               <BookOpen className="h-8 w-8 text-muted-foreground" />
-              <h3 className="font-semibold">No audit log entries</h3>
+              <h3 className="font-semibold">Nothing in the audit log yet</h3>
               <p className="text-sm text-muted-foreground">
-                Sensitive actions (refunds, suspensions, role changes, dispute resolutions) are logged here.
+                Important actions (refunds, suspensions, role changes, closed disputes) are saved here as they happen.
               </p>
             </CardContent>
           </Card>
@@ -82,11 +83,14 @@ export default function AdminAuditLogsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Time</TableHead>
-                  <TableHead>Actor</TableHead>
+                  <TableHead>Done by</TableHead>
                   <TableHead>Action</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead>IP</TableHead>
-                  <TableHead>Outcome</TableHead>
+                  <TableHead>On what</TableHead>
+                  <TableHead>
+                    IP address
+                    <HelpTip term="IP address">The internet address the action came from.</HelpTip>
+                  </TableHead>
+                  <TableHead>Result</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -109,7 +113,7 @@ export default function AdminAuditLogsPage() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={log.outcome === "success" ? "success" : "danger"}>
-                        {log.outcome}
+                        {log.outcome === "success" ? "Worked" : log.outcome === "failure" || log.outcome === "failed" ? "Failed" : log.outcome}
                       </Badge>
                     </TableCell>
                   </TableRow>

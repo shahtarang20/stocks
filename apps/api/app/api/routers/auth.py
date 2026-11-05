@@ -128,6 +128,13 @@ async def register(
         f"register:{ip}", settings.register_rate_limit, settings.REGISTER_RATE_WINDOW_SECONDS
     )
 
+    if settings.AUP_REQUIRED and not (
+        body.accept_aup and body.aup_version == settings.AUP_CURRENT_VERSION
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="aup_not_accepted"
+        )
+
     email = body.email.strip().lower()
     existing = await get_user_by_email(db, email)
     if existing is not None:
@@ -137,6 +144,9 @@ async def register(
         )
 
     user = User(email=email, password_hash=hash_password(body.password), email_verified=False)
+    if body.accept_aup and body.aup_version:
+        user.aup_version = body.aup_version
+        user.aup_accepted_at = utcnow()
     db.add(user)
     await db.flush()
 
@@ -375,6 +385,28 @@ async def refresh(
         expires_in=expires_in,
         csrf_token=new_csrf_token,
     )
+
+
+@router.get("/csrf")
+async def read_csrf_token(request: Request, response: Response) -> dict[str, str]:
+    """Hand the double-submit CSRF token to the web app.
+
+    When the web app and the API sit on different origins, the `csrf_token` cookie
+    belongs to the API host, so page JavaScript cannot read it from `document.cookie`;
+    after any reload the SPA would have no token and every cookie-authenticated
+    POST/PATCH/DELETE (and the cookie refresh) would 403. The caller must already hold
+    the cookie, and only a CORS-allowed origin can read this response, so a hostile
+    site learns nothing it could not already not read.
+    """
+    csrf_cookie = request.cookies.get("csrf_token")
+    if not csrf_cookie or not (
+        "access_token" in request.cookies or "refresh_token" in request.cookies
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return {"csrf_token": csrf_cookie}
 
 
 @router.post("/logout", response_model=MessageResponse)

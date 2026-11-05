@@ -33,16 +33,16 @@ import {
 import { formatMbAsGb, formatRelativeTime } from "@/lib/utils";
 
 const selectClass =
-  "h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+  "h-10 w-full rounded-md border border-input bg-background px-3 text-base text-foreground sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 const PAGE_SIZE = 20;
 
 /** Honest reliability text — never fabricate a rating. */
 function reliabilityText(m: MarketplaceMachine): string {
   const { completed_jobs, success_rate } = m.reliability;
-  if (success_rate == null) return "No history yet";
+  if (success_rate == null) return "No jobs yet";
   const pct = Math.round(success_rate * 100);
-  return `${pct}% success · ${completed_jobs} job${completed_jobs === 1 ? "" : "s"}`;
+  return `${pct}% finished well · ${completed_jobs} job${completed_jobs === 1 ? "" : "s"}`;
 }
 
 export function LiveGpuTable() {
@@ -122,12 +122,12 @@ export function LiveGpuTable() {
             Refresh
           </Button>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           <div className="space-y-1.5">
-            <Label htmlFor="f-model">GPU model</Label>
+            <Label htmlFor="f-model">Graphics card (GPU) model</Label>
             <Input
               id="f-model"
-              placeholder="e.g. H100"
+              placeholder="For example: RTX 4090"
               value={gpuModel}
               onChange={(e) => {
                 setGpuModel(e.target.value);
@@ -136,7 +136,7 @@ export function LiveGpuTable() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-vendor">Vendor</Label>
+            <Label htmlFor="f-vendor">GPU brand</Label>
             <select
               id="f-vendor"
               className={selectClass}
@@ -146,13 +146,13 @@ export function LiveGpuTable() {
                 setPage(1);
               }}
             >
-              <option value="">Any vendor</option>
+              <option value="">Any brand</option>
               <option value="nvidia">NVIDIA</option>
               <option value="amd">AMD</option>
             </select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-runtime">Runtime</Label>
+            <Label htmlFor="f-runtime">GPU software (CUDA or ROCm)</Label>
             <select
               id="f-runtime"
               className={selectClass}
@@ -162,18 +162,18 @@ export function LiveGpuTable() {
                 setPage(1);
               }}
             >
-              <option value="">Any runtime</option>
+              <option value="">Any</option>
               <option value="cuda">CUDA</option>
               <option value="rocm">ROCm</option>
             </select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-vram">Min VRAM (MB)</Label>
+            <Label htmlFor="f-vram">Least GPU memory (MB)</Label>
             <Input
               id="f-vram"
               type="number"
               min={0}
-              placeholder="e.g. 24576"
+              placeholder="For example: 24576"
               value={minVram}
               onChange={(e) => {
                 setMinVram(e.target.value === "" ? "" : Number(e.target.value));
@@ -182,11 +182,11 @@ export function LiveGpuTable() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-price">Max price / hr</Label>
+            <Label htmlFor="f-price">Highest price per hour</Label>
             <Input
               id="f-price"
               inputMode="decimal"
-              placeholder="e.g. 2.50"
+              placeholder="For example: 2.50"
               value={maxPrice}
               onChange={(e) => {
                 setMaxPrice(e.target.value);
@@ -198,7 +198,7 @@ export function LiveGpuTable() {
             <Label htmlFor="f-region">Region</Label>
             <Input
               id="f-region"
-              placeholder="e.g. us-east"
+              placeholder="For example: us-east"
               value={region}
               onChange={(e) => {
                 setRegion(e.target.value);
@@ -207,10 +207,10 @@ export function LiveGpuTable() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-workload">Workload</Label>
+            <Label htmlFor="f-workload">Type of job</Label>
             <Input
               id="f-workload"
-              placeholder="e.g. text-generation"
+              placeholder="For example: text-generation"
               value={workload}
               onChange={(e) => {
                 setWorkload(e.target.value);
@@ -219,7 +219,7 @@ export function LiveGpuTable() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-verif">Verification</Label>
+            <Label htmlFor="f-verif">Hardware check</Label>
             <select
               id="f-verif"
               className={selectClass}
@@ -229,16 +229,18 @@ export function LiveGpuTable() {
                 setPage(1);
               }}
             >
-              <option value="">Any status</option>
-              <option value="detected">Detected</option>
+              <option value="">Any</option>
+              <option value="detected">Reported by the computer</option>
             </select>
           </div>
         </div>
         <div className="mt-4 flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             {query.isLoading
-              ? "Searching live machines…"
-              : `${total} live ${total === 1 ? "machine" : "machines"}`}
+              ? "Looking for computers…"
+              : query.isError
+                ? "The list is not available right now"
+                : `${total} ${total === 1 ? "computer" : "computers"} online`}
           </p>
           <Button variant="ghost" size="sm" onClick={resetFilters}>
             Reset filters
@@ -263,16 +265,16 @@ export function LiveGpuTable() {
           </CardContent>
         </Card>
       ) : query.isError ? (
-        <Card className="border-danger/40">
+        <Card className="border-danger/40" role="alert">
           <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
             <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
               <AlertCircle className="h-5 w-5" />
             </span>
-            <h3 className="font-semibold">Couldn&apos;t load the marketplace</h3>
+            <h3 className="font-semibold">We could not load the list of computers</h3>
             <p className="max-w-md text-sm text-muted-foreground">
               {query.error instanceof ApiError
                 ? query.error.message
-                : "An unexpected error occurred."}
+                : "Something went wrong. Check your internet connection, then press Try again."}
             </p>
             <Button variant="outline" onClick={() => query.refetch()}>
               <RefreshCw /> Try again
@@ -285,11 +287,11 @@ export function LiveGpuTable() {
             <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
               <Server className="h-6 w-6" />
             </span>
-            <h3 className="font-semibold">No machines online yet</h3>
+            <h3 className="font-semibold">No computers are online right now</h3>
             <p className="max-w-md text-sm text-muted-foreground">
-              The marketplace shows only live, registered machines that are
-              online, available, and priced. Nothing matches right now — check
-              back as providers bring hardware online, or widen your filters.
+              This list only shows computers that are online, free to use and
+              priced. Nothing matches right now. Try again later, or press
+              Reset filters to see everything.
             </p>
             <Button variant="outline" onClick={resetFilters}>
               Reset filters
@@ -301,14 +303,14 @@ export function LiveGpuTable() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>GPU / VRAM</TableHead>
-                <TableHead>CPU / RAM</TableHead>
+                <TableHead>Graphics card (GPU) and its memory</TableHead>
+                <TableHead>Processor and memory</TableHead>
                 <TableHead>Region</TableHead>
-                <TableHead className="text-right">Price / hr</TableHead>
-                <TableHead>Capability</TableHead>
-                <TableHead className="text-right">Slots</TableHead>
-                <TableHead>Reliability</TableHead>
-                <TableHead>Heartbeat</TableHead>
+                <TableHead className="text-right">Price per hour</TableHead>
+                <TableHead>Hardware check</TableHead>
+                <TableHead className="text-right">Free spots</TableHead>
+                <TableHead>Past jobs</TableHead>
+                <TableHead>Last seen</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
@@ -326,8 +328,8 @@ export function LiveGpuTable() {
                           variant="neutral"
                           className={
                             m.gpu_vendor === "amd"
-                              ? "border-red-500/30 text-red-400 bg-red-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
-                              : "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 text-[10px] uppercase font-mono px-1.5 py-0"
+                              ? "border-red-600/30 text-red-700 bg-red-500/10 dark:border-red-500/30 dark:text-red-400 text-[10px] uppercase font-mono px-1.5 py-0"
+                              : "border-emerald-600/30 text-emerald-700 bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-400 text-[10px] uppercase font-mono px-1.5 py-0"
                           }
                         >
                           {m.gpu_vendor}
@@ -343,14 +345,14 @@ export function LiveGpuTable() {
                       ) : null}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {m.gpu_model ? `${formatMbAsGb(m.vram_mb)} VRAM` : "—"}
+                      {m.gpu_model ? `${formatMbAsGb(m.vram_mb)} GPU memory` : "—"}
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="text-sm">{m.cpu_model || "—"}</div>
                     <div className="text-xs text-muted-foreground">
-                      {m.cpu_cores ? `${m.cpu_cores} vCPU · ` : ""}
-                      {formatMbAsGb(m.ram_mb)} RAM
+                      {m.cpu_cores ? `${m.cpu_cores} CPU cores · ` : ""}
+                      {formatMbAsGb(m.ram_mb)} memory
                     </div>
                   </TableCell>
                   <TableCell>
@@ -368,9 +370,9 @@ export function LiveGpuTable() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="neutral" title="Self-reported by the agent">
+                    <Badge variant="neutral" title="The computer reported this itself. ComputeCoin has not checked it.">
                       {m.verification_status === "detected"
-                        ? "Detected"
+                        ? "Reported by the computer"
                         : m.verification_status}
                     </Badge>
                   </TableCell>
@@ -389,7 +391,7 @@ export function LiveGpuTable() {
                       size="sm"
                       onClick={() => openQuote(m)}
                     >
-                      Get quote
+                      Get a price quote
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -427,9 +429,10 @@ export function LiveGpuTable() {
       ) : null}
 
       <p className="text-xs text-muted-foreground">
-        Live listings from registered providers. Prices are in{" "}
-        {CREDITS_LABEL} — no real payment rail in this phase. Capability is
-        self-reported by each agent (Detected).
+        These computers are shared by hosts. Prices are in {CREDITS_LABEL}, not
+        real money. Each computer reports its own hardware, and ComputeCoin has
+        not checked it yet. Free spots shows how many jobs a computer can take
+        at the same time.
       </p>
 
       <QuoteDialog

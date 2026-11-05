@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "slug": "blender-render",
+  "version": "1.0.0",
+  "name": "Blender render (Cycles / Eevee)",
+  "description": "Renders a frame range of a customer .blend file with the Blender command line. Auto-run scripts are disabled. Blender is GPL; see kits/blender-render/README.md.",
+  "category": "3d",
+  "image": "ghcr.io/computecoin/kit-blender-render@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "frame_start",
+      "frame_end"
+    ],
+    "properties": {
+      "frame_start": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1048574
+      },
+      "frame_end": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1048574
+      },
+      "frame_step": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "default": 1
+      },
+      "engine": {
+        "type": "string",
+        "enum": [
+          "CYCLES",
+          "EEVEE"
+        ],
+        "default": "CYCLES"
+      },
+      "device": {
+        "type": "string",
+        "enum": [
+          "AUTO",
+          "CPU",
+          "CUDA",
+          "OPTIX",
+          "HIP"
+        ],
+        "default": "AUTO"
+      },
+      "samples": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 8192,
+        "default": 128
+      },
+      "resolution_percent": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 200,
+        "default": 100
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647,
+        "default": 0
+      },
+      "denoise": {
+        "type": "boolean",
+        "default": false
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "PNG"
+        ],
+        "default": "PNG"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "scene",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "frames",
+      "path": "/out/frames"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 8,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 16,
+    "disk_gb": 40
+  },
+  "billing_hints": {
+    "unit": "frame",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "perceptual",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {
+      "max_phash_distance": 0.15,
+      "max_mean_abs_diff": 0.05,
+      "max_block_diff": 0.2,
+      "min_ssim": 0.8
+    },
+    "owner_decision": "Cycles is a path tracer: honest re-renders differ by sampling noise, so thresholds are looser than ai-image. Conservative defaults pending benchmark data (U5.3); owner sets final values."
+  }
+}

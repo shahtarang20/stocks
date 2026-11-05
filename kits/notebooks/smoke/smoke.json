@@ -1,0 +1,62 @@
+{
+  "kit": "notebooks",
+  "schema": 1,
+  "purpose": "U12: smoke test of the notebooks session image on at least 3 GPU models",
+  "gpu_models_required": [
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA A100 80GB"
+  ],
+  "gpu_models_note": "Minimum is 3 distinct models; the fleet is the owner's decision. A session image keeps running, so this spec uses a `session` step (kits/README.md, Smoke test spec): kits/tools/smoke_runner.py starts the image like session_agent.build_session_argv (tcp mode) and talks to Jupyter with `docker exec -i <c> nc 127.0.0.1 8888`.",
+  "fixture": {
+    "how": "none",
+    "input_name": null,
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {}
+  },
+  "limits": {
+    "max_seconds": 300
+  },
+  "checks": [
+    {
+      "id": "jupyter_up",
+      "expect": "inside the container, `nc 127.0.0.1 8888` connects and GET /api/status over it returns 200 within 60 s"
+    },
+    {
+      "id": "loopback_only",
+      "expect": "the server is not reachable from another address of the container and no port is published"
+    },
+    {
+      "id": "gpu_visible",
+      "expect": "a kernel running torch.cuda.is_available() returns true and names the GPU"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds; an outbound connection from a kernel fails"
+    },
+    {
+      "id": "readonly_nonroot",
+      "expect": "starts with --read-only --tmpfs /tmp --cap-drop ALL as a non-root user; the workspace under /tmp/workspace is writable"
+    }
+  ],
+  "record": [
+    "gpu model",
+    "driver",
+    "seconds to ready",
+    "sha256 of the image"
+  ],
+  "steps": [
+    {
+      "type": "session",
+      "id": "jupyter",
+      "tcp_port": 8888,
+      "ready_timeout_seconds": 120,
+      "request": "GET /api/status HTTP/1.0\r\nHost: 127.0.0.1:8888\r\n\r\n",
+      "expect": {
+        "regex": "^HTTP/1\\.[01] 200"
+      }
+    }
+  ]
+}

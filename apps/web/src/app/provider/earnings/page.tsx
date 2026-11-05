@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, RefreshCw, Wallet } from "lucide-react";
+import { RefreshCw, Wallet } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,8 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { ledgerDirectionVariant, humanizeStatus } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
+import { CopyId, ErrorState, RelativeTime } from "@/components/console/bits";
+import { capitalize, creditsName } from "@/lib/format";
 
 function EarningStat({ label, value }: { label: string; value: string }) {
   return (
@@ -51,15 +52,15 @@ export default function ProviderEarningsPage() {
 
   const earnings = query.data;
   const recent: EarningEntry[] = earnings?.recent ?? [];
-  const currency = earnings?.currency ?? "USDC_CREDITS";
+  const currency = creditsName(earnings?.currency);
 
   return (
     <>
       <ConsolePageHeader
         title="Earnings"
-        description="Live accrued earnings from the double-entry ledger as jobs settle on your hardware. Amounts are simulated credits, shown verbatim."
+        description="What your computers have earned. You earn when a customer job finishes, not when it starts or fails. Amounts are test credits, not real money."
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               onClick={() => query.refetch()}
@@ -96,40 +97,30 @@ export default function ProviderEarningsPage() {
           </Card>
         </div>
       ) : query.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load earnings</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {query.error instanceof ApiError
-                ? query.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => query.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your earnings"
+          message={query.error instanceof ApiError ? query.error.message : undefined}
+          onRetry={() => query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : (
         <div className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-3">
-            <EarningStat label="Available" value={earnings?.available ?? "0.00"} />
+            <EarningStat label="Ready to pay out" value={earnings?.available ?? "0.00"} />
             <EarningStat
-              label="Lifetime"
+              label="Total earned so far"
               value={earnings?.lifetime ?? earnings?.available ?? "0.00"}
             />
             <Card>
               <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">Currency</p>
-                <p className="mt-1 text-2xl font-bold">{currency}</p>
+                <p className="text-sm text-muted-foreground">Unit</p>
+                <p className="mt-1 break-all text-xl font-bold sm:text-2xl">{currency}</p>
               </CardContent>
             </Card>
           </div>
           <p className="text-xs text-muted-foreground">
-            {CREDITS_LABEL}. Earnings accrue to your provider_earnings account as
-            each job settles. Request a payout to move available credits out.
+            {CREDITS_LABEL}. Your earnings are added when each job finishes. To take credits
+            out, ask for a payout on the Payouts page. A person approves it.
           </p>
 
           <Card>
@@ -145,18 +136,19 @@ export default function ProviderEarningsPage() {
                   </span>
                   <h3 className="font-semibold">No earnings yet</h3>
                   <p className="max-w-md text-sm text-muted-foreground">
-                    When a customer job settles on your hardware, your share of the
-                    capture appears here.
+                    When a customer job finishes on your computer, your share appears here.
+                    To get jobs, your computer must be online and have a price. Check both on the
+                    My computers page.
                   </p>
                 </div>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Kind</TableHead>
-                      <TableHead>Direction</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Reference</TableHead>
+                      <TableHead>What for</TableHead>
+                      <TableHead>Money in or out</TableHead>
+                      <TableHead className="text-right">Amount (credits)</TableHead>
+                      <TableHead className="hidden md:table-cell">Job or note</TableHead>
                       <TableHead>When</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -169,7 +161,7 @@ export default function ProviderEarningsPage() {
                         <TableCell>
                           {e.direction ? (
                             <Badge variant={ledgerDirectionVariant(e.direction)}>
-                              {e.direction}
+                              {capitalize(e.direction)}
                             </Badge>
                           ) : (
                             "—"
@@ -178,11 +170,11 @@ export default function ProviderEarningsPage() {
                         <TableCell className="text-right font-mono tabular-nums">
                           {e.amount}
                         </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          {e.reference ?? e.job_id ?? "—"}
+                        <TableCell className="hidden text-muted-foreground md:table-cell">
+                          <CopyId id={e.reference ?? e.job_id} length={12} label="Copy reference" />
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {e.created_at ? formatRelativeTime(e.created_at) : "—"}
+                          <RelativeTime iso={e.created_at} />
                         </TableCell>
                       </TableRow>
                     ))}

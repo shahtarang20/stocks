@@ -38,16 +38,16 @@ export function ProviderGate({ children }: { children: React.ReactNode }) {
         </span>
         <h2 className="text-lg font-semibold">You are not a host yet</h2>
         <p className="text-sm text-muted-foreground">
-          This area is for people who share their GPU on the network. Your account is a
-          customer account. You can add hosting to it at any time, and keep using it as a
-          customer too.
+          This area is for people who share their computer on ComputeCoin. Your account is a
+          customer account right now. You can turn on hosting at any time and keep using your
+          account as a customer too.
         </p>
         {becomeHost.isError ? (
           <p role="alert" className="flex items-start justify-center gap-2 text-sm text-danger">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             {becomeHost.error instanceof ApiError
               ? becomeHost.error.message
-              : "Could not set up hosting. Please try again."}
+              : "We could not turn on hosting. Check your internet connection and try again."}
           </p>
         ) : null}
         <Button onClick={() => becomeHost.mutate()} disabled={becomeHost.isPending}>

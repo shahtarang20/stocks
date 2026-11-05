@@ -1,0 +1,20 @@
+{
+  "kit": "ai-image",
+  "schema": 1,
+  "purpose": "U5.1: the kit must produce valid, deterministic-seed output on at least 3 GPU models",
+  "gpu_models_required": ["NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090", "NVIDIA A100 80GB"],
+  "gpu_models_note": "Minimum is 3 distinct models, each with >= min_vram_gb. List is a proposal; the owner decides the fleet.",
+  "input": {"params": {"prompts": ["a red cube on a white table, studio light", "a lighthouse at dusk"], "seed": 7, "width": 512, "height": 512, "steps": 4}},
+  "inputs_files": {},
+  "limits": {"max_seconds": 900},
+  "checks": [
+    {"id": "exit_zero", "expect": "container exit code 0 and output.json ok=true"},
+    {"id": "file_count", "expect": "images/img_00000.png and images/img_00001.png exist"},
+    {"id": "image_size", "expect": "each PNG is 512x512 RGB"},
+    {"id": "non_blank", "expect": "pixel standard deviation of each image > 8"},
+    {"id": "same_host_repeat", "expect": "re-run on the same GPU gives perceptual-verification status 'passed'"},
+    {"id": "cross_gpu", "expect": "outputs of different GPU models pass the kit's perceptual verification against each other"},
+    {"id": "no_network", "expect": "run with --network none succeeds"}
+  ],
+  "record": ["gpu model", "driver", "seconds per image", "peak vram", "sha256 of every output"]
+}

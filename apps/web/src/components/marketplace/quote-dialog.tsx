@@ -1,5 +1,6 @@
 "use client";
 
+import { parseApiDate } from "@/lib/format";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
@@ -39,24 +40,24 @@ import {
 import { useAuth } from "@/lib/auth-context";
 
 const selectClass =
-  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base text-foreground shadow-sm sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 const schema = z.object({
-  workload_type: z.string().min(1, "Choose a workload"),
+  workload_type: z.string().min(1, "Choose a type of job."),
   estimated_minutes: z.coerce
-    .number({ invalid_type_error: "Enter a whole number of minutes" })
-    .int("Must be a whole number")
-    .min(1, "Must be at least 1 minute")
-    .max(100000, "Too large"),
+    .number({ invalid_type_error: "Type a whole number of minutes, like 60." })
+    .int("Use a whole number, like 60.")
+    .min(1, "Use at least 1 minute.")
+    .max(100000, "That is too many minutes. Use a smaller number."),
   gpu_count: z.coerce
-    .number({ invalid_type_error: "Enter a whole number" })
-    .int("Must be a whole number")
-    .min(1, "Must be at least 1"),
+    .number({ invalid_type_error: "Type a whole number, like 1." })
+    .int("Use a whole number, like 1.")
+    .min(1, "Use at least 1."),
   max_authorized_spend: z
     .string()
     .trim()
     .refine((v) => v === "" || /^\d+(\.\d{1,2})?$/.test(v), {
-      message: "Enter a decimal like 5.00 (or leave blank)",
+      message: "Type an amount like 5.00, or leave this empty.",
     }),
 });
 
@@ -67,16 +68,16 @@ function reserveErrorMessage(err: unknown): string {
   const code = apiErrorCode(err);
   switch (code) {
     case "no_capacity":
-      return "This machine is fully reserved right now — no free slots. Try another machine or get a new quote later.";
+      return "This computer has no free spots right now. Pick another computer, or try again later.";
     case "quote_expired":
-      return "This quote has expired. Get a new quote to lock in a fresh price.";
+      return "This price quote has run out of time. Get a new quote to see a fresh price.";
     case "quote_already_reserved":
-      return "This quote has already been reserved.";
+      return "You already reserved a spot with this quote. See it under Reservations.";
     case "budget_exceeded":
-      return "The total exceeds your authorized spend.";
+      return "The total is more than the most you said you would spend. Raise that limit or choose fewer minutes, then get a new quote.";
     default:
       if (err instanceof ApiError) return err.message;
-      return "Something went wrong. Please try again.";
+      return "Something went wrong. Please try again in a minute.";
   }
 }
 
@@ -115,7 +116,7 @@ function useCountdown(expiresAt: string | null): number {
     return () => clearInterval(id);
   }, [expiresAt]);
   if (!expiresAt) return 0;
-  const target = new Date(expiresAt).getTime();
+  const target = parseApiDate(expiresAt).getTime();
   if (Number.isNaN(target)) return 0;
   return Math.max(0, Math.round((target - now) / 1000));
 }
@@ -216,10 +217,10 @@ export function QuoteDialog({
         <DialogHeader>
           <DialogTitle>
             {reservation
-              ? "Reservation confirmed"
+              ? "Spot reserved"
               : quote
-                ? "Review quote"
-                : "Get a quote"}
+                ? "Check your price quote"
+                : "Get a price quote"}
           </DialogTitle>
           <DialogDescription>
             {machine ? (
@@ -227,7 +228,7 @@ export function QuoteDialog({
                 {machine.gpu_model ?? "CPU-only"}
                 {machine.gpu_count > 1 ? ` ×${machine.gpu_count}` : ""}
                 {machine.region ? ` · ${machine.region}` : ""} ·{" "}
-                <span className="font-mono">{machine.price_per_hour}</span>/hr
+                <span className="font-mono">{machine.price_per_hour}</span> per hour
               </>
             ) : null}
           </DialogDescription>
@@ -239,17 +240,17 @@ export function QuoteDialog({
             <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
               <LogIn className="h-5 w-5" />
             </span>
-            <h3 className="font-semibold">Log in to request a quote</h3>
+            <h3 className="font-semibold">Log in to get a price quote</h3>
             <p className="max-w-sm text-sm text-muted-foreground">
-              Browsing the marketplace is open to everyone, but quotes and
-              reservations are tied to your account.
+              Anyone can look at the list of computers. To get a price quote
+              or reserve a spot, you need an account.
             </p>
             <div className="flex gap-2">
               <Button asChild variant="outline">
                 <Link href="/login">Log in</Link>
               </Button>
               <Button asChild>
-                <Link href="/register">Create account</Link>
+                <Link href="/register">Create an account</Link>
               </Button>
             </div>
           </div>
@@ -260,18 +261,18 @@ export function QuoteDialog({
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
               <div>
                 <p className="font-medium text-foreground">
-                  Slot held on this machine.
+                  A spot is held for you on this computer.
                 </p>
                 <p className="mt-1 text-muted-foreground">
-                  The lease expires{" "}
-                  {new Date(reservation.expires_at).toLocaleString()}. No credits
-                  are charged for a reservation.
+                  The spot is held until{" "}
+                  {parseApiDate(reservation.expires_at).toLocaleString()}. No credits
+                  are charged for holding a spot.
                 </p>
               </div>
             </div>
             <dl className="space-y-2 rounded-md border border-border bg-surface-2/40 p-4 text-sm">
               <div className="flex justify-between">
-                <dt className="text-muted-foreground">Reservation ID</dt>
+                <dt className="text-muted-foreground">Reservation number</dt>
                 <dd className="font-mono text-xs">
                   {reservation.reservation_id}
                 </dd>
@@ -283,7 +284,7 @@ export function QuoteDialog({
                 </dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted-foreground">Slots held</dt>
+                <dt className="text-muted-foreground">Spots held</dt>
                 <dd className="font-mono">{reservation.slots}</dd>
               </div>
             </dl>
@@ -292,7 +293,7 @@ export function QuoteDialog({
                 Close
               </Button>
               <Button asChild>
-                <Link href="/dashboard/reservations">View reservations</Link>
+                <Link href="/dashboard/reservations">See my reservations</Link>
               </Button>
             </DialogFooter>
           </div>
@@ -308,7 +309,7 @@ export function QuoteDialog({
             >
               <span className="flex items-center gap-2 text-muted-foreground">
                 <Clock className="h-4 w-4" />
-                {expired ? "Quote expired" : "Expires in"}
+                {expired ? "Quote ran out of time" : "Price is held for"}
               </span>
               <span
                 className={
@@ -323,35 +324,34 @@ export function QuoteDialog({
 
             <div className="space-y-3 rounded-md border border-border p-4">
               <div className="flex items-center gap-2 text-sm font-medium">
-                <Receipt className="h-4 w-4 text-muted-foreground" /> Itemized
-                breakdown
+                <Receipt className="h-4 w-4 text-muted-foreground" /> What you would pay
               </div>
               <LineItem
-                label="Price / hour"
+                label="Price per hour"
                 value={quote.breakdown.price_per_hour}
               />
               <LineItem
-                label="Estimated hours"
+                label="Hours (your estimate)"
                 value={quote.breakdown.estimated_hours}
               />
               <LineItem
-                label={`GPU cost (×${quote.gpu_count})`}
+                label={`Graphics card (GPU) cost (×${quote.gpu_count})`}
                 value={quote.breakdown.gpu_cost}
               />
               <LineItem
-                label={`Platform fee (${quote.breakdown.platform_fee_rate})`}
+                label={`Service fee (${quote.breakdown.platform_fee_rate})`}
                 value={quote.breakdown.platform_fee}
               />
               <LineItem label="Total" value={quote.breakdown.total} strong />
               <p className="pt-1 text-xs text-muted-foreground">
-                {quote.currency} · {CREDITS_LABEL}. The platform fee is shown
-                above before you reserve.
+                Amounts are in {CREDITS_LABEL}. The service fee is already
+                included in the total.
               </p>
             </div>
 
             {quote.max_authorized_spend ? (
               <p className="text-xs text-muted-foreground">
-                Authorized spend ceiling:{" "}
+                The most you said you would spend:{" "}
                 <span className="font-mono">{quote.max_authorized_spend}</span>
               </p>
             ) : null}
@@ -368,11 +368,11 @@ export function QuoteDialog({
 
             <DialogFooter>
               {expired ? (
-                <Button onClick={getNewQuote}>Get new quote</Button>
+                <Button onClick={getNewQuote}>Get a new quote</Button>
               ) : (
                 <>
                   <Button variant="outline" onClick={getNewQuote}>
-                    Get new quote
+                    Get a new quote
                   </Button>
                   <Button
                     disabled={reserveMut.isPending}
@@ -383,7 +383,7 @@ export function QuoteDialog({
                         <Loader2 className="animate-spin" /> Reserving…
                       </>
                     ) : (
-                      "Reserve"
+                      "Reserve a spot"
                     )}
                   </Button>
                 </>
@@ -408,14 +408,14 @@ export function QuoteDialog({
             ) : null}
 
             <div className="space-y-1.5">
-              <Label htmlFor="workload_type">Workload</Label>
+              <Label htmlFor="workload_type">Type of job</Label>
               <select
                 id="workload_type"
                 className={selectClass}
                 {...register("workload_type")}
               >
                 {workloads.length === 0 ? (
-                  <option value="">No supported workloads</option>
+                  <option value="">This computer has no job types yet</option>
                 ) : (
                   workloads.map((w) => (
                     <option key={w} value={w}>
@@ -433,7 +433,7 @@ export function QuoteDialog({
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label htmlFor="estimated_minutes">Estimated minutes</Label>
+                <Label htmlFor="estimated_minutes">How many minutes do you need?</Label>
                 <Input
                   id="estimated_minutes"
                   type="number"
@@ -448,7 +448,7 @@ export function QuoteDialog({
                 ) : null}
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="gpu_count">GPU count</Label>
+                <Label htmlFor="gpu_count">Number of graphics cards (GPUs)</Label>
                 <Input
                   id="gpu_count"
                   type="number"
@@ -463,7 +463,7 @@ export function QuoteDialog({
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Machine reports {machine?.gpu_count ?? 0} GPU(s).
+                    This computer has {machine?.gpu_count ?? 0}.
                   </p>
                 )}
               </div>
@@ -471,12 +471,12 @@ export function QuoteDialog({
 
             <div className="space-y-1.5">
               <Label htmlFor="max_authorized_spend">
-                Max authorized spend (optional)
+                Most you want to spend (optional)
               </Label>
               <Input
                 id="max_authorized_spend"
                 inputMode="decimal"
-                placeholder="e.g. 5.00"
+                placeholder="For example: 5.00"
                 aria-invalid={Boolean(errors.max_authorized_spend)}
                 {...register("max_authorized_spend")}
               />
@@ -486,7 +486,7 @@ export function QuoteDialog({
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Quotes over this ceiling are rejected. {CREDITS_LABEL}.
+                  If the total would be higher than this, we will not give you a quote. Amounts are in {CREDITS_LABEL}.
                 </p>
               )}
             </div>
@@ -505,10 +505,10 @@ export function QuoteDialog({
               >
                 {quoteMut.isPending ? (
                   <>
-                    <Loader2 className="animate-spin" /> Getting quote…
+                    <Loader2 className="animate-spin" /> Getting your quote…
                   </>
                 ) : (
-                  "Get quote"
+                  "Get my price quote"
                 )}
               </Button>
             </DialogFooter>

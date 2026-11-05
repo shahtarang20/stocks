@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { PageHero } from "@/components/layout/page-hero";
 import { Prose } from "@/components/content";
 
 export const metadata: Metadata = {
   title: "Terms of Service",
-  description: "Phase 1 preview terms for ComputeCoin.",
+  description: "Preview terms for ComputeCoin.",
 };
 
 export default function TermsPage() {
@@ -13,11 +14,17 @@ export default function TermsPage() {
       <PageHero
         eyebrow="Legal"
         title="Terms of Service"
-        description="Preview terms for the Phase 1 developer release. These are a plain-language placeholder and are not final legal terms."
+        description="Preview terms for the developer preview. These are a plain-language placeholder and are not final legal terms."
       />
       <div className="container space-y-8 py-12">
+        <div className="max-w-3xl rounded-md border border-border bg-surface px-4 py-3 text-sm">
+          <p className="font-medium">In short</p>
+          <p className="mt-1 text-muted-foreground">
+            This is a preview. Things can change or break, and example data is not real. Nothing here promises that the COMPUTE coin has or will keep any value. Credits are not coins. These are placeholder terms, not final legal terms.
+          </p>
+        </div>
         <Prose>
-          <p className="text-xs">Last updated: Phase 1 preview.</p>
+          <p className="text-xs">Last updated: preview version.</p>
           <h2>1. Preview service</h2>
           <p>
             ComputeCoin is provided as a developer preview. Features may change,
@@ -35,7 +42,8 @@ export default function TermsPage() {
           <p>
             Workloads must comply with applicable law and must not infringe
             others&apos; rights. Providers must honor the isolation and
-            availability obligations of their verification tier.
+            availability obligations of their verification tier. See the{" "}
+            <Link href="/legal/aup">Acceptable Use Policy</Link> (draft).
           </p>
           <h2>4. Payments and settlement</h2>
           <p>

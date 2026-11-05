@@ -411,7 +411,7 @@ single point of trust, verifiable by the customer"*, which may be used only afte
 
 ## 5. End-to-end verification suite (the readiness test)
 
-Automated in `tests/e2e/proof_of_privacy_e2e.py`, runnable against a local stack (software attestation)
+Automated in `tests/e2e/test_proof_of_privacy_e2e.py`, runnable against a local stack (software attestation)
 and against staging with real hardware. Every scenario writes a pass/fail line; readiness requires all.
 
 | ID | Scenario | Passes when |

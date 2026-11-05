@@ -108,6 +108,9 @@ def run(
     base_url = server or config.api_url
     period = interval if interval is not None else float(config.heartbeat_interval_seconds)
     report = build_capability_report(config_gpu_vendor=config.gpu_vendor)
+    from .thermal import ThermalGuard
+
+    thermal_guard = ThermalGuard.from_config(config)  # B6: report "throttled" when the GPU is too hot
 
     def _emit(i: int, result) -> None:
         label = f"{i + 1}/{iterations}" if iterations > 0 else f"{i + 1}"
@@ -127,6 +130,7 @@ def run(
             iterations=iterations,
             interval=period,
             emit=_emit,
+            availability_fn=thermal_guard.availability,
         )
     except HeartbeatAuthError as exc:
         typer.echo(f"heartbeat rejected (re-enroll needed): {exc}")
@@ -174,7 +178,9 @@ def work(
 
     def _emit(i: int, summary) -> None:
         label = f"{i + 1}"
-        if summary.get("error"):
+        if summary.get("throttled"):
+            typer.echo(f"iter {label}: GPU too hot, not claiming")
+        elif summary.get("error"):
             typer.echo(f"iter {label}: error {summary['error']}")
         elif summary.get("claimed"):
             typer.echo(
@@ -182,6 +188,10 @@ def work(
             )
         else:
             typer.echo(f"iter {label}: no job available")
+
+    from .thermal import ThermalGuard
+
+    thermal_guard = ThermalGuard.from_config(config)  # B6: no new claim while the GPU is at its temperature cap
 
     poll_loop(
         base_url,
@@ -191,7 +201,35 @@ def work(
         interval=interval,
         emit=_emit,
         attestation_manager=_attestation_manager(base_url, config, private_tier),
+        thermal_guard=thermal_guard,
+        egress_proxy_image=config.egress_proxy_image,
+        multinode_network=config.multinode_network,
+        multinode_network_firewalled=config.multinode_network_firewalled,
+        cluster_addr=config.cluster_addr,
     )
+
+
+@app.command()
+def sessions(
+    server: Optional[str] = typer.Option(
+        None, "--server", help="Backend base URL (defaults to the stored api_url)."
+    ),
+    once: bool = typer.Option(False, "--once", help="Serve at most one session claim attempt, then exit."),
+    interval: float = typer.Option(5.0, "--interval", help="Seconds to wait after an empty claim."),
+) -> None:
+    """Serve interactive sessions (U10): outbound-only, end-to-end encrypted to the browser."""
+    config = AgentConfig.load()
+    if not config.has_machine_credential():
+        typer.echo(
+            "Machine has no backend credential. Run "
+            "`computecoin-agent enroll --token enr_... --server <url>` first."
+        )
+        raise typer.Exit(code=1)
+    from .executor import DockerExecutor
+    from .session_agent import SessionApi, run_forever
+
+    api = SessionApi(server or config.api_url, config.machine_id, config.machine_secret)
+    run_forever(api, DockerExecutor(), poll_seconds=interval, once=once)
 
 
 @app.command()
@@ -230,10 +268,16 @@ def start(
     typer.echo(f"Connecting to: {base_url}")
     typer.echo(f"Heartbeat interval: {period}s | Job poll interval: {poll_interval}s")
 
+    from .thermal import ThermalGuard, apply_power_limit
+
+    thermal_guard = ThermalGuard.from_config(config)
+    apply_power_limit(config.gpu_power_limit_w)  # best effort; never fails startup
+
     hb_thread = threading.Thread(
         target=heartbeat_loop,
         args=(base_url, config.machine_id, config.machine_secret),
         kwargs={
+            "availability_fn": thermal_guard.availability,
             "report": report,
             "iterations": 0,
             "interval": period,
@@ -244,6 +288,18 @@ def start(
         daemon=True,
     )
     hb_thread.start()
+
+    if config.netbench_enabled:  # U13: off by default; the responder binds ONLY to cluster_addr
+        from .netbench import start_netbench
+
+        if not config.cluster_addr:
+            typer.echo("[netbench] netbench_enabled but cluster_addr is not set; benchmark not started")
+        else:
+            try:
+                start_netbench(base_url, config.machine_id, config.machine_secret, config.cluster_addr,
+                               emit=typer.echo)
+            except ValueError as exc:
+                typer.echo(f"[netbench] not started: {exc}")
 
     def _worker_emit(i: int, summary: dict) -> None:
         if summary.get("claimed"):
@@ -260,6 +316,11 @@ def start(
             interval=poll_interval,
             emit=_worker_emit,
             attestation_manager=_attestation_manager(base_url, config, private_tier),
+            thermal_guard=thermal_guard,
+            egress_proxy_image=config.egress_proxy_image,
+            multinode_network=config.multinode_network,
+            multinode_network_firewalled=config.multinode_network_firewalled,
+            cluster_addr=config.cluster_addr,
         )
     except (KeyboardInterrupt, SystemExit):
         typer.echo("\nStopping ComputeCoin agent gracefully...")
@@ -272,12 +333,12 @@ def _attestation_manager(base_url: str, config: "AgentConfig", tier: Optional[st
         typer.echo("--private-tier must be sealed, sealed_pro or confidential")
         raise typer.Exit(code=2)
     from .attestation import AttestationManager
-    from .tpm import hardware_provider
+    from .tee import hardware_for_tier
 
     return AttestationManager(
         base_url, config.machine_id, config.machine_secret, tier=tier,
         on_error=lambda exc: typer.echo(f"[attest] {exc}"),
-        hardware=hardware_provider(config.tpm()),
+        hardware=hardware_for_tier(config, tier),
     )
 
 
@@ -296,7 +357,8 @@ def attest(
     and security locks match trusted criteria (ADR-0005, WP2).
     """
     from .attestation import AttestationClientError, perform_attestation
-    from .tpm import TpmError, hardware_provider
+    from .tee import hardware_for_tier
+    from .tpm import TpmError
 
     config = AgentConfig.load()
     if not config.has_machine_credential():
@@ -311,7 +373,7 @@ def attest(
             config.machine_id,
             config.machine_secret,
             tier=tier,
-            hardware=hardware_provider(config.tpm()),
+            hardware=hardware_for_tier(config, tier),
         )
     except (AttestationClientError, TpmError) as exc:
         typer.echo(f"Attestation failed: {exc}")

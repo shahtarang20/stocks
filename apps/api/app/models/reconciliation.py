@@ -47,3 +47,25 @@ class ChainReconciliationRun(Base):
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # False while running and for any run that found drift or raised.
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class StakeSyncRun(Base):
+    """One pass of the vault -> database stake sync (A1)."""
+
+    __tablename__ = "stake_sync_runs"
+    __table_args__ = (Index("ix_stake_sync_runs_chain_started", "chain_id", "started_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    chain_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # The block the vault was read at (latest minus confirmations); null if the chain was unreachable.
+    block_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    started_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    machines_checked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    machines_changed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # False while running and for any run that recorded an error.
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

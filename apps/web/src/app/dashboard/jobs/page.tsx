@@ -1,18 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import {
-  AlertCircle,
-  ListChecks,
-  Plus,
-  RefreshCw,
-} from "lucide-react";
+import { ListChecks, Plus, RefreshCw } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { CopyButton, EmptyState, ErrorState, RelativeTime, TableSkeleton } from "@/components/console/bits";
+import { ExecutionModeBadge, JobStatusBadge } from "@/components/jobs/status-badge";
 import {
   Table,
   TableBody,
@@ -22,17 +18,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api, ApiError, type Job } from "@/lib/api";
+import { jobTypeLabel, shortId } from "@/lib/jobs";
 import { useAuth } from "@/lib/auth-context";
-import { formatRelativeTime } from "@/lib/utils";
-import {
-  isSimulated,
-  jobStatusLabel,
-  jobStatusVariant,
-  shortId,
-} from "@/lib/jobs";
 
 export default function JobsPage() {
   const { accessToken } = useAuth();
+  const router = useRouter();
   const token = accessToken as string;
 
   const query = useQuery<Job[]>({
@@ -49,7 +40,7 @@ export default function JobsPage() {
     <>
       <ConsolePageHeader
         title="Jobs"
-        description="Compute jobs you have submitted, fetched live from GET /v1/jobs. Completed jobs show their real settled cost; failed or cancelled jobs are never charged."
+        description="Every job you have started, newest first. A job is one piece of work you send to be run. You only pay for jobs that finish. Failed or cancelled jobs are not charged."
         action={
           <div className="flex gap-2">
             <Button
@@ -62,7 +53,7 @@ export default function JobsPage() {
             </Button>
             <Button asChild>
               <Link href="/dashboard/jobs/new">
-                <Plus /> New job
+                <Plus /> Start a new job
               </Link>
             </Button>
           </div>
@@ -70,116 +61,102 @@ export default function JobsPage() {
       />
 
       {query.isLoading ? (
-        <Card>
-          <CardContent className="space-y-3 p-6">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <Skeleton className="h-10 w-10 rounded-md" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-1/2" />
-                </div>
-                <Skeleton className="h-6 w-16 rounded-full" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TableSkeleton rows={4} label="Loading jobs" />
       ) : query.isError ? (
-        <Card className="border-danger/40">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h3 className="font-semibold">Couldn&apos;t load jobs</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              {query.error instanceof ApiError
-                ? query.error.message
-                : "An unexpected error occurred."}
-            </p>
-            <Button variant="outline" onClick={() => query.refetch()}>
-              <RefreshCw /> Try again
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          title="We could not load your jobs"
+          message={query.error instanceof ApiError ? query.error.message : undefined}
+          onRetry={() => query.refetch()}
+          retrying={query.isFetching}
+        />
       ) : jobs.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
-              <ListChecks className="h-6 w-6" />
-            </span>
-            <h3 className="font-semibold">No jobs yet</h3>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Submit a text-generation or batch-inference job and track its
-              progress through the scheduler and executor here.
-            </p>
+        <EmptyState
+          icon={ListChecks}
+          title="You have not run any jobs yet"
+          action={
             <Button asChild>
               <Link href="/dashboard/jobs/new">
-                <Plus /> New job
+                <Plus /> Start your first job
               </Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          Start a job and you can follow it here. First, make sure you have credits on the
+          Credits and billing page. Jobs that run in practice mode are marked, and they only use
+          test credits.
+        </EmptyState>
       ) : (
         <Card>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Job</TableHead>
-                <TableHead>Workload</TableHead>
-                <TableHead>Model</TableHead>
+                <TableHead className="hidden md:table-cell">Type of job</TableHead>
+                <TableHead className="hidden lg:table-cell">AI model</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Cost</TableHead>
+                <TableHead className="hidden sm:table-cell">How it ran</TableHead>
+                <TableHead className="hidden sm:table-cell">Created</TableHead>
+                <TableHead className="text-right">Cost in credits</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {jobs.map((job) => {
                 const id = job.job_id ?? job.id ?? "";
-                const simulated = isSimulated(job.execution_mode);
                 return (
                   <TableRow
                     key={id}
                     className="cursor-pointer"
                     onClick={() => {
-                      window.location.href = `/dashboard/jobs/${id}`;
+                      router.push(`/dashboard/jobs/${id}`);
                     }}
                   >
                     <TableCell>
-                      <Link
-                        href={`/dashboard/jobs/${id}`}
-                        className="font-mono text-xs text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {shortId(id)}
-                      </Link>
+                      <div className="flex flex-col gap-1">
+                        <span className="inline-flex items-center gap-1">
+                          <Link
+                            href={`/dashboard/jobs/${id}`}
+                            title={id}
+                            className="font-mono text-xs text-primary hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {shortId(id)}
+                          </Link>
+                          <CopyButton value={id} label="Copy job id" />
+                        </span>
+                        {/* Secondary details fold under the id on narrow screens. */}
+                        <span className="text-xs text-muted-foreground md:hidden">
+                          {jobTypeLabel(job.workload_type)}
+                        </span>
+                        <span className="sm:hidden">
+                          <ExecutionModeBadge mode={job.execution_mode} />
+                        </span>
+                        <span className="text-xs text-muted-foreground sm:hidden">
+                          <RelativeTime iso={job.created_at} />
+                        </span>
+                      </div>
                     </TableCell>
-                    <TableCell className="text-sm">
-                      {job.workload_type}
+                    <TableCell className="hidden text-sm md:table-cell">
+                      {jobTypeLabel(job.workload_type)}
                     </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
+                    <TableCell className="hidden font-mono text-xs text-muted-foreground lg:table-cell">
                       {job.model}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={jobStatusVariant(job.status)}>
-                        {jobStatusLabel(job.status)}
-                      </Badge>
+                      <JobStatusBadge status={job.status} />
                     </TableCell>
-                    <TableCell>
-                      <Badge variant={simulated ? "warning" : "neutral"}>
-                        {simulated ? "Simulated" : "Hardware"}
-                      </Badge>
+                    <TableCell className="hidden sm:table-cell">
+                      <ExecutionModeBadge mode={job.execution_mode} />
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatRelativeTime(job.created_at)}
+                    <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
+                      <RelativeTime iso={job.created_at} />
                     </TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell className="text-right text-xs">
                       {job.final_cost != null ? (
                         <span className="font-mono tabular-nums text-foreground">
                           {job.final_cost}
                         </span>
                       ) : (
-                        <span className="text-muted-foreground">not charged</span>
+                        <span className="text-muted-foreground">not charged yet</span>
                       )}
                     </TableCell>
                   </TableRow>

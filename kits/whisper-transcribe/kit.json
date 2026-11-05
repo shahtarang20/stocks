@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "slug": "whisper-transcribe",
+  "version": "1.0.0",
+  "name": "Speech to text (Whisper)",
+  "description": "Transcribes one audio or video file with faster-whisper (CTranslate2) using Whisper weights baked into the image. Greedy or beam decoding at temperature 0. Licences: see kits/whisper-transcribe/README.md.",
+  "category": "audio",
+  "image": "ghcr.io/computecoin/kit-whisper-transcribe@sha256:PENDING",
+  "mode": "batch",
+  "param_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "language": {
+        "type": "string",
+        "pattern": "^(auto|[a-z]{2,3})$",
+        "default": "auto"
+      },
+      "task": {
+        "type": "string",
+        "enum": [
+          "transcribe",
+          "translate"
+        ],
+        "default": "transcribe"
+      },
+      "beam_size": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 5
+      },
+      "word_timestamps": {
+        "type": "boolean",
+        "default": false
+      },
+      "vad_filter": {
+        "type": "boolean",
+        "default": false
+      },
+      "formats": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "json",
+            "srt",
+            "vtt",
+            "txt"
+          ]
+        },
+        "minItems": 1,
+        "maxItems": 4,
+        "default": [
+          "json",
+          "txt"
+        ]
+      }
+    }
+  },
+  "inputs": [
+    {
+      "name": "audio",
+      "kind": "file",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "transcripts",
+      "path": "/out/transcripts"
+    }
+  ],
+  "resource_defaults": {
+    "gpu_count": 1,
+    "min_vram_gb": 6,
+    "min_compute_capability": "6.1",
+    "cpu": 4,
+    "ram_gb": 16,
+    "disk_gb": 20
+  },
+  "billing_hints": {
+    "unit": "audio_second",
+    "est_gpu_seconds_per_unit": null
+  },
+  "verification": {
+    "method": "wer",
+    "sample_fraction": 0.1,
+    "min_samples": 1,
+    "thresholds": {"max_wer": 0.1},
+    "owner_decision": "OWNER DECISION: word error rate between the host's transcript and an independent re-run must be at most max_wer (0.10, conservative default, to be tuned with cross-GPU benchmark data U5.3). Unreadable or missing reference data is inconclusive, never a failure of the host. Sample fraction also pending owner approval."
+  }
+}

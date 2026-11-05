@@ -1,0 +1,6 @@
+# Pinned, NOT yet checked against PyPI or against the base image's torch (L4). Freeze with hashes in CI.
+# torch/torchvision come from the pinned CUDA base image.
+spandrel==0.4.1
+Pillow==11.1.0
+numpy==2.2.2
+safetensors==0.5.2

@@ -1,0 +1,67 @@
+{
+  "kit": "scientific-compute",
+  "schema": 1,
+  "purpose": "U12: smoke test of scientific-compute on at least 3 CPU host classes (a CPU-only Kit: runs with no --gpus)",
+  "host_classes_required": [
+    "cpu-a",
+    "cpu-b",
+    "cpu-c"
+  ],
+  "gpu_models_note": "This Kit uses no GPU (kit.json resource_defaults.gpu_count 0, so smoke_runner passes no --gpus). host_classes_required names three distinct CPU host classes ('cpu' labels, one per self-hosted runner label cpu-a, cpu-b, cpu-c in .github/workflows/kits.yml) whose CPUs are compared. The fleet is the owner's decision. Platform side: placing such a job needs CPU_ONLY_KITS_ENABLED (see kits/README.md).",
+  "fixture": {
+    "script": "kits/scientific-compute/smoke/make_fixture.py",
+    "how": "python make_fixture.py script.py  (writes a small deterministic numpy/scipy/pandas script)",
+    "input_name": "script",
+    "sha256": "PENDING"
+  },
+  "input": {
+    "params": {
+      "args": [],
+      "timeout_seconds": 60,
+      "max_output_mb": 16,
+      "max_memory_mb": 2048,
+      "deterministic": true,
+      "seed": 7
+    }
+  },
+  "limits": {
+    "max_seconds": 120
+  },
+  "checks": [
+    {
+      "id": "exit_zero",
+      "expect": "container exit code 0 and output.json ok=true"
+    },
+    {
+      "id": "result_files",
+      "expect": "results/summary.json and results/table.csv exist; logs/determinism.json says deterministic true"
+    },
+    {
+      "id": "same_host_repeat",
+      "expect": "re-run on the same host gives byte-identical outputs (exact_deterministic status 'passed')"
+    },
+    {
+      "id": "cross_host",
+      "expect": "outputs of different host classes: record whether they are byte-identical (CPU float results may differ; owner decides)"
+    },
+    {
+      "id": "no_network",
+      "expect": "run with --network none succeeds; a script that opens a socket fails inside the sandbox"
+    },
+    {
+      "id": "timeout",
+      "expect": "a script with an endless loop and timeout_seconds 2 ends with script_timeout and no stray processes"
+    },
+    {
+      "id": "bad_input",
+      "expect": "a non-Python or syntactically invalid script is refused with invalid_input before anything runs"
+    }
+  ],
+  "record": [
+    "host class",
+    "driver",
+    "seconds",
+    "peak memory",
+    "sha256 of every output"
+  ]
+}

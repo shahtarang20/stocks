@@ -6,7 +6,7 @@ import { DemoBanner } from "@/components/demo-banner";
 export const metadata: Metadata = {
   title: "Security",
   description:
-    "ComputeCoin security model: isolation, attestation, escrowed settlement, and honest Phase 1 status.",
+    "How ComputeCoin keeps jobs apart, how computers are checked, how payments are protected, and what is not finished.",
 };
 
 export default function SecurityPage() {
@@ -14,62 +14,62 @@ export default function SecurityPage() {
     <>
       <PageHero
         eyebrow="Security"
-        title="Security model"
-        description="How workloads are isolated, how providers are attested, and how settlement is protected. We describe the design and are explicit about what is implemented versus planned."
+        title="How we keep things safe"
+        description="How jobs are kept apart, how hosts are checked, and how payments are protected. We say clearly what is built and what is only planned."
       />
       <div className="container space-y-8 py-12">
         <DemoBanner>
-          this page describes the intended security model. Several controls are
-          in design or partial implementation during Phase 1 and are noted as
-          such below. Nothing here should be read as a completed audit.
+          this page describes how we want security to work. Some parts are not
+          finished and are marked below. No independent security audit has been
+          done yet.
         </DemoBanner>
         <Prose>
-          <h2>Workload isolation</h2>
+          <h2>Keeping jobs apart</h2>
           <p>
-            Workloads run in isolated containers. Providers accept defined
-            tenant-isolation obligations as a condition of listing. Independent
-            verification of isolation controls is part of the higher
-            attestation tiers.
+            Each job runs in a locked-down container, which is like a closed box on the host&apos;s
+            computer. The job cannot see the host&apos;s files and has no internet by default. A
+            container is a strong barrier, but it is not a perfect wall. For jobs that need more
+            protection, there are private options. They only work on hosts with special hardware, and
+            you choose them when you create a job.
           </p>
-          <h2>Provider attestation</h2>
+          <h2>Checking hosts</h2>
           <p>
-            Providers are placed into verification tiers ranging from
-            self-reported specifications to independently verified hardware.
-            Buyers choose the minimum tier acceptable for a given workload.
+            A host&apos;s computer reports its own hardware, such as its graphics card and memory.
+            ComputeCoin does not check this yet, so the site labels it &ldquo;Reported by the
+            computer&rdquo;. For private jobs, the computer must also pass extra hardware checks
+            before it gets the job.
           </p>
-          <h2>Settlement integrity</h2>
+          <h2>Protecting payments</h2>
           <p>
-            Payment is escrowed when a job is provisioned and released against
-            verifiable completion signals, reducing counterparty risk for both
-            sides of the market.
+            When a job starts, credits are held for it. When the job ends, the host is credited for
+            the time used and the rest goes back to the customer. Every step is written to a ledger
+            you can inspect.
           </p>
-          <h2>Account security (Phase 1 status)</h2>
+          <h2>Your account</h2>
           <ul>
             <li>
-              <strong>Implemented:</strong> email/password auth with access and
-              refresh tokens issued by the API.
+              <strong>Built:</strong> you log in with your email and a password. Passwords are
+              stored in a scrambled form that cannot be turned back into the password.
             </li>
             <li>
-              <strong>Implemented:</strong> the web console signs you in with
-              httpOnly, Secure cookies set by the API, with CSRF protection.
-              Page scripts cannot read them, and no token is written to
-              browser storage.
+              <strong>Built:</strong> the website keeps you logged in with a protected cookie that
+              scripts on the page cannot read. Requests that change something carry an extra check
+              so other websites cannot act for you.
             </li>
             <li>
-              <strong>Smart contracts:</strong> the token and escrow contracts
-              have unit tests but have <em>not</em> been audited by an
-              independent firm.
+              <strong>Smart contracts:</strong> these are the programs that run the coin and the
+              on-chain escrow. They have automated tests but have <em>not</em> been checked by an
+              independent security firm.
             </li>
             <li>
-              <strong>Enforcement:</strong> authorization is enforced
-              server-side on the API. Client-side route guards are UX only.
+              <strong>Permissions:</strong> the ComputeCoin service checks what you are allowed to do
+              on every request. Hiding a page in the website is only for convenience.
             </li>
           </ul>
-          <h2>Responsible disclosure</h2>
+          <h2>Reporting a security problem</h2>
           <p>
-            A coordinated disclosure process will be published before general
-            availability. During the preview, report concerns through the
-            contact channel on the About page.
+            A full process for reporting problems will be published before the public launch. For
+            now, use the contact address on the About page.
           </p>
         </Prose>
       </div>

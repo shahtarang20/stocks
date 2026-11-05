@@ -49,7 +49,68 @@ export function jobStatusVariant(status: JobStatus): BadgeVariant {
 
 /** Human label for an FSM status (keeps the lowercase contract value honest). */
 export function jobStatusLabel(status: JobStatus): string {
-  return status.replace(/_/g, " ");
+  switch (status) {
+    case "created":
+      return "Just created";
+    case "validating":
+      return "Checking your job";
+    case "queued":
+      return "Waiting";
+    case "matched":
+      return "Computer found";
+    case "reserved":
+      return "Starting soon";
+    case "running":
+      return "Running";
+    case "verifying":
+      return "Checking the result";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "timed_out":
+      return "Ran out of time";
+    case "cancelled":
+      return "Cancelled";
+    case "retry_pending":
+      return "Trying again";
+    case "disputed":
+      return "Under review";
+    default:
+      return String(status).replace(/_/g, " ");
+  }
+}
+
+/** One plain sentence: what this status means and, where it matters, what to do. */
+export function jobStatusHelp(status: JobStatus): string {
+  switch (status) {
+    case "created":
+    case "validating":
+      return "We are checking your job before it starts. Nothing for you to do.";
+    case "queued":
+      return "Your job is waiting for a computer that fits it. Nothing for you to do. You can cancel it if you change your mind.";
+    case "matched":
+    case "reserved":
+      return "A host's computer is picked and your credits are set aside. The job should start in a moment.";
+    case "running":
+      return "Your job is running on a host's computer now.";
+    case "verifying":
+      return "The job finished. We are checking the result.";
+    case "completed":
+      return "Your job finished. Open it to read the results and download files.";
+    case "failed":
+      return "Your job did not finish. You are not charged for a failed job. Read the log on the job page, fix the problem, and start it again.";
+    case "timed_out":
+      return "Your job took longer than the time limit you set, so it was stopped. Start it again with a longer time limit.";
+    case "cancelled":
+      return "This job was cancelled. You are not charged for a cancelled job.";
+    case "retry_pending":
+      return "The first computer could not finish. We are moving your job to another computer. Nothing for you to do.";
+    case "disputed":
+      return "This job has a dispute open. Our team is looking at it. Check the Disputes page for the answer.";
+    default:
+      return "";
+  }
 }
 
 /**
@@ -86,25 +147,25 @@ export function createJobErrorMessage(err: unknown): string {
   const code = apiErrorCode(err);
   switch (code) {
     case "budget_exceeded":
-      return "The estimated cost exceeds your max cost. Raise the budget cap or pick a cheaper target.";
+      return "This job would cost more than the most you said you would pay. Raise the most you will pay, or choose a cheaper option.";
     case "model_not_supported":
-      return "The selected model does not support this workload type. Try echo-sim-v1, the approved simulated model.";
+      return "That model cannot do this kind of job. Pick a different model, or try echo-sim-v1, the practice model.";
     case "invalid_input":
-      return "The job input is not valid for this workload. Check the prompt / items payload and try again.";
+      return "The text you entered could not be used for this job. Check your prompt or list of items, then try again.";
     case "no_provider":
-      return "No eligible provider is available right now. Try again shortly or widen your requirements.";
+      return "No host has a free computer that fits your job right now. Try again in a few minutes, or ask for less (for example, fewer graphics cards).";
     case "machine_not_found":
-      return "That machine was not found. Check the machine ID, or leave it blank to let the scheduler choose.";
+      return "We could not find that computer. Check its ID, or leave the box empty and we will pick one for you.";
     case "gpu_count_exceeds_machine":
-      return "That machine has fewer GPUs than you requested. Lower the GPU count or choose another machine.";
+      return "That computer has fewer graphics cards (GPUs) than you asked for. Ask for fewer, or choose another computer.";
     case "isolation_tier_not_supported_by_machine":
-      return "That machine does not offer the selected isolation tier. Choose \"container\" or a machine that supports it.";
+      return "That computer does not offer the privacy level you picked. Choose \"Standard\", or pick a computer that supports it.";
     case "insufficient_credits":
-      return "You don't have enough credits for this job. Buy credits on the Billing page, or lower the estimate.";
+      return "You do not have enough credits for this job. Add credits on the Credits and billing page, or ask for less.";
     case "spend_limit_exceeded":
-      return "This job would exceed one of your spend limits.";
+      return "This job would go over a spending limit you set. Spending limits are set through the API (/spend-limits): raise or remove the limit there, or ask for less.";
     case "email_not_verified":
-      return "Verify your email address before submitting jobs. Use the banner at the top of the page to resend the link.";
+      return "Please confirm your email address before you run jobs. Use the button at the top of the page to get a new link.";
     default:
       if (err instanceof ApiError) {
         // Never show a raw snake_case API code to a user.
@@ -112,6 +173,58 @@ export function createJobErrorMessage(err: unknown): string {
           ? err.message.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) + "."
           : err.message;
       }
-      return "Something went wrong submitting the job. Please try again.";
+      return "We could not submit your job. Check your internet connection and try again.";
+  }
+}
+
+/**
+ * Plain-words version of a job error code: what happened and what to do next.
+ * The raw code stays visible on the page for support; this is the part to read first.
+ */
+export function jobErrorHelp(code: string | null | undefined): string {
+  switch (code) {
+    case "lease_expired":
+      return "The host's computer stopped answering, so we stopped your job. Start it again. You are not charged for a job that fails.";
+    case "thermal_shutdown":
+      return "The host's graphics card got too hot, so the job was stopped to protect it. Start it again. It will usually go to a different computer.";
+    case "gpu_unavailable":
+    case "hardware_execution_unavailable":
+      return "The host's computer could not run this job on real hardware. Start it again, or ask for fewer graphics cards. You are not charged.";
+    case "container_nonzero_exit":
+    case "executor_error":
+      return "Your job started but stopped with an error. Read the log below for details, fix the problem and start it again.";
+    case "missing_output":
+      return "Your job ended without producing a result. Read the log below, check your input and start it again.";
+    case "unsupported_workload":
+      return "This kind of job is not supported yet. Choose a different type of job and try again.";
+    case "vm_timeout":
+      return "Your job ran past its time limit and was stopped. Start it again with a longer time limit.";
+    case "egress_setup_failed":
+      return "The host's computer could not set up the internet access your job asked for. Start it again, or turn off internet access for the job.";
+    case "upload_failed":
+    case "download_url_failed":
+      return "We could not move your files in or out. Check your internet connection and start the job again.";
+    case "abuse_suspected":
+      return "Our safety checks stopped this job. If you think this is a mistake, open a dispute or contact support.";
+    case "cancelled":
+      return "This job was cancelled.";
+    default:
+      return "The job stopped with an error. Read the log below. If it is not clear, start the job again or contact support and give them the job ID.";
+  }
+}
+
+/** Plain name for a kind of job. Unknown kinds are shown with spaces instead of dashes. */
+export function jobTypeLabel(type: string | null | undefined): string {
+  switch (type) {
+    case "text-generation":
+      return "Write text";
+    case "batch-inference":
+      return "Many prompts at once";
+    case "embeddings":
+      return "Text to numbers (embeddings)";
+    case "kit":
+      return "Kit (ready-made tool)";
+    default:
+      return type ? type.replace(/[-_]/g, " ").replace(/^./, (c) => c.toUpperCase()) : "Job";
   }
 }

@@ -15,44 +15,44 @@ const PLATFORM_CONFIG = [
   {
     section: "Billing",
     items: [
-      { key: "Platform fee rate", value: "10%", note: "applied to every job" },
-      { key: "Signup grant", value: "1,000.00 USDC_CREDITS", note: "simulated" },
-      { key: "Currency", value: "USDC_CREDITS", note: "simulated, no real payment rail" },
-      { key: "Min billable seconds", value: "60 s", note: "sub-minute jobs billed at 1 min" },
+      { key: "Platform fee", value: "10%", note: "taken from every job" },
+      { key: "Free credits at sign-up", value: "1,000.00 test credits", note: "test credits, not real money" },
+      { key: "Currency", value: "Test credits", note: "not real money" },
+      { key: "Shortest charge", value: "60 seconds", note: "a job under a minute is charged as one minute" },
     ],
   },
   {
-    section: "Jobs & scheduling",
+    section: "Jobs and matching",
     items: [
-      { key: "Default max runtime", value: "300 s", note: "overridable per job" },
-      { key: "Lease TTL", value: "60 s", note: "re-queued on expiry" },
-      { key: "Scheduler weights", value: "Price 50% / Reliability 30% / Availability 20%", note: "transparent" },
-      { key: "Max job retries", value: "10", note: "configurable per job" },
+      { key: "Longest a job runs by default", value: "300 seconds", note: "a customer can change it per job" },
+      { key: "Job claim time", value: "60 seconds", note: "if the host goes quiet, the job goes back in line" },
+      { key: "How a computer is picked for a job", value: "Price 50% / Reliability 30% / Availability 20%", note: "shown openly" },
+      { key: "Most tries per job", value: "10", note: "can be set per job" },
     ],
   },
   {
     section: "Marketplace",
     items: [
-      { key: "Quote TTL", value: "120 s", note: "after expiry must re-request" },
-      { key: "Reservation TTL", value: "900 s", note: "capacity held for 15 min" },
-      { key: "Page size (default)", value: "20", note: "max 100" },
+      { key: "Price quote lasts", value: "120 seconds", note: "after that the customer asks for a new price" },
+      { key: "Booked time is held for", value: "900 seconds", note: "the computer is kept free for 15 minutes" },
+      { key: "Rows per page", value: "20", note: "up to 100" },
     ],
   },
   {
-    section: "Auth & tokens",
+    section: "Sign-in and computers",
     items: [
-      { key: "Access token TTL", value: "15 min", note: "short-lived" },
-      { key: "Refresh token TTL", value: "14 days", note: "rotating" },
-      { key: "Heartbeat interval", value: "30 s", note: "machine online window: 90 s" },
+      { key: "Sign-in lasts", value: "15 minutes", note: "then it renews by itself" },
+      { key: "Stay signed in for", value: "14 days", note: "the renewal key changes each time" },
+      { key: "Computer check-in every", value: "30 seconds", note: "a computer counts as online if seen in the last 90 seconds" },
     ],
   },
   {
-    section: "Inference (Phase 6)",
+    section: "AI answers (chat and embeddings)",
     items: [
-      { key: "Rate limit", value: "60 req / 60 s", note: "per user" },
-      { key: "Max tokens (default)", value: "4,096", note: "configurable" },
-      { key: "Embedding dim", value: "256", note: "simulated hash-based" },
-      { key: "Max input items (embeddings)", value: "100", note: "batch cap" },
+      { key: "Request limit", value: "60 requests per 60 seconds", note: "for each user" },
+      { key: "Longest answer by default", value: "4,096 tokens", note: "can be changed" },
+      { key: "Embedding size", value: "256", note: "practice mode: made by a simple formula, not a real AI model" },
+      { key: "Most items per embedding request", value: "100", note: "upper limit" },
     ],
   },
 ];
@@ -61,15 +61,13 @@ export default function AdminConfigurationPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Platform configuration"
-        description="Read-only view of active platform settings derived from environment variables. Changes require a deployment."
+        title="Settings"
+        description="The main rules ComputeCoin runs on, such as fees and time limits. You can only read them here. To change one, ask the engineering team."
       />
 
       <div className="space-y-6">
         <DemoBanner>
-          Configuration values shown are from the default development settings.
-          Production values are set via environment variables and a secrets
-          manager — they are never shown in the UI.
+          These are the default settings used while building ComputeCoin. The live server may use different values, and secret values are never shown here.
         </DemoBanner>
 
         {PLATFORM_CONFIG.map((section) => (
@@ -101,8 +99,7 @@ export default function AdminConfigurationPage() {
         ))}
 
         <p className="text-xs text-muted-foreground">
-          To change any setting, update the corresponding environment variable
-          and redeploy. See <code>.env.example</code> for the full list.
+          To change a setting, ask the engineering team. They change it on the server and restart the app.
         </p>
       </div>
     </>

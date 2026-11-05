@@ -45,19 +45,30 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { billingErrorMessage, ledgerDirectionVariant, humanizeStatus } from "@/lib/billing";
-import { formatRelativeTime } from "@/lib/utils";
+import { CopyId, RelativeTime } from "@/components/console/bits";
+import { useToast } from "@/components/console/toast";
+import { capitalize } from "@/lib/format";
 
 const amountSchema = z.object({
   amount: z
     .string()
     .trim()
     .refine((v) => /^\d+(\.\d{1,2})?$/.test(v), {
-      message: "Enter a decimal like 50.00",
+      message: "Enter an amount like 50.00.",
     })
-    .refine((v) => Number(v) > 0, { message: "Amount must be greater than zero" }),
+    .refine((v) => Number(v) > 0, { message: "Enter an amount greater than zero, like 50.00." }),
 });
 
 type AmountValues = z.infer<typeof amountSchema>;
+
+const LEDGER_KIND_TEXT: Record<string, string> = {
+  credit_purchase: "Credits added",
+  hold: "Set aside for a job",
+  capture: "Paid for a finished job",
+  release: "Given back after a job",
+  refund: "Refund",
+  dispute_lost: "Dispute not in your favour",
+};
 
 function BalanceStat({
   label,
@@ -94,6 +105,7 @@ function BuyCreditsDialog({
 }) {
   const { accessToken } = useAuth();
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const {
     register,
@@ -108,7 +120,8 @@ function BuyCreditsDialog({
   const mutation = useMutation<BillingAccount, unknown, AmountValues>({
     mutationFn: (values) =>
       api.purchaseCredits(accessToken as string, { amount: values.amount }),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      toast.success(`Credits added. You now have ${data.available} to spend.`);
       queryClient.invalidateQueries({ queryKey: ["billing-account"] });
       queryClient.invalidateQueries({ queryKey: ["billing-ledger"] });
     },
@@ -126,10 +139,10 @@ function BuyCreditsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Buy credits</DialogTitle>
+          <DialogTitle>Add credits</DialogTitle>
           <DialogDescription>
-            Top up your simulated balance. {CREDITS_LABEL} — no real money changes
-            hands and no real payment rail is used.
+            Credits pay for your jobs. In this preview they are test credits: {CREDITS_LABEL}.
+            No real money is charged and no card is used.
           </DialogDescription>
         </DialogHeader>
 
@@ -140,9 +153,9 @@ function BuyCreditsDialog({
               <div>
                 <p className="font-medium text-foreground">Credits added.</p>
                 <p className="mt-1 text-muted-foreground">
-                  New available balance:{" "}
+                  You now have{" "}
                   <span className="font-mono">{mutation.data.available}</span>{" "}
-                  {mutation.data.currency}.
+                  {mutation.data.currency === "USDC_CREDITS" ? "test credits" : mutation.data.currency} to spend.
                 </p>
               </div>
             </div>
@@ -167,19 +180,21 @@ function BuyCreditsDialog({
             ) : null}
 
             <div className="space-y-1.5">
-              <Label htmlFor="amount">Amount (credits)</Label>
+              <Label htmlFor="amount">How many credits to add</Label>
               <Input
                 id="amount"
                 inputMode="decimal"
                 placeholder="e.g. 50.00"
                 aria-invalid={Boolean(errors.amount)}
+                aria-describedby="amount-help"
+                autoComplete="off"
                 {...register("amount")}
               />
               {errors.amount ? (
-                <p className="text-xs text-danger">{errors.amount.message}</p>
+                <p id="amount-help" role="alert" className="text-xs text-danger">{errors.amount.message}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">
-                  Simulated top-up. {CREDITS_LABEL}.
+                <p id="amount-help" className="text-xs text-muted-foreground">
+                  Type a number, like 50.00. {CREDITS_LABEL}.
                 </p>
               )}
             </div>
@@ -198,7 +213,7 @@ function BuyCreditsDialog({
                     <Loader2 className="animate-spin" /> Adding…
                   </>
                 ) : (
-                  "Buy credits"
+                  "Add credits"
                 )}
               </Button>
             </DialogFooter>
@@ -232,11 +247,11 @@ export default function BillingPage() {
   return (
     <>
       <ConsolePageHeader
-        title="Billing"
-        description="Live balance and double-entry ledger from the billing service. Amounts are simulated credits — shown verbatim, never converted to fiat."
+        title="Credits and billing"
+        description="Your credits and a list of everything that added or used them. In this preview the credits are test credits, not real money."
         action={
           <Button onClick={() => setBuyOpen(true)} disabled={!accessToken}>
-            <Plus /> Buy credits
+            <Plus /> Add credits
           </Button>
         }
       />
@@ -246,13 +261,13 @@ export default function BillingPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle className="flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-muted-foreground" /> Balance
+              <Wallet className="h-4 w-4 text-muted-foreground" /> Your credits
             </CardTitle>
             <Badge variant="neutral">{CREDITS_LABEL}</Badge>
           </CardHeader>
           <CardContent>
             {accountQuery.isLoading ? (
-              <div className="grid gap-6 sm:grid-cols-3">
+              <div className="grid grid-cols-2 gap-6 sm:grid-cols-3">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="space-y-2">
                     <Skeleton className="h-4 w-20" />
@@ -261,12 +276,12 @@ export default function BillingPage() {
                 ))}
               </div>
             ) : accountQuery.isError || !account ? (
-              <div className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+              <div role="alert" className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
                   {accountQuery.error instanceof ApiError
                     ? accountQuery.error.message
-                    : "Couldn't load your balance."}
+                    : "We could not load your credits. Press Retry."}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -279,19 +294,21 @@ export default function BillingPage() {
               </div>
             ) : (
               <>
-                <div className="grid gap-6 sm:grid-cols-3">
-                  <BalanceStat
-                    label="Available (spendable)"
-                    value={account.available}
-                    emphasis
-                  />
-                  <BalanceStat label="Reserved (holds)" value={account.reserved} />
-                  <BalanceStat label="Total owned" value={account.balance} />
+                <div className="grid grid-cols-2 gap-6 sm:grid-cols-3">
+                  <div className="col-span-2 sm:col-span-1">
+                    <BalanceStat
+                      label="Ready to spend"
+                      value={account.available}
+                      emphasis
+                    />
+                  </div>
+                  <BalanceStat label="Held for running jobs" value={account.reserved} />
+                  <BalanceStat label="Total" value={account.balance} />
                 </div>
                 <p className="mt-4 text-xs text-muted-foreground">
-                  {account.currency} · available = spendable, reserved = active
-                  holds on in-flight jobs, total = available + reserved. These are
-                  simulated credits, not real currency.
+                  Ready to spend is what you can use now. Held credits are set aside while a
+                  job runs, and any left over are given back when it ends. Total is the two added together.
+                  These are test credits, not real money.
                 </p>
               </>
             )}
@@ -301,7 +318,7 @@ export default function BillingPage() {
         {/* ---- Ledger ---- */}
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
-            <CardTitle>Ledger</CardTitle>
+            <CardTitle>History</CardTitle>
             <Button
               variant="ghost"
               size="sm"
@@ -324,11 +341,11 @@ export default function BillingPage() {
                 <span className="flex h-11 w-11 items-center justify-center rounded-full bg-danger/10 text-danger">
                   <AlertCircle className="h-5 w-5" />
                 </span>
-                <h3 className="font-semibold">Couldn&apos;t load the ledger</h3>
+                <h3 className="font-semibold">We could not load your history</h3>
                 <p className="max-w-md text-sm text-muted-foreground">
                   {ledgerQuery.error instanceof ApiError
                     ? ledgerQuery.error.message
-                    : "An unexpected error occurred."}
+                    : "Something went wrong on our side. Try again in a moment."}
                 </p>
                 <Button variant="outline" onClick={() => ledgerQuery.refetch()}>
                   <RefreshCw /> Try again
@@ -339,23 +356,23 @@ export default function BillingPage() {
                 <span className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted-foreground">
                   <Wallet className="h-6 w-6" />
                 </span>
-                <h3 className="font-semibold">No ledger entries yet</h3>
+                <h3 className="font-semibold">Nothing here yet</h3>
                 <p className="max-w-md text-sm text-muted-foreground">
-                  Every credit purchase, hold, capture, release and refund is
-                  recorded here as an immutable double-entry row.
+                  Each time you add credits, a job sets some aside, a job is paid for, or you get a refund,
+                  it is listed here. Add credits to get started.
                 </p>
                 <Button onClick={() => setBuyOpen(true)}>
-                  <Plus /> Buy credits
+                  <Plus /> Add credits
                 </Button>
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Kind</TableHead>
-                    <TableHead>Direction</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Reference</TableHead>
+                    <TableHead>What happened</TableHead>
+                    <TableHead>Added or taken</TableHead>
+                    <TableHead className="text-right">Credits</TableHead>
+                    <TableHead className="hidden md:table-cell">Job or order</TableHead>
                     <TableHead>Date</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -363,22 +380,22 @@ export default function BillingPage() {
                   {ledger.map((e) => (
                     <TableRow key={e.entry_id}>
                       <TableCell className="text-sm">
-                        {humanizeStatus(e.kind)}
+                        {LEDGER_KIND_TEXT[e.kind] ?? humanizeStatus(e.kind)}
                       </TableCell>
                       <TableCell>
                         <Badge variant={ledgerDirectionVariant(e.direction)}>
-                          {e.direction}
+                          {e.direction === "credit" ? "Added" : e.direction === "debit" ? "Taken" : capitalize(e.direction)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         {e.direction === "credit" ? "+" : "−"}
                         {e.amount}
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {e.reference ?? "—"}
+                      <TableCell className="hidden text-muted-foreground md:table-cell">
+                        {e.reference ? <CopyId id={e.reference} length={12} label="Copy reference" /> : "—"}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatRelativeTime(e.created_at)}
+                        <RelativeTime iso={e.created_at} />
                       </TableCell>
                     </TableRow>
                   ))}

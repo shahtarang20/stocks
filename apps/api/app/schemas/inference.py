@@ -47,6 +47,12 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     user: Optional[str] = None
+    # ComputeCoin extension: the isolation tier the caller wants. Private tiers cannot stream.
+    isolation_tier: Optional[str] = Field(default=None, max_length=32)
+    # U18 private streaming (PRIVACY_STREAMING_ENABLED): the real messages travel sealed; ``messages`` is a placeholder.
+    encrypted_input: Optional[dict] = None
+    dk_shares: Optional[dict] = None
+    result_public_key: Optional[str] = Field(default=None, pattern="^[0-9a-f]{64}$")
 
 
 # ---------------------------------------------------------------------------
@@ -156,3 +162,47 @@ class InferenceErrorDetail(BaseModel):
 
 class InferenceErrorResponse(BaseModel):
     error: InferenceErrorDetail
+
+
+# ---------------------------------------------------------------------------
+# Streaming (B2)
+# ---------------------------------------------------------------------------
+class ChunkDelta(BaseModel):
+    role: Optional[str] = None
+    content: Optional[str] = None
+
+
+class ChunkChoice(BaseModel):
+    index: int = 0
+    delta: ChunkDelta
+    finish_reason: Optional[str] = None
+
+
+class ChatCompletionChunk(BaseModel):
+    """OpenAI-compatible ``chat.completion.chunk`` (one SSE ``data:`` event)."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: str
+    object: str = "chat.completion.chunk"
+    created: int
+    model: str
+    choices: list[ChunkChoice]
+    system_fingerprint: str = "computecoin-v1"
+    computecoin: ComputeCoinMeta
+
+
+class StreamChunkRequest(BaseModel):
+    """Agent -> API: one ordered piece of generated text for a running job."""
+
+    seq: int = Field(ge=0, le=10_000_000)
+    text: str = Field(max_length=8192)
+    final: bool = False
+    # U18: a sealed ccpp-v1 envelope for a private stream (then ``text`` must be empty).
+    sealed: dict | None = None
+
+
+class StreamChunkResponse(BaseModel):
+    ok: bool
+    accepted: bool  # False when no customer stream is open for this job (chunk is dropped)
+    next_seq: int

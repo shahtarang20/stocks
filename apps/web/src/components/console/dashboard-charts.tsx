@@ -18,6 +18,17 @@ const axisStyle = {
   fill: "hsl(var(--muted-foreground))",
 };
 
+/** Compact, non-clipping axis labels: 1,200 / 12.5 / 0.06. */
+function formatTick(v: number | string): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (n === 0) return "0";
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  if (Math.abs(n) >= 10) return n.toFixed(0);
+  // Two significant digits keeps small values distinct (0.034, 0.026) without long tails.
+  return String(Number(n.toPrecision(2)));
+}
+
 function ChartTooltip({
   active,
   payload,
@@ -44,10 +55,11 @@ function ChartTooltip({
 
 export function SpendAreaChart({ data }: { data: DayPoint[] }) {
   return (
+    <div role="group" aria-label="Area chart of credits spent per day over the last 7 days">
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart
         data={data}
-        margin={{ top: 8, right: 8, left: -16, bottom: 0 }}
+        margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
       >
         <defs>
           <linearGradient id="spendFill" x1="0" y1="0" x2="0" y2="1">
@@ -56,7 +68,7 @@ export function SpendAreaChart({ data }: { data: DayPoint[] }) {
           </linearGradient>
         </defs>
         <XAxis dataKey="day" tickLine={false} axisLine={false} tick={axisStyle} />
-        <YAxis tickLine={false} axisLine={false} tick={axisStyle} width={40} />
+        <YAxis tickLine={false} axisLine={false} tick={axisStyle} width={44} tickFormatter={formatTick} />
         <Tooltip content={<ChartTooltip />} />
         <Area
           type="monotone"
@@ -68,15 +80,17 @@ export function SpendAreaChart({ data }: { data: DayPoint[] }) {
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
 export function ComputeHoursChart({ data }: { data: DayPoint[] }) {
   return (
+    <div role="group" aria-label="Area chart of compute hours per day over the last 7 days">
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart
         data={data}
-        margin={{ top: 8, right: 8, left: -16, bottom: 0 }}
+        margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
       >
         <defs>
           <linearGradient id="hoursFill" x1="0" y1="0" x2="0" y2="1">
@@ -85,7 +99,7 @@ export function ComputeHoursChart({ data }: { data: DayPoint[] }) {
           </linearGradient>
         </defs>
         <XAxis dataKey="day" tickLine={false} axisLine={false} tick={axisStyle} />
-        <YAxis tickLine={false} axisLine={false} tick={axisStyle} width={40} />
+        <YAxis tickLine={false} axisLine={false} tick={axisStyle} width={44} tickFormatter={formatTick} />
         <Tooltip content={<ChartTooltip />} />
         <Area
           type="monotone"
@@ -97,11 +111,13 @@ export function ComputeHoursChart({ data }: { data: DayPoint[] }) {
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
 export function JobStatusChart({ data }: { data: StatusSlice[] }) {
   return (
+    <div role="group" aria-label="Donut chart of your jobs by status; the list below gives the exact counts">
     <ResponsiveContainer width="100%" height={220}>
       <PieChart>
         <Pie
@@ -120,5 +136,6 @@ export function JobStatusChart({ data }: { data: StatusSlice[] }) {
         <Tooltip content={<ChartTooltip />} />
       </PieChart>
     </ResponsiveContainer>
+    </div>
   );
 }

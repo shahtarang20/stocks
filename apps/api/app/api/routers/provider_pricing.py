@@ -30,6 +30,7 @@ from app.services.provider_pricing import (
     PricingPolicyError,
     machine_ineligibility_reason,
     price_respects_floor,
+    validate_asking_price,
     validate_availability_windows,
     validate_floor_price,
     validate_model_allowlist,
@@ -131,13 +132,12 @@ async def update_machine_pricing(
         if body.asking_price_per_hour is None:
             new_asking = None
         else:
-            asking = decimal.Decimal(body.asking_price_per_hour)
-            if asking <= 0:
+            try:
+                new_asking = validate_asking_price(body.asking_price_per_hour)
+            except PricingPolicyError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="asking_price_must_be_positive",
-                )
-            new_asking = asking.quantize(decimal.Decimal("0.01"), rounding=decimal.ROUND_HALF_UP)
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.code
+                ) from exc
 
     new_floor = machine.floor_price_per_hour
     new_windows = machine.availability_windows

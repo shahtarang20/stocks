@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "name": "render-upscale-encode",
+  "steps": [
+    {
+      "id": "render",
+      "kind": "job",
+      "spec": {
+        "version": 2,
+        "kit": "blender-render@1.0.0",
+        "inputs": [{"name": "scene", "source": "dataset:11111111-1111-4111-8111-111111111111"}],
+        "outputs": [{"name": "frames"}],
+        "params": {"frame_start": 1, "frame_end": 250},
+        "billing": {"expected_units": 250, "max_cost": "40.00"}
+      }
+    },
+    {
+      "id": "upscale",
+      "kind": "job",
+      "spec": {
+        "version": 2,
+        "kit": "video-upscale-frames@1.0.0",
+        "outputs": [{"name": "frames"}],
+        "params": {"scale": 2},
+        "billing": {"expected_units": 250, "max_cost": "25.00"}
+      }
+    },
+    {
+      "id": "encode",
+      "kind": "job",
+      "spec": {
+        "version": 2,
+        "kit": "ffmpeg-transcode@1.0.0",
+        "outputs": [{"name": "video"}],
+        "params": {"codec": "h264"},
+        "billing": {"expected_units": 1, "max_cost": "5.00"}
+      }
+    }
+  ],
+  "edges": [
+    {"from": "render.frames", "to": "upscale.frames"},
+    {"from": "upscale.frames", "to": "encode.source"}
+  ]
+}

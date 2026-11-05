@@ -19,11 +19,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth-context";
-import { api, ApiError, getStoredAccessToken } from "@/lib/api";
+import { api, getStoredAccessToken } from "@/lib/api";
+import { plainAuthError } from "./auth-errors";
+
+// U16: must match the API's AUP_CURRENT_VERSION. The API only requires acceptance when AUP_REQUIRED is on.
+const AUP_VERSION = process.env.NEXT_PUBLIC_AUP_VERSION ?? "draft-0";
 
 const schema = z.object({
-  email: z.string().min(1, "Email is required").email("Enter a valid email"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  email: z.string().min(1, "Enter your email address.").email("That does not look like an email address. Check it and try again."),
+  password: z.string().min(8, "That password is too short. Use at least 8 characters."),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -34,8 +38,10 @@ type FormValues = z.infer<typeof schema>;
  * Only same-site paths are honoured: "//evil.example" and "https://…" would turn
  * the login page into an open redirect.
  */
-function safeNextPath(next: string | null): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.includes("\\")) {
+export function safeNextPath(next: string | null): string {
+  // Browsers drop tab/newline/control characters when parsing a URL, so "/\t/evil.example" becomes "//evil.example".
+  // eslint-disable-next-line no-control-regex
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.includes("\\") || /[\u0000-\u001f\u007f]/.test(next)) {
     return "/dashboard";
   }
   return next;
@@ -49,6 +55,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [intent, setIntent] = useState<"customer" | "host">("customer");
   const [serverError, setServerError] = useState<string | null>(null);
   const [changedNotice, setChangedNotice] = useState(false);
+  const [acceptAup, setAcceptAup] = useState(false);
+  const [aupError, setAupError] = useState(false);
 
   const {
     register,
@@ -85,18 +93,23 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
 
   async function onSubmit(values: FormValues) {
     setServerError(null);
+    if (!isLogin && !acceptAup) {
+      setAupError(true);
+      return;
+    }
+    setAupError(false);
     try {
       const email = values.email.trim();
       if (isLogin) {
         await login(email, values.password);
       } else {
-        await registerUser(email, values.password);
+        await registerUser(email, values.password, { accept_aup: true, aup_version: AUP_VERSION });
         if (intent === "host") {
           try {
             await api.providerRegister(getStoredAccessToken() || "cookie-session");
             await refreshUser();
           } catch {
-            // Not fatal: the onboarding page offers "Become a provider" as step 1.
+            // Not fatal: the onboarding page offers "Become a host" as a step.
           }
           router.push("/provider/onboarding");
           return;
@@ -104,11 +117,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       }
       router.push(safeNextPath(new URL(window.location.href).searchParams.get("next")));
     } catch (err) {
-      if (err instanceof ApiError) {
-        setServerError(err.message);
-      } else {
-        setServerError("Something went wrong. Please try again.");
-      }
+      setServerError(plainAuthError(err, isLogin ? "login" : "register"));
     }
   }
 
@@ -120,8 +129,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         </CardTitle>
         <CardDescription>
           {isLogin
-            ? "Access the Phase 1 developer console."
-            : "Start exploring the developer console. No payment required for the preview."}
+            ? "Welcome back. Log in to run jobs or manage your computers."
+            : "It is free to join the preview. Credits in this preview are test credits, not real money."}
         </CardDescription>
       </CardHeader>
       <form
@@ -147,7 +156,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               role="alert"
               className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
             >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <AlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{serverError}</span>
             </div>
           ) : null}
@@ -156,8 +165,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             <fieldset className="space-y-2">
               <legend className="text-sm font-medium">I want to</legend>
               {[
-                ["customer", "Use GPUs", "Run jobs on machines from the network."],
-                ["host", "Host my GPU", "Share my NVIDIA GPU and earn credits."],
+                ["customer", "Rent a GPU", "Run your work on a graphics card (GPU) from someone else's computer."],
+                ["host", "Share my computer", "Let others use my computer's GPU and earn credits. Needs an NVIDIA or AMD graphics card. See the setup steps after you sign up."],
               ].map(([value, title, hint]) => (
                 <label
                   key={value}
@@ -182,7 +191,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
                 </label>
               ))}
               <p className="text-xs text-muted-foreground">
-                You can do both later from the same account.
+                You can do both later with the same account.
               </p>
             </fieldset>
           ) : null}
@@ -193,12 +202,13 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               id="email"
               type="email"
               autoComplete="email"
-              placeholder="you@dev.io"
+              placeholder="you@example.com"
               aria-invalid={Boolean(errors.email)}
+              aria-describedby={errors.email ? "email-error" : undefined}
               {...register("email")}
             />
             {errors.email ? (
-              <p className="text-xs text-danger">{errors.email.message}</p>
+              <p id="email-error" role="alert" className="text-xs text-danger">{errors.email.message}</p>
             ) : null}
           </div>
 
@@ -210,10 +220,11 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               autoComplete={isLogin ? "current-password" : "new-password"}
               placeholder="••••••••"
               aria-invalid={Boolean(errors.password)}
+              aria-describedby={errors.password ? "password-error" : undefined}
               {...register("password")}
             />
             {errors.password ? (
-              <p className="text-xs text-danger">{errors.password.message}</p>
+              <p id="password-error" role="alert" className="text-xs text-danger">{errors.password.message}</p>
             ) : isLogin ? (
               <p className="text-xs">
                 <Link href="/forgot-password" className="text-primary hover:underline">
@@ -223,11 +234,42 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             ) : (
               !isLogin && (
                 <p className="text-xs text-muted-foreground">
-                  At least 8 characters.
+                  Use at least 8 characters.
                 </p>
               )
             )}
           </div>
+
+          {!isLogin ? (
+            <div className="space-y-1.5">
+              <label htmlFor="accept-aup" className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  id="accept-aup"
+                  type="checkbox"
+                  checked={acceptAup}
+                  onChange={(e) => {
+                    setAcceptAup(e.target.checked);
+                    if (e.target.checked) setAupError(false);
+                  }}
+                  aria-invalid={aupError}
+                  aria-describedby={aupError ? "aup-error" : undefined}
+                  className="mt-1"
+                />
+                <span>
+                  I have read and accept the{" "}
+                  <Link href="/legal/aup" target="_blank" className="text-primary hover:underline">
+                    Acceptable Use Policy
+                  </Link>
+                  .
+                </span>
+              </label>
+              {aupError ? (
+                <p id="aup-error" role="alert" className="text-xs text-danger">
+                  You need to accept the Acceptable Use Policy to create an account. Tick the box above.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </CardContent>
         <CardFooter className="flex flex-col gap-4">
           <Button type="submit" className="w-full" disabled={isSubmitting}>
@@ -245,9 +287,9 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           <p className="text-center text-sm text-muted-foreground">
             {isLogin ? (
               <>
-                Don&apos;t have an account?{" "}
+                New here?{" "}
                 <Link href="/register" className="text-primary hover:underline">
-                  Sign up
+                  Create an account
                 </Link>
               </>
             ) : (

@@ -16,7 +16,7 @@ dependencies = [
     "alembic==1.14.0",
     "pydantic==2.10.4",
     "pydantic-settings==2.7.0",
-    "argon2-cffi==23.1.0",
+    "argon2-cffi==25.1.0",
     "pyjwt==2.10.1",
     # REQUIRED for RS*/ES* id_token verification (PyJWT delegates asymmetric
     # crypto to it). Without it `_key_for` fails closed with

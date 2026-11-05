@@ -30,7 +30,7 @@ dependencies = [
     # and with it every RIM test. Re-test before lifting these bounds.
     "cryptography>=43.0.0,<44",
     "pyOpenSSL>=23.0.0,<24.3",
-    "redis==5.2.1",
+    "redis==8.1.0",
     "email-validator==2.2.0",
     "python-multipart==0.0.20",
     "eth-account>=0.14.0,<0.15",  # withdrawal_signer uses private eth_account._utils helpers: stay on the checked series

@@ -136,6 +136,9 @@ export default function ShareWindowsPage() {
           </p>
         </Prose>
 
+        {/* A scrollable region must be reachable by keyboard (WCAG 2.1.1), so tabIndex stays; the lint rule only
+            allows it on interactive elements. */}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
         <div className="max-w-4xl overflow-x-auto" tabIndex={0} role="region" aria-label="Requirements check, scrollable table">
           <Prose className="max-w-none">
             <table>

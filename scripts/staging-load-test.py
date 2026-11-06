@@ -14,11 +14,23 @@ import sys
 import time
 from collections import Counter
 
+for _stream in (sys.stdout, sys.stderr):  # a redirected Windows console uses a legacy code page; the report has emoji
+    try:
+        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
+
 try:
     import httpx
 except ImportError:
-    venv_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "api", ".venv", "bin", "python"))
-    if os.path.exists(venv_py) and sys.executable != venv_py:
+    # The API virtualenv: bin/python on Linux and macOS, Scripts\python.exe on Windows.
+    _venv_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "api", ".venv"))
+    venv_py = os.path.join(_venv_dir, "Scripts", "python.exe") if os.name == "nt" else os.path.join(_venv_dir, "bin", "python")
+    if os.path.exists(venv_py) and os.path.abspath(sys.executable) != venv_py:
+        if os.name == "nt":  # os.execv does not replace the process on Windows; run the child and pass its exit code on
+            import subprocess
+
+            sys.exit(subprocess.call([venv_py] + sys.argv))
         os.execv(venv_py, [venv_py] + sys.argv)
     raise
 

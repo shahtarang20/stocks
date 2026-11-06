@@ -32,6 +32,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from .platform import PlatformUnsupported, get_platform
 from .privacy_crypto import VERSION, canonical_json, seal
 
 PRIVATE_TIERS = ("sealed", "sealed_pro", "confidential")
@@ -101,32 +102,23 @@ def parse_private_plan(v2: dict[str, Any]) -> PrivatePlan:
 
 
 # --------------------------------------------------------------------------- RAM-only work dir
-def _mount_type(path: str, mounts_file: str = "/proc/mounts") -> Optional[str]:
+def _mount_type(path: str, mounts_file: Optional[str] = None) -> Optional[str]:
     """Filesystem type of the mount that holds ``path`` (longest matching mount point), or None if unknown."""
-    real = os.path.realpath(path)
-    best: tuple[int, str] | None = None
+    return get_platform().ram.mount_type(path, mounts_file)
+
+
+def ram_workdir(prefix: str, base: Optional[str] = None, *, mounts_file: Optional[str] = None) -> str:
+    """A fresh 0700 directory on RAM-only storage. Fails closed: if no candidate is tmpfs/ramfs there is NO fallback to disk
+    (and a platform with no RAM-only directory, such as Windows, always refuses)."""
+    plat = get_platform()
     try:
-        with open(mounts_file, "r", encoding="utf-8") as fh:
-            for line in fh:
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                mp = parts[1].replace("\\040", " ")
-                if real == mp or real.startswith(mp.rstrip("/") + "/") or mp == "/":
-                    if best is None or len(mp) > best[0]:
-                        best = (len(mp), parts[2])
-    except OSError:
-        return None
-    return best[1] if best else None
-
-
-def ram_workdir(prefix: str, base: Optional[str] = None, *, mounts_file: str = "/proc/mounts") -> str:
-    """A fresh 0700 directory on RAM-only storage. Fails closed: if no candidate is tmpfs/ramfs there is NO fallback to disk."""
-    candidates = [base] if base else ["/dev/shm", f"/run/user/{os.getuid()}"]
+        candidates = plat.ram.candidates(base)
+    except PlatformUnsupported:
+        candidates = []
     for cand in candidates:
-        if cand and os.path.isdir(cand) and _mount_type(cand, mounts_file) in RAM_FS_TYPES:
+        if cand and os.path.isdir(cand) and plat.ram.mount_type(cand, mounts_file) in RAM_FS_TYPES:
             d = tempfile.mkdtemp(prefix=prefix, dir=cand)
-            os.chmod(d, 0o700)
+            plat.paths.set_mode(d, 0o700)
             return d
     raise PrivateKitError("ram_workdir_unavailable", "no RAM-only (tmpfs) work directory is available on this host")
 
@@ -140,7 +132,7 @@ def wipe_dir(path: str, *, keep_root: bool = False) -> None:
                 try:
                     if os.path.islink(p) or not os.path.isfile(p):
                         continue
-                    os.chmod(p, 0o600)
+                    get_platform().paths.set_mode(p, 0o600)
                     size = os.path.getsize(p)
                     with open(p, "r+b") as fh:
                         left = size
@@ -279,7 +271,7 @@ def run_private_kit(
     try:
         params, names = stage_private_inputs(decrypted, in_dir)
         os.makedirs(out_dir, exist_ok=True)
-        os.chmod(out_dir, 0o777)
+        get_platform().paths.set_mode(out_dir, 0o777)
         sub = JobSpec(
             job_id=spec.job_id, workload_type="kit", model=spec.model, input={"params": params},
             execution_mode="hardware", image_digest=spec.image_digest, limits=spec.limits,

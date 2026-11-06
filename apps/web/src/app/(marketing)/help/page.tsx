@@ -110,7 +110,7 @@ export default function HelpPage() {
           </p>
           <h3>What your computer needs today</h3>
           <ul>
-            <li><strong>Linux.</strong> Our guide is for Ubuntu 22.04 or 24.04. Windows and Mac are not supported yet.</li>
+            <li><strong>Linux.</strong> Our guide is for Ubuntu 22.04 or 24.04. Mac is not supported. Windows PCs with an NVIDIA card are planned but not available yet, for ordinary jobs only: see <Link href="/share/windows">what a Windows PC would need</Link>.</li>
             <li><strong>Python 3.12 or newer</strong> and an internet connection. The agent only connects out. You do not need to open ports.</li>
             <li><strong>Docker</strong> to run real jobs. Without it, your computer can only take practice jobs.</li>
             <li>

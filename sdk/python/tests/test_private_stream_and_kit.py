@@ -64,7 +64,7 @@ def test_unpad_roundtrip_and_rejections():
 
 def test_spec_vector_when_populated():
     root = pathlib.Path(__file__).resolve().parents[3]
-    sec = json.loads((root / "docs/specs/ccpp-v1-vectors.json").read_text())["fanout_v1"]
+    sec = json.loads((root / "docs/specs/ccpp-v1-vectors.json").read_text(encoding="utf-8"))["fanout_v1"]
     if not sec.get("inputs") or not sec.get("expected"):
         pytest.skip("fanout_v1 vectors not generated yet; round-trip tests below cover the format")
     i, chunk = sec["inputs"]["stream"], sec["expected"]["stream_chunk"]
@@ -223,7 +223,7 @@ def test_submit_private_fanout_posts_private_parts():
 # --- private chat input contract (shared vectors with the TypeScript SDK; written, not run) ---
 def _chat_vectors():
     root = pathlib.Path(__file__).resolve().parents[3]
-    return json.loads((root / "docs/specs/private-chat-input-vectors.json").read_text())["cases"]
+    return json.loads((root / "docs/specs/private-chat-input-vectors.json").read_text(encoding="utf-8"))["cases"]
 
 
 def test_private_chat_input_matches_shared_canonical_vectors():

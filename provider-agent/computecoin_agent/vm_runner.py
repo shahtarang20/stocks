@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .platform import get_platform
+
 MAX_CONTROL_BYTES = 64 * 1024
 MAX_OUTPUT_FILES = 10_000
 FAT32_MAX_FILE = 4 * 1024**3 - 1
@@ -243,7 +245,7 @@ def run_vm_job(
     if not job.image_sha256 or sha256_file(job.image_path) != job.image_sha256:
         return VmResult("failed", error_code="vm_image_hash_mismatch")
     scratch = tempfile.mkdtemp(prefix=f"ccvm-{job.job_id[:8]}-", dir=work_root)
-    os.chmod(scratch, 0o700)
+    get_platform().paths.set_mode(scratch, 0o700)
     proc = None
     try:
         overlay = os.path.join(scratch, "overlay.qcow2")

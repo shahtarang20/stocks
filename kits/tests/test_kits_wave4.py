@@ -40,7 +40,7 @@ def _load(slug):
 @pytest.mark.parametrize("slug", SLUGS)
 def test_offline_gate_schema_defaults_and_digest_placeholder(slug):
     assert kit_ci.check_kit(KITS / slug) == []
-    m = json.loads((KITS / slug / "kit.json").read_text())
+    m = json.loads((KITS / slug / "kit.json").read_text(encoding="utf-8"))
     assert m["image"].endswith("@sha256:PENDING")
     schema = m["param_schema"]
     sample = {"ai-video": {"prompts": ["x"]}, "text-to-speech": {"texts": ["x"]}, "scientific-compute": {}}[slug]
@@ -54,9 +54,9 @@ def test_offline_gate_schema_defaults_and_digest_placeholder(slug):
 
 @pytest.mark.parametrize("slug", SLUGS)
 def test_dockerfile_rules_and_verification_record(slug):
-    text = (KITS / slug / "Dockerfile").read_text()
+    text = (KITS / slug / "Dockerfile").read_text(encoding="utf-8")
     assert "USER 10001" in text and "must be pinned by digest" in text
-    v = json.loads((KITS / slug / "kit.json").read_text())["verification"]
+    v = json.loads((KITS / slug / "kit.json").read_text(encoding="utf-8"))["verification"]
     assert v["method"] == METHODS[slug] and "OWNER DECISION" in v["owner_decision"]
     if slug != "scientific-compute":
         assert 'test "${' in text and "PENDING" in text  # weights pins fail the build while PENDING
@@ -68,7 +68,7 @@ def test_verification_method_is_registered_and_thresholds_valid(slug):
     from app.services import verify_plugins as vp
     from app.services.verify_plugins.base import resolve_thresholds
 
-    m = json.loads((KITS / slug / "kit.json").read_text())
+    m = json.loads((KITS / slug / "kit.json").read_text(encoding="utf-8"))
     plugin = vp.get_plugin(m["verification"]["method"])
     assert plugin is not None
     resolve_thresholds(plugin.default_thresholds, plugin.threshold_bounds, m["verification"]["thresholds"])

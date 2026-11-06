@@ -4,10 +4,23 @@ A thin, typed HTTP client for the ComputeCoin API, built on `httpx` + `pydantic`
 
 ## Install
 
+Linux, macOS (bash):
+
 ```bash
 cd sdk/python
 pip install -e ".[dev]"
 ```
+
+Windows (PowerShell):
+
+```powershell
+cd sdk\python
+py -3 -m pip install -e ".[dev]"
+```
+
+The SDK is plain Python (`httpx`, `pydantic`, `cryptography`) and works the same on Windows. It reads and writes text as
+UTF-8, never as the Windows code page. Files saved by Windows PowerShell 5.1 with `>` are UTF-16; `python -m
+computecoin.ccverify` accepts UTF-8, UTF-8 with a byte-order mark and UTF-16 receipts.
 
 ## Quickstart
 
@@ -264,6 +277,11 @@ anything else -> `ApiError`.
 ```bash
 pip install -e ".[dev]"
 pytest -q
+```
+
+```powershell
+py -3 -m pip install -e ".[dev]"
+py -3 -m pytest -q
 ```
 
 Tests use `httpx.MockTransport`, so they run fully offline and assert on request

@@ -8,7 +8,7 @@ Design rules:
   * NEVER crash on a machine without a GPU. GPU detection uses NVML (pynvml /
     nvidia-ml-py) only if it imports AND initializes; otherwise we return an
     empty GPU list and a CPU-only report.
-  * psutil is optional. If it is not installed we fall back to stdlib + /proc.
+  * psutil is a declared dependency; if it cannot be imported we fall back to the platform probe (platform/).
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from enum import Enum
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+
+from .platform import PlatformUnsupported, get_platform
 
 
 class VerificationStatus(str, Enum):
@@ -141,32 +143,22 @@ class CapabilityReport(BaseModel):
 # CPU / RAM / disk
 # --------------------------------------------------------------------------- #
 def _read_proc_meminfo_total_mb() -> Optional[int]:
-    """Parse MemTotal from /proc/meminfo (Linux). Returns MB or None."""
+    """Total RAM in MB from the platform probe (Linux: MemTotal in /proc/meminfo), or None."""
     try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("MemTotal:"):
-                    # Format: "MemTotal:       16308472 kB"
-                    kb = int(line.split()[1])
-                    return kb // 1024
-    except (OSError, ValueError, IndexError):
+        return get_platform().hardware.memory_total_mb()
+    except PlatformUnsupported:
         return None
-    return None
 
 
 def _cpu_model() -> Optional[str]:
     try:
-        with open("/proc/cpuinfo", "r", encoding="utf-8") as fh:
-            for line in fh:
-                if line.lower().startswith("model name"):
-                    return line.split(":", 1)[1].strip()
-    except OSError:
+        return get_platform().hardware.cpu_model()
+    except PlatformUnsupported:
         return None
-    return None
 
 
 def detect_ram_mb() -> int:
-    # Prefer psutil if present (cross-platform), else /proc, else 0.
+    # Prefer psutil (cross-platform, a declared dependency); fall back to the platform probe, else 0.
     try:
         import psutil  # type: ignore
 
@@ -389,29 +381,25 @@ def _amd_vram_total_mb(amdsmi: Any, handle: Any) -> int:
         return 0
 
 
-def _amd_render_node(amdsmi: Any, handle: Any, *, sys_root: str = "/sys/bus/pci/devices", dev_root: str = "/dev/dri") -> Optional[str]:
+def _amd_render_node(amdsmi: Any, handle: Any, *, sys_root: Optional[str] = None, dev_root: Optional[str] = None) -> Optional[str]:
     """The /dev/dri/renderD<N> node of this GPU: amdsmi's DRM render id when the ROCm version has
-    it, else the GPU's PCI address (BDF) resolved through sysfs. None when neither works."""
+    it, else the GPU's PCI address (BDF) resolved through sysfs. None when neither works. The filesystem
+    lookups live in the platform probe (``sys_root``/``dev_root`` override its defaults, for tests)."""
+    minor: Any = None
     try:
         enum = amdsmi.amdsmi_get_gpu_enumeration_info(handle)
         minor = enum.get("drm_render") if isinstance(enum, dict) else None
-        if isinstance(minor, int) and minor >= 128:
-            node = os.path.join(dev_root, f"renderD{minor}")
-            if os.path.exists(node):
-                return node
     except Exception:
-        pass
+        minor = None
+    bdf: Optional[str] = None
     try:
         bdf = str(amdsmi.amdsmi_get_gpu_device_bdf(handle)).strip().lower()
-        drm_dir = os.path.join(sys_root, bdf, "drm")
-        nodes = sorted(d for d in os.listdir(drm_dir) if d.startswith("renderD"))
-        if len(nodes) == 1:
-            node = os.path.join(dev_root, nodes[0])
-            if os.path.exists(node):
-                return node
     except Exception:
-        pass
-    return None
+        bdf = None
+    try:
+        return get_platform().hardware.amd_render_node(minor if isinstance(minor, int) else None, bdf, sys_root=sys_root, dev_root=dev_root)
+    except PlatformUnsupported:
+        return None
 
 
 def detect_gpus(

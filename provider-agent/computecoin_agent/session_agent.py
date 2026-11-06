@@ -36,6 +36,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from .platform import get_platform
 from .executor import DockerExecutor, ExecutorError, JobSpec
 from .session_http import HttpBridge, open_docker_stream
 
@@ -296,7 +297,7 @@ class SessionAgent:
         if path is None:
             os.makedirs(self.workdir, exist_ok=True)
             path = tempfile.mkdtemp(prefix="ccoin-sess-", dir=self.workdir)
-            os.chmod(path, 0o777)  # the container runs as nobody
+            get_platform().paths.set_mode(path, 0o777)  # the container runs as nobody
             self._dirs[sid] = path
         return path
 

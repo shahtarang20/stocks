@@ -83,6 +83,10 @@ class MachineOut(BaseModel):
     supported_workloads: list[str]
     supported_isolation_tiers: list[str] = Field(default_factory=lambda: ["container"])
     created_at: dt.datetime
+    # W1 / W10 fleet view: the host's reported OS / runtime backend and capability flags (sanitised; None = a legacy
+    # agent that has not reported them).
+    platform: dict[str, str] | None = None
+    capabilities: list[str] | None = None
 
 
 class MachineDetailOut(MachineOut):
@@ -164,6 +168,24 @@ class HeartbeatHealth(BaseModel):
     # CPU-only Kits: the host opted in to run them (agent setting cpu_only_kits_enabled). Self-reported; it only widens
     # WHERE a CPU-only Kit may run and is honoured only while CPU_ONLY_KITS_ENABLED is on.
     cpu_capable: bool | None = None
+    # W1 / X4 (cross-platform plan): the host's OS and the capability flags it can prove. Self-reported and sanitised here
+    # (known keys / known flags only, short ASCII, size-capped); placement uses them in app.services.capability_flags.
+    platform: dict | None = None
+    capabilities: list[str] | None = None
+
+    @field_validator("platform", mode="before")
+    @classmethod
+    def _sanitize_platform(cls, v):
+        from app.services.capability_flags import sanitize_platform
+
+        return sanitize_platform(v)
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def _sanitize_capabilities(cls, v):
+        from app.services.capability_flags import sanitize_capabilities
+
+        return sanitize_capabilities(v)
 
     @field_validator("vfio_gpu", "cpu_capable", mode="before")
     @classmethod

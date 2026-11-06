@@ -179,7 +179,29 @@ def default_health(report: Optional[CapabilityReport] = None) -> dict[str, Any]:
     cpu_capable = _cpu_capable_flag()
     if cpu_capable is not None:
         health["cpu_capable"] = cpu_capable
+    _add_platform_and_capabilities(health, report)
     return health
+
+
+def _add_platform_and_capabilities(health: dict[str, Any], report: Optional[CapabilityReport]) -> None:
+    """W1 / X4: the ``platform`` object and the ``capabilities`` flag list (additive; the server sanitises both).
+
+    A Windows host never advertises isolation runtimes or the VM tier (X5), whatever a probe finds. If the flags cannot
+    be computed the key is simply absent, which the scheduler treats as "no flag proven" (fail closed)."""
+    try:
+        from . import __version__
+        from .capabilities import compute_capabilities
+        from .platform import PLATFORM_WINDOWS, get_platform
+
+        plat = get_platform()
+        health["platform"] = plat.info(agent_version=__version__)
+        if plat.name == PLATFORM_WINDOWS:
+            health["isolation_runtimes"] = []
+            health.pop("vfio_gpu", None)
+        rep = report if report is not None else build_capability_report()
+        health["capabilities"] = compute_capabilities(rep, plat=plat)
+    except Exception:
+        health.pop("capabilities", None)
 
 
 def build_contract_heartbeat_body(

@@ -50,6 +50,16 @@ export function uploadIdempotencyKey(sha256: string, size: number): string {
   return `up-${sha256.slice(0, 40)}-${size}`;
 }
 
+/**
+ * The name sent to the server: the last path segment only. Browsers already give a bare file name, on Windows too, but a
+ * drag from a zip, a pasted "C:\dir\file.bin" or a relative path would otherwise be refused by the server (it rejects
+ * both "/" and a backslash). Both separators are handled whatever OS the browser runs on.
+ */
+export function uploadFileName(rawName: string): string {
+  const base = rawName.split(/[\\/]/).pop() ?? "";
+  return base.trim() || "upload.bin";
+}
+
 export function backoffMs(attempt: number): number {
   return Math.min(8000, 500 * 2 ** attempt);
 }
@@ -186,7 +196,7 @@ export function createUploader(opts: UploaderOptions): Uploader {
         emit({ phase: "starting" });
         upload = await dataApi.createUpload(
           token,
-          { name: file.name, content_type: file.type || "application/octet-stream", sha256: sha, size_bytes: file.size },
+          { name: uploadFileName(file.name), content_type: file.type || "application/octet-stream", sha256: sha, size_bytes: file.size },
           uploadIdempotencyKey(sha, file.size),
         );
         emit({ partCount: upload.part_count });

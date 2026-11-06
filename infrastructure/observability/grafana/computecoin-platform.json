@@ -2,7 +2,7 @@
   "title": "ComputeCoin Platform",
   "uid": "computecoin-platform",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -214,6 +214,121 @@
         {
           "expr": "computecoin_ops_abuse_flags_open",
           "legendFormat": "open",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Machines by platform (not offline)",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (platform) (computecoin_ops_machines_by_platform{availability!=\"offline\"})",
+          "legendFormat": "{{platform}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Windows: hosts yielding to their owner",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "computecoin_ops_platform_hosts_yielding{platform=\"windows\"}",
+          "legendFormat": "yielding",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(computecoin_ops_machines_by_platform{platform=\"windows\",availability!=\"offline\"})",
+          "legendFormat": "online windows hosts",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Windows: distro unhealthy",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "computecoin_ops_platform_distro_unhealthy{platform=\"windows\"}",
+          "legendFormat": "hosts",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Windows: GPU smoke test failing",
+      "gridPos": {
+        "x": 8,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "computecoin_ops_platform_gpu_smoke_failing{platform=\"windows\"}",
+          "legendFormat": "hosts",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Windows: update rollbacks",
+      "gridPos": {
+        "x": 16,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "computecoin_ops_platform_update_rollbacks{platform=\"windows\"}",
+          "legendFormat": "hosts",
           "refId": "A"
         }
       ]

@@ -64,6 +64,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from .platform import AMD_KFD_DEVICE, get_platform
+
 
 # --------------------------------------------------------------------------- #
 # Errors
@@ -400,7 +402,7 @@ def _default_amd_available() -> bool:
     """Best-effort probe: is AMD ROCm compute available (/dev/kfd and docker)?"""
     from shutil import which
 
-    return os.path.exists("/dev/kfd") and which("docker") is not None
+    return get_platform().hardware.amd_kfd_present() and which("docker") is not None
 
 
 def _device_gids(paths: list[str]) -> list[int]:
@@ -444,13 +446,13 @@ def build_gpu_argv(
         raise HardwareUnavailableError(
             f"AMD GPU job needs {gpu_count} GPU(s) but only {len(nodes)} render node(s) are known"
         )
-    argv = ["--device", "/dev/kfd"]
+    argv = ["--device", AMD_KFD_DEVICE]
     for node in nodes:
         argv.extend(["--device", node])
     if render_gid is not None or video_gid is not None:
         gids = [g for g in (render_gid, video_gid) if g is not None]
     else:
-        gids = _device_gids(["/dev/kfd", *nodes])
+        gids = _device_gids([AMD_KFD_DEVICE, *nodes])
     for gid in gids:
         argv.extend(["--group-add", str(gid)])
     return argv
@@ -554,7 +556,7 @@ class DockerExecutor(Executor):
         self._docker_available = docker_available
         self._nvidia_available = nvidia_available
         self._amd_available = amd_available or _default_amd_available
-        self._kfd_available = kfd_available or (lambda: os.path.exists("/dev/kfd"))
+        self._kfd_available = kfd_available or (lambda: get_platform().hardware.amd_kfd_present())
         self._gvisor_available = gvisor_available or probe_gvisor
         self._microvm_available = microvm_available or probe_microvm
         self._confidential_available = confidential_available or probe_confidential_computing
@@ -1001,7 +1003,7 @@ class DockerExecutor(Executor):
             created_tmp = True
         os.makedirs(output_dir, exist_ok=True)
         try:
-            os.chmod(output_dir, 0o777)
+            get_platform().paths.set_mode(output_dir, 0o777)
         except OSError:
             pass
         if job_spec.on_output_dir is not None:
@@ -1016,7 +1018,7 @@ class DockerExecutor(Executor):
             with open(input_path, "w", encoding="utf-8") as fh:
                 json.dump(job_spec.input, fh)
             try:
-                os.chmod(input_path, 0o666)
+                get_platform().paths.set_mode(input_path, 0o666)
             except OSError:
                 pass
         except OSError as exc:

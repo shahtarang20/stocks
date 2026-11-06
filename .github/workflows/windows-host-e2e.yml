@@ -1,0 +1,223 @@
+name: Windows host end-to-end
+
+# Cross-platform plan W15 (sections 6 and 8). NEVER RUN YET. Manual dispatch only.
+#
+# Runs on the SELF-HOSTED Windows runner labelled `windows-gpu`: one clean Windows install with an NVIDIA RTX-class card (plan
+# section 9, "Self-hosted Windows GPU runner hardware" is an owner item). Hosted windows-latest runners cannot be assumed to provide
+# WSL2 with GPU, so nothing GPU- or WSL-related runs in ci.yml.
+#
+# What it proves, in order (each step is a pytest file under tests/windows, written but never executed):
+#   1. provisioning   managed distro `computecoin` present and hardened, GPU visible, a CUDA container runs, one real Kit job runs
+#   2. isolation      a job container reaches nothing it must not (C:\, Windows interop, host LAN, internet); the escape suite passes
+#   3. parity         the same Kit, inputs and image digest give equal output hashes on a Linux host and on this host
+#   4. soak           (optional) hours with yield, sleep and reboot events injected
+#
+# SECRETS: every step reads secrets from the ENVIRONMENT only (step-level `env:`), never from a command line, never echoed. The
+# runner is a dedicated machine in the protected environment `windows-host-e2e` (required reviewers). Repository variables (not
+# secrets, but images and commands must be reviewed by the owner): E2E_PROBE_IMAGE, E2E_KIT_JOB_CMD, E2E_LINUX_KIT_JOB_CMD,
+# E2E_ESCAPE_SUITE_CMD, E2E_LAN_HOST, E2E_SOAK_* (see tests/windows/soak.py). Secret (optional, for an enrolment step you add): E2E_ENROLL_TOKEN.
+#
+# Images are refused unless pinned by digest. Artifacts are scanned for secret-looking text before upload.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kit_image:
+        description: "Kit image pinned by digest (name@sha256:<64 hex>) used for the one real job and for the parity run"
+        required: true
+        type: string
+      produce_linux_reference:
+        description: "Run the same Kit job on a Linux self-hosted runner first (the parity reference)"
+        type: boolean
+        default: true
+      linux_runner_label:
+        description: "Label of the Linux GPU runner for the reference run (kits.yml uses gpu-3090, gpu-4090, gpu-a100)"
+        type: string
+        default: gpu-3090
+      linux_run_id:
+        description: "Instead of producing a reference: the run id of an earlier run whose artifact `linux-kit-artifacts` to compare with"
+        required: false
+        type: string
+      run_isolation:
+        description: "Run the isolation tests and the escape suite"
+        type: boolean
+        default: true
+      soak_hours:
+        description: "Soak length in hours (0 = skip). Needs the E2E_SOAK_* command variables; a skipped event makes the soak INCOMPLETE"
+        type: string
+        default: "0"
+
+permissions:
+  contents: read
+  actions: read   # download-artifact from another run
+
+concurrency:
+  group: windows-host-e2e
+  cancel-in-progress: false
+
+jobs:
+  linux-reference:
+    name: Linux reference run (${{ inputs.linux_runner_label }})
+    if: ${{ inputs.produce_linux_reference }}
+    runs-on: [self-hosted, linux, "${{ inputs.linux_runner_label }}"]
+    timeout-minutes: 90
+    environment: windows-host-e2e
+    env:
+      CC_KIT_IMAGE: ${{ inputs.kit_image }}
+      CC_LINUX_KIT_JOB_CMD: ${{ vars.E2E_LINUX_KIT_JOB_CMD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Refuse an unpinned image or a missing command
+        run: |
+          case "$CC_KIT_IMAGE" in *@sha256:????????????????????????????????????????????????????????????????) ;; *) echo "kit_image must be pinned by @sha256:<64 hex>"; exit 1;; esac
+          test -n "$CC_LINUX_KIT_JOB_CMD" || { echo "repository variable E2E_LINUX_KIT_JOB_CMD is not set"; exit 1; }
+      - name: Run the Kit job and record the reference hashes
+        # The command prints ONE JSON line {"image","passed","outputs":{path:sha256}} (see tests/windows/record_linux_reference.py).
+        run: |
+          bash -c "$CC_LINUX_KIT_JOB_CMD" | tee job-output.txt | python tests/windows/record_linux_reference.py --out linux-artifacts
+      - name: Scan for secrets before upload
+        run: |
+          pip install -e provider-agent
+          python tests/windows/scan_artifacts.py linux-artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-kit-artifacts
+          path: linux-artifacts
+          if-no-files-found: error
+
+  windows-host:
+    name: Windows host (provisioning, isolation, parity)
+    needs: [linux-reference]
+    # Run when the reference job succeeded OR was deliberately skipped; never after a failed or cancelled reference.
+    if: ${{ !cancelled() && (needs.linux-reference.result == 'success' || needs.linux-reference.result == 'skipped') }}
+    runs-on: [self-hosted, windows, windows-gpu]
+    timeout-minutes: 240
+    environment: windows-host-e2e
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      COMPUTECOIN_WINDOWS_GPU_E2E: "1"
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      CC_KIT_IMAGE: ${{ inputs.kit_image }}
+      CC_PROBE_IMAGE: ${{ vars.E2E_PROBE_IMAGE }}
+      CC_KIT_JOB_CMD: ${{ vars.E2E_KIT_JOB_CMD }}
+      CC_ESCAPE_SUITE_CMD: ${{ vars.E2E_ESCAPE_SUITE_CMD }}
+      PROBE_LAN_HOST: ${{ vars.E2E_LAN_HOST }}
+      CC_ARTIFACT_DIR: e2e-artifacts
+      CC_LINUX_ARTIFACT_DIR: linux-artifacts
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the agent and test tools
+        run: |
+          python -m pip install -U pip
+          pip install -e provider-agent -e sdk/python pytest==8.3.3
+
+      - name: Preflight (pins, variables, runner state)
+        run: |
+          $failed = @()
+          foreach ($name in 'CC_KIT_IMAGE', 'CC_PROBE_IMAGE') {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($value -notmatch '@sha256:[0-9a-f]{64}$') { $failed += "$name is not pinned by digest" }
+          }
+          foreach ($name in 'CC_KIT_JOB_CMD', 'CC_ESCAPE_SUITE_CMD') {
+            if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) { $failed += "$name is not set (repository variable)" }
+          }
+          if ($failed.Count -gt 0) { $failed | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          wsl.exe --version
+          wsl.exe --list --verbose
+          nvidia-smi -L
+
+      - name: 1. Provisioning (distro, hardening, GPU, one real Kit job)
+        run: python -m pytest -q -ra tests/windows/test_windows_host_provisioning.py --junitxml=e2e-artifacts/junit-provisioning.xml
+
+      - name: 2. Isolation (job container reaches nothing it must not; escape suite)
+        if: ${{ inputs.run_isolation }}
+        run: python -m pytest -q -ra tests/windows/test_windows_isolation.py --junitxml=e2e-artifacts/junit-isolation.xml
+
+      - name: Fetch the Linux reference (this run)
+        if: ${{ inputs.produce_linux_reference }}
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-kit-artifacts
+          path: linux-artifacts
+      - name: Fetch the Linux reference (an earlier run)
+        if: ${{ !inputs.produce_linux_reference && inputs.linux_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-kit-artifacts
+          path: linux-artifacts
+          run-id: ${{ inputs.linux_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: "3. Parity (same Kit and digest, equal output hashes)"
+        if: ${{ inputs.produce_linux_reference || inputs.linux_run_id != '' }}
+        run: python -m pytest -q -ra tests/windows/test_parity_hashes.py --junitxml=e2e-artifacts/junit-parity.xml
+      - name: Parity NOT PROVEN (no Linux reference given)
+        if: ${{ !inputs.produce_linux_reference && inputs.linux_run_id == '' }}
+        run: |
+          Write-Host "::warning::No Linux reference: parity (W15.2) was not run and is not proven."
+          "Parity NOT PROVEN: no Linux reference was given." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Scan artifacts for secrets
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force -Path e2e-artifacts | Out-Null
+          python tests/windows/scan_artifacts.py e2e-artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-host-e2e-artifacts
+          path: e2e-artifacts
+          if-no-files-found: warn
+
+  soak:
+    name: Soak (${{ inputs.soak_hours }} h)
+    needs: [windows-host]
+    if: ${{ !cancelled() && needs.windows-host.result == 'success' && inputs.soak_hours != '0' }}
+    runs-on: [self-hosted, windows, windows-gpu]
+    # A reboot ends the job. The state file (tests/windows/soak.py --state) lets a re-run of THIS job resume; the runner service
+    # must start on boot. Allow the soak length plus an hour.
+    timeout-minutes: 1800
+    environment: windows-host-e2e
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+      COMPUTECOIN_SOAK_HOURS: ${{ inputs.soak_hours }}
+      CC_SOAK_PROBE_CMD: ${{ vars.E2E_SOAK_PROBE_CMD }}
+      CC_SOAK_YIELD_ON_CMD: ${{ vars.E2E_SOAK_YIELD_ON_CMD }}
+      CC_SOAK_YIELD_OFF_CMD: ${{ vars.E2E_SOAK_YIELD_OFF_CMD }}
+      CC_SOAK_SLEEP_CMD: ${{ vars.E2E_SOAK_SLEEP_CMD }}
+      CC_SOAK_REBOOT_CMD: ${{ vars.E2E_SOAK_REBOOT_CMD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the agent
+        run: |
+          python -m pip install -U pip
+          pip install -e provider-agent
+      - name: Soak with injected yield, sleep and reboot events
+        run: python tests/windows/soak.py --hours "$env:COMPUTECOIN_SOAK_HOURS" --state e2e-artifacts/soak-state.json --report e2e-artifacts/soak-report.json
+      - name: Scan artifacts for secrets
+        if: always()
+        run: python tests/windows/scan_artifacts.py e2e-artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-soak-artifacts
+          path: e2e-artifacts
+          if-no-files-found: warn

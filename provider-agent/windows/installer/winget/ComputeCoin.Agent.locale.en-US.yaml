@@ -1,0 +1,25 @@
+# winget default-locale manifest TEMPLATE. The Agreements block is the consent text (X14): winget shows it and asks the
+# person to accept before it installs. KEEP IT EQUAL TO consent.txt (release checklist item in docs/operations/windows-installer.md).
+PackageIdentifier: ComputeCoin.Agent
+PackageVersion: <VERSION>
+PackageLocale: en-US
+Publisher: ComputeCoin
+PublisherUrl: <https://publisher-site>
+PackageName: ComputeCoin Agent
+PackageUrl: <https://product-page>
+License: <LICENSE NAME, e.g. Proprietary>
+LicenseUrl: <https://license-page>
+ShortDescription: Share this PC's graphics card with the ComputeCoin marketplace, only when you are not using it.
+Description: >-
+  Installs the ComputeCoin Agent service. It does not start sharing until you enrol this PC in a separate step. It yields
+  to you by default: not while you use the GPU, not during full-screen apps, not on battery.
+Tags:
+  - gpu
+  - compute
+  - computecoin
+Agreements:
+  - AgreementLabel: What you are agreeing to
+    Agreement: |-
+      <PASTE THE CONTENTS OF consent.txt HERE, indented by 6 spaces. build.ps1 does not generate this file.>
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

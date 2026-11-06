@@ -140,7 +140,7 @@ export default function HomePage() {
               <h3 className="font-semibold">I have a computer to share</h3>
               <p className="text-sm text-muted-foreground">
                 If your computer runs Linux and has an NVIDIA or AMD graphics card, you can let
-                others use it. See what you need first.
+                others use it. Windows PCs with an NVIDIA card are planned. See what you need first.
               </p>
               <Button asChild variant="outline" className="mt-auto self-start">
                 <Link href="/providers">Become a host</Link>

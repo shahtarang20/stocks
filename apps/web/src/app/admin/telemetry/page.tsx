@@ -33,6 +33,14 @@ import {
 import { api, ApiError, type TelemetryAlert } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatRelativeTime } from "@/lib/utils";
+import {
+  capabilityLabels,
+  filterByPlatform,
+  platformCounts,
+  platformLabel,
+  platformOf,
+  type PlatformFilter,
+} from "@/lib/fleet-platform";
 
 function severityBadge(sev: string) {
   if (sev === "critical") {
@@ -49,6 +57,7 @@ export default function AdminTelemetryPage() {
   const token = accessToken as string;
   const qc = useQueryClient();
   const [selectedMachineId, setSelectedMachineId] = useState<string>("");
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all");
 
   // 1. Platform-wide telemetry stats
   const statsQuery = useQuery({
@@ -368,6 +377,84 @@ export default function AdminTelemetryPage() {
                       ) : (
                         <span className="text-xs text-muted-foreground">Fixed</span>
                       )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* W1 / W10: fleet view with each computer's operating system and the abilities its agent reports */}
+      <Card className="mt-6">
+        <CardHeader className="border-b border-border/40 pb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base font-semibold">Fleet: system and abilities</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                What each computer says it runs on and what it can do. Jobs are only sent to computers that report the ability they need. Windows computers run standard container jobs only.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="admin-fleet-platform" className="text-xs text-muted-foreground">System:</label>
+              <select
+                id="admin-fleet-platform"
+                value={platformFilter}
+                onChange={(e) => setPlatformFilter(e.target.value as PlatformFilter)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="all">All ({platformCounts(machines).all})</option>
+                <option value="linux">Linux ({platformCounts(machines).linux})</option>
+                <option value="windows">Windows ({platformCounts(machines).windows})</option>
+                <option value="unreported">Not reported ({platformCounts(machines).unreported})</option>
+              </select>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {filterByPlatform(machines, platformFilter).length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">
+              No computers match this filter.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Computer</TableHead>
+                  <TableHead>System</TableHead>
+                  <TableHead>Agent</TableHead>
+                  <TableHead>Abilities</TableHead>
+                  <TableHead>State</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filterByPlatform(machines, platformFilter).map((m) => (
+                  <TableRow key={m.machine_id} data-platform={platformOf(m)}>
+                    <TableCell className="font-mono text-xs">
+                      {m.hostname} ({m.machine_id.slice(0, 8)}…)
+                    </TableCell>
+                    <TableCell className="text-xs">{platformLabel(m)}</TableCell>
+                    <TableCell className="font-mono text-xs">{m.platform?.agent_version ?? m.agent_version ?? "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {capabilityLabels(m).length === 0 ? (
+                          <span className="text-xs text-muted-foreground">
+                            {m.platform ? "None reported" : "Not reported (older agent)"}
+                          </span>
+                        ) : (
+                          capabilityLabels(m).map((label) => (
+                            <Badge key={label} variant="outline" className="text-[10px]">
+                              {label}
+                            </Badge>
+                          ))
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={m.availability === "online" ? "success" : m.availability === "throttled" ? "warning" : "outline"}>
+                        {m.availability}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))}

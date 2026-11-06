@@ -260,7 +260,14 @@ export default function ProviderOnboardingPage() {
               items={[
                 {
                   lead: "Linux.",
-                  text: "Our setup guide is written for Ubuntu 22.04 or 24.04. Windows and Mac are not supported yet.",
+                  text: (
+                    <>
+                      Our setup guide is written for Ubuntu 22.04 or 24.04. Mac is not supported. Windows PCs
+                      with an NVIDIA card are planned but cannot be installed yet. When they can, they will
+                      only take ordinary jobs (no private jobs) and NVIDIA cards only. See{" "}
+                      <Link className="underline underline-offset-2" href="/share/windows">what a Windows PC would need</Link>.
+                    </>
+                  ),
                 },
                 {
                   lead: "Python 3.12 or newer.",

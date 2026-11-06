@@ -1,0 +1,8 @@
+# winget version manifest TEMPLATE (cross-platform plan W6). Replace every <PLACEHOLDER> from the release build.
+# TODO(verify-docs): manifest schema version and field names, https://learn.microsoft.com/windows/package-manager/package/manifest
+# Validate with `winget validate` before submitting. Nothing here is a secret.
+PackageIdentifier: ComputeCoin.Agent
+PackageVersion: <VERSION>            # x.y.z, the same as the MSI ProductVersion
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

@@ -1,0 +1,29 @@
+# winget installer manifest TEMPLATE. The installer is the Authenticode-signed MSI built by build.ps1.
+PackageIdentifier: ComputeCoin.Agent
+PackageVersion: <VERSION>
+InstallerType: msi                   # TODO(verify-docs): `msi` vs `wix`; this decides the default silent switches
+Scope: machine
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+# A silent install shows no consent page, so the MSI refuses to install unless LicenseAccepted=1 is passed. winget only
+# runs these switches after the person accepted the Agreements text in the locale manifest (or passed
+# --accept-package-agreements on purpose).
+InstallerSwitches:
+  Silent: /qn /norestart LicenseAccepted=1
+  SilentWithProgress: /qb /norestart LicenseAccepted=1
+  InstallLocation: INSTALLFOLDER="<INSTALLPATH>"
+UpgradeBehavior: install             # the MSI does a MajorUpgrade itself
+MinimumOSVersion: 10.0.19041.0       # OWNER DECISION (plan section 9); the requirements checker is the real gate
+Installers:
+  - Architecture: x64
+    InstallerUrl: <HTTPS URL of the signed MSI>
+    InstallerSha256: <SHA256 of the MSI, 64 hex characters, upper case as winget prints it>
+    ProductCode: '<PRODUCT CODE GUID of this MSI, with braces>'   # from the built MSI (Property table), changes every version
+    AppsAndFeaturesEntries:
+      - DisplayName: ComputeCoin Agent
+        Publisher: ComputeCoin
+        UpgradeCode: '{CAA81EEF-06DE-4F86-B012-A8E47FE84EDC}'
+ManifestType: installer
+ManifestVersion: 1.6.0

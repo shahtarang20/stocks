@@ -32,7 +32,7 @@ def build_private_kit_input(
     (they become ``/in/<name>`` in the Kit container)."""
     out: dict[str, dict[str, str]] = {}
     for name, value in (inputs or {}).items():
-        if not isinstance(name, str) or not _NAME.match(name):
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
             raise ValueError(f"bad input name {name!r}: use 1-128 of A-Z a-z 0-9 . _ -")
         if isinstance(value, (bytes, bytearray)):
             out[name] = {"b64": base64.b64encode(bytes(value)).decode("ascii")}

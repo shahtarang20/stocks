@@ -1,0 +1,22 @@
+# Line endings are part of the data in this repository: Kit manifests and Dockerfiles are linted line by line, shared
+# test vectors are compared byte for byte, and shell scripts and Dockerfiles break with CRLF inside Linux containers.
+# A Windows checkout (autocrlf=true by default in Git for Windows and on windows-latest runners) must not change them.
+# Cross-platform plan W9 / W15. Only the listed types are pinned, so nothing already committed is renormalised.
+*.py      text eol=lf
+*.json    text eol=lf
+*.jsonl   text eol=lf
+*.toml    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.mjs     text eol=lf
+*.js      text eol=lf
+*.css     text eol=lf
+*.sh      text eol=lf
+*.ps1     text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+Makefile  text eol=lf
+*.sol     text eol=lf

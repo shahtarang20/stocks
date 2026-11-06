@@ -236,6 +236,10 @@ class Settings(BaseSettings):
     # The private key is never a setting; custody is an OWNER DECISION (docs/architecture/U1-job-spec-v2-design.md).
     KIT_SIGNING_PUBLIC_KEY: str = ""
 
+    # W6 agent updates: raw Ed25519 PUBLIC key (64 hex chars) that signs update manifests. Unset = no release can be published
+    # (fail closed). The private key is never a setting (L7); custody is an OWNER DECISION.
+    AGENT_RELEASE_SIGNING_PUBLIC_KEY: str = ""
+
     # U15 pricing units and quotes. OFF by default; MONEY-ADJACENT, needs owner approval and independent
     # review before enabling (docs/architecture/U15-pricing-units-design.md). Every rate is an OWNER DECISION.
     PRICING_UNITS_ENABLED: bool = False

@@ -36,7 +36,7 @@ def _load(slug):
 @pytest.mark.parametrize("slug", SLUGS)
 def test_offline_gate_and_schema_defaults(slug):
     assert kit_ci.check_kit(KITS / slug) == []
-    schema = json.loads((KITS / slug / "params.schema.json").read_text())
+    schema = json.loads((KITS / slug / "params.schema.json").read_text(encoding="utf-8"))
     out = kitrt.validate({}, schema)
     for k, sub in schema["properties"].items():
         assert out[k] == sub["default"]
@@ -144,7 +144,7 @@ def test_splat_zip_whitelist_and_colmap(tmp_path):
 @pytest.mark.parametrize("slug,method", [("whisper-transcribe", "wer"), ("batch-embeddings", "cosine"),
                                           ("llm-finetune-lora", "loss_curve")])
 def test_metric_verification_methods_replace_exact_placeholder(slug, method):
-    v = json.loads((KITS / slug / "kit.json").read_text())["verification"]
+    v = json.loads((KITS / slug / "kit.json").read_text(encoding="utf-8"))["verification"]
     assert v["method"] == method
     assert "OWNER DECISION" in v["owner_decision"]
     assert v["thresholds"]  # explicit conservative value, validated by the plug-in's bounds in the API tests

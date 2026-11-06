@@ -422,7 +422,7 @@ def test_kit_ci_manifest_keys_match_the_api_validator():
     spec = importlib.util.spec_from_file_location("kit_ci", root / "scripts" / "kit_ci.py")
     kit_ci = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kit_ci)
-    src = (root / "apps/api/app/services/kits.py").read_text()
+    src = (root / "apps/api/app/services/kits.py").read_text(encoding="utf-8")
     block = re.search(r"allowed = \{([^}]*)\}", src).group(1)
     assert set(re.findall(r'"([a-z_]+)"', block)) == set(kit_ci.ALLOWED)
 

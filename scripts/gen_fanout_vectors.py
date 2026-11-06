@@ -207,7 +207,8 @@ def main() -> int:
         doc["fanout_v1"] = new_sec
         raw = VECTORS.read_text(encoding="utf-8")
         tail = "\n" if raw.endswith("\n") else ""  # keep the file's trailing-newline convention (idempotent rewrites)
-        VECTORS.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + tail, encoding="utf-8")
+        # Bytes, not write_text: text mode would turn every "\n" into "\r\n" on Windows and rewrite the whole file.
+        VECTORS.write_bytes((json.dumps(doc, indent=2, ensure_ascii=False) + tail).encode("utf-8"))
         print(f"wrote fanout_v1 into {VECTORS}", file=sys.stderr)
         return 0
     print(json.dumps(sec, indent=2, ensure_ascii=False))

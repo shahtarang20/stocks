@@ -13,6 +13,19 @@ npm run build      # emit dist/
 npm test           # vitest (mocked fetch, no network)
 ```
 
+Windows (PowerShell), the same commands:
+
+```powershell
+cd sdk\typescript
+npm install
+npx tsc --noEmit
+npm run build
+npm test
+```
+
+Node 18 or newer on Windows. The private-chat helpers use `node:crypto`, which is the same on every OS; their
+canonical JSON is byte-identical to the Python SDK's (ASCII only, so no code page can change it).
+
 ## Quickstart
 
 ```ts

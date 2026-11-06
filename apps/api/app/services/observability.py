@@ -140,6 +140,88 @@ def _esc(v: str) -> str:
     return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 
 
+# --- cross-platform plan W10: the `platform` label --------------------------------------------------------------------
+# A label value is NEVER copied from a heartbeat: it is looked up in this allowlist, so a host cannot invent a series
+# (cardinality) or inject text into the exposition. A host that reports nothing (every Linux agent from before W1) is
+# "unknown", not "linux": the label states what was reported, not what is assumed.
+PLATFORM_LABELS = ("linux", "windows")
+PLATFORM_UNKNOWN = "unknown"
+
+
+def machine_platform(health: object) -> str:
+    """'linux' | 'windows' | 'unknown' from a heartbeat health block (``health["platform"]["os"]``, plan section 3.4)."""
+    if not isinstance(health, dict):
+        return PLATFORM_UNKNOWN
+    plat = health.get("platform")
+    os_name = plat.get("os") if isinstance(plat, dict) else None
+    return os_name if isinstance(os_name, str) and os_name in PLATFORM_LABELS else PLATFORM_UNKNOWN
+
+
+def _health_flag(health: object, section: str, key: str) -> bool | None:
+    """``health[section][key]`` when it is a real boolean, else None (a missing or odd value is neither true nor false)."""
+    block = health.get(section) if isinstance(health, dict) else None
+    value = block.get(key) if isinstance(block, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+def platform_signals(health: object) -> dict[str, bool]:
+    """The per-host facts behind the Windows alerts. Contract with the supervisor (W2/W3/W6), additive and optional:
+
+    * ``health["runtime"]["distro_ok"]`` / ``["gpu_smoke_ok"]``: the managed WSL2 distro passes its health checks / the
+      last GPU smoke test passed. Only an explicit ``False`` counts as a failure; a missing value counts as nothing.
+    * ``health["update"]["rolled_back"]``: the last update was rolled back.
+    * ``health["availability_detail"]["state"] == "yielding"``: the owner has the machine (policy.py heartbeat_health).
+
+    TODO(contract): confirm these key names against the supervisor and updater once they report them; until then the
+    series simply read 0 (nothing reported), they never invent a failure."""
+    detail = health.get("availability_detail") if isinstance(health, dict) else None
+    return {
+        "distro_unhealthy": _health_flag(health, "runtime", "distro_ok") is False,
+        "gpu_smoke_failing": _health_flag(health, "runtime", "gpu_smoke_ok") is False,
+        "update_rolled_back": _health_flag(health, "update", "rolled_back") is True,
+        "yielding": isinstance(detail, dict) and detail.get("state") == "yielding",
+    }
+
+
+def render_platform_metrics(rows: list[tuple[str, object, object]], now) -> list[str]:
+    """Exposition lines for machines by (availability, platform) plus the Windows-oriented gauges.
+
+    ``rows`` are (availability, last_health, last_heartbeat_at). Health signals only count for a machine whose heartbeat
+    is recent (3 online windows): a host that went away must not keep an alert firing from stale data."""
+    fresh_for = timedelta(seconds=settings.ONLINE_WINDOW_SECONDS * 3)
+    by_avail: dict[tuple[str, str], int] = {}
+    signals = {name: {p: 0 for p in (*PLATFORM_LABELS, PLATFORM_UNKNOWN)} for name in
+               ("distro_unhealthy", "gpu_smoke_failing", "update_rolled_back", "yielding")}
+    for availability, health, last_seen in rows:
+        plat = machine_platform(health)
+        key = (str(availability), plat)
+        by_avail[key] = by_avail.get(key, 0) + 1
+        seen = ensure_aware(last_seen) if last_seen is not None else None
+        if seen is None or now - seen > fresh_for:
+            continue
+        for name, on in platform_signals(health).items():
+            if on:
+                signals[name][plat] += 1
+    out = [
+        "# HELP computecoin_ops_machines_by_platform Machines by availability and reported platform (additive to computecoin_ops_machines).",
+        "# TYPE computecoin_ops_machines_by_platform gauge",
+    ]
+    avail_names = sorted({"online", "offline", "throttled"} | {a for a, _ in by_avail})
+    for a in avail_names:
+        for p in (*PLATFORM_LABELS, PLATFORM_UNKNOWN):
+            out.append(f'computecoin_ops_machines_by_platform{{availability="{_esc(a)}",platform="{p}"}} {by_avail.get((a, p), 0)}')
+    series = (
+        ("computecoin_ops_platform_hosts_yielding", "yielding", "Hosts whose owner currently has the machine (X13)."),
+        ("computecoin_ops_platform_distro_unhealthy", "distro_unhealthy", "Hosts reporting an unhealthy runtime distro."),
+        ("computecoin_ops_platform_gpu_smoke_failing", "gpu_smoke_failing", "Hosts whose last GPU smoke test failed."),
+        ("computecoin_ops_platform_update_rollbacks", "update_rolled_back", "Hosts whose last update was rolled back."),
+    )
+    for metric, name, help_text in series:
+        out += [f"# HELP {metric} {help_text}", f"# TYPE {metric} gauge"]
+        out += [f'{metric}{{platform="{p}"}} {signals[name][p]}' for p in (*PLATFORM_LABELS, PLATFORM_UNKNOWN)]
+    return out
+
+
 async def render_prometheus(db: AsyncSession) -> str:
     from app.models.reconciliation import ChainReconciliationRun, StakeSyncRun
 
@@ -165,6 +247,15 @@ async def render_prometheus(db: AsyncSession) -> str:
     counts = {a: int(n) for a, n in rows}
     for a in sorted(seen | set(counts)):
         out.append(f'computecoin_ops_machines{{availability="{_esc(a)}"}} {counts.get(a, 0)}')
+
+    # W10: the same machines with a `platform` label (additive: the series above keep their labels, so existing alerts
+    # such as NoOnlineMachines still mean "no machine at all", not "no machine of one platform").
+    fleet = (
+        await db.execute(
+            select(ProviderMachine.availability, ProviderMachine.last_health, ProviderMachine.last_heartbeat_at)
+        )
+    ).all()
+    out += render_platform_metrics([(a, h, t) for a, h, t in fleet], now)
 
     window = now - timedelta(seconds=settings.OBS_CLAIM_LATENCY_WINDOW_SECONDS)
     started = (

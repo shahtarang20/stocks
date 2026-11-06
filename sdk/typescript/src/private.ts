@@ -81,7 +81,8 @@ const pubObj = (raw: Uint8Array) => createPublicKey({ key: Buffer.concat([SPKI_X
 const pubRawOf = (priv: ReturnType<typeof privObj>): Uint8Array =>
   new Uint8Array(createPublicKey(priv).export({ format: "der", type: "spki" }).subarray(-32));
 
-/** `ensure_ascii`-style canonical JSON, same as Python `json.dumps(sort_keys=True, separators=(",", ":"))`. */
+/** `ensure_ascii`-style canonical JSON, same as Python `json.dumps(sort_keys=True, separators=(",", ":"))`.
+ * Python escapes everything outside 0x20..0x7e, so DEL (0x7f) is escaped here too (W9: the bytes must not depend on the OS). */
 export function canonicalJson(data: unknown): Uint8Array {
   const sort = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(sort);
@@ -92,7 +93,7 @@ export function canonicalJson(data: unknown): Uint8Array {
     }
     return v;
   };
-  const s = JSON.stringify(sort(data)).replace(/[\u0080-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+  const s = JSON.stringify(sort(data)).replace(/[\u007f-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
   return enc.encode(s);
 }
 

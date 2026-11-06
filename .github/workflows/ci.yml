@@ -211,3 +211,110 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+
+  # ------------------------------------------------------------------------------------------------------------------
+  # Cross-platform plan W15: the same unit suites on a hosted Windows runner. NEVER RUN YET.
+  # Hosted Windows runners have no GPU and cannot be assumed to run WSL2 with GPU, so GPU / WSL / isolation tests are NOT here:
+  # they live in windows-host-e2e.yml on the self-hosted `windows-gpu` runner.
+  # Advisory until the owner flips the repository variable WINDOWS_CI_BLOCKING to 'true' (do that after the first green
+  # baseline: counts are compared with the Linux jobs). Until then a red job here shows up as a yellow check, not a failure.
+  # ------------------------------------------------------------------------------------------------------------------
+  windows:
+    name: Windows (${{ matrix.suite }})
+    runs-on: windows-latest
+    continue-on-error: ${{ vars.WINDOWS_CI_BLOCKING != 'true' }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [provider-agent, sdk-python, sdk-typescript, kits, operator-tooling]
+    env:
+      PYTHONUTF8: "1"          # the Windows default text encoding is a legacy code page; make the whole job UTF-8
+      PYTHONIOENCODING: "utf-8"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep LF line endings (Kit manifests, Dockerfiles and test vectors are compared byte for byte)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: matrix.suite != 'sdk-typescript'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            provider-agent/pyproject.toml
+            sdk/python/pyproject.toml
+            apps/api/pyproject.toml
+      - uses: actions/setup-node@v4
+        if: matrix.suite == 'sdk-typescript'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+
+      # ---- provider agent unit tests (PAL fakes; no GPU, no WSL, no Docker) ----
+      - name: Provider agent tests
+        if: matrix.suite == 'provider-agent'
+        working-directory: provider-agent
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+          pytest -q -ra --junitxml=../junit-provider-agent.xml
+
+      # ---- Python SDK (paths, UTF-8, canonical JSON, files written by PowerShell) ----
+      - name: Python SDK tests
+        if: matrix.suite == 'sdk-python'
+        working-directory: sdk/python
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+          pytest -q -ra --junitxml=../../junit-sdk-python.xml
+
+      # ---- TypeScript SDK on Windows Node ----
+      - name: TypeScript SDK typecheck and tests
+        if: matrix.suite == 'sdk-typescript'
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+      # ---- Kit CI gates: manifests, schemas, Dockerfile lint, smoke specs, and the Kit unit tests ----
+      - name: Kit offline gate
+        if: matrix.suite == 'kits'
+        run: python scripts/kit_ci.py check --kits-dir kits
+      - name: Kit unit tests
+        if: matrix.suite == 'kits'
+        run: |
+          python -m pip install -U pip
+          pip install -e "apps/api[dev]"   # kits/tests import app.services.* (schema validation and verify plug-ins)
+          pytest -q -ra kits/tests --junitxml=junit-kits.xml
+
+      # ---- operator tooling (tasks.py, key handling, PowerShell scripts' parse check) and helper tests that need no GPU ----
+      - name: Operator tooling tests
+        if: matrix.suite == 'operator-tooling'
+        run: |
+          python -m pip install -U pip
+          pip install -e provider-agent -e sdk/python pytest==8.3.3
+          pytest -q -ra tests/windows -m "not windows_gpu" --junitxml=junit-operator-tooling.xml
+      - name: PowerShell scripts parse
+        if: matrix.suite == 'operator-tooling'
+        run: |
+          $failed = 0
+          foreach ($f in Get-ChildItem scripts/windows -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Host "$($f.Name): $($_.Message)" }; $failed++ }
+          }
+          if ($failed -gt 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-windows-${{ matrix.suite }}
+          path: junit-*.xml
+          if-no-files-found: ignore

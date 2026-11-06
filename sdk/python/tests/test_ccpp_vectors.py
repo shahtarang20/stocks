@@ -23,7 +23,7 @@ from computecoin.privacy_crypto import (
 def vectors():
     repo_root = pathlib.Path(__file__).resolve().parents[3]
     vector_file = repo_root / "docs/specs/ccpp-v1-vectors.json"
-    with open(vector_file, "r") as f:
+    with open(vector_file, "r", encoding="utf-8") as f:
         return json.load(f)
 
 

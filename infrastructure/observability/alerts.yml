@@ -51,3 +51,43 @@ groups:
         for: 1m
         labels: {severity: critical}
         annotations: {summary: "Ledger debits and credits differ (legacy /metrics endpoint must also be scraped)"}
+  # Cross-platform plan W10 (section 6): Windows-host failures. The series come from the heartbeat health block of hosts
+  # that report platform "windows" (apps/api/app/services/observability.py). A host that reports nothing counts as 0 here,
+  # never as a failure. Thresholds are first guesses for a small fleet and need tuning on real Windows hosts.
+  - name: computecoin-windows
+    rules:
+      - alert: WindowsDistroUnhealthy
+        expr: computecoin_ops_platform_distro_unhealthy{platform="windows"} > 0
+        for: 15m
+        labels: {severity: warning, platform: windows}
+        annotations: {summary: "One or more Windows hosts report an unhealthy runtime distro (WSL2): run the support bundle on the host"}
+      - alert: WindowsDistroUnhealthyWidespread
+        expr: computecoin_ops_platform_distro_unhealthy{platform="windows"} > 0.2 * sum(computecoin_ops_machines_by_platform{platform="windows",availability!="offline"})
+        for: 10m
+        labels: {severity: critical, platform: windows}
+        annotations: {summary: "More than 20% of online Windows hosts have an unhealthy runtime distro: suspect a bad runtime release or a Windows Update"}
+      - alert: WindowsGpuSmokeTestFailing
+        expr: computecoin_ops_platform_gpu_smoke_failing{platform="windows"} > 0
+        for: 15m
+        labels: {severity: warning, platform: windows}
+        annotations: {summary: "One or more Windows hosts fail the GPU smoke test (driver, WSL GPU support or runtime toolkit)"}
+      - alert: WindowsGpuSmokeTestFailingWidespread
+        expr: computecoin_ops_platform_gpu_smoke_failing{platform="windows"} > 0.2 * sum(computecoin_ops_machines_by_platform{platform="windows",availability!="offline"})
+        for: 10m
+        labels: {severity: critical, platform: windows}
+        annotations: {summary: "More than 20% of online Windows hosts fail the GPU smoke test: suspect a driver or toolkit release"}
+      - alert: WindowsUpdateRollbacks
+        expr: computecoin_ops_platform_update_rollbacks{platform="windows"} > 0
+        for: 5m
+        labels: {severity: warning, platform: windows}
+        annotations: {summary: "A Windows host rolled back its last agent or supervisor update: pause the rollout ring"}
+      - alert: WindowsUpdateRollbacksWidespread
+        expr: computecoin_ops_platform_update_rollbacks{platform="windows"} >= 3
+        for: 5m
+        labels: {severity: critical, platform: windows}
+        annotations: {summary: "Three or more Windows hosts rolled back an update: stop the rollout and investigate the release"}
+      - alert: WindowsHostsMostlyYielding
+        expr: computecoin_ops_platform_hosts_yielding{platform="windows"} > 0.5 * sum(computecoin_ops_machines_by_platform{platform="windows",availability!="offline"})
+        for: 30m
+        labels: {severity: info, platform: windows}
+        annotations: {summary: "More than half of the online Windows hosts are yielding to their owners: capacity is lower than the host count suggests"}

@@ -96,6 +96,7 @@ def is_gpu_compatible(
       - 'amd_isolation': AMD GPU job requested with a tier other than container, or sealed/sealed_pro
         without a machine verdict naming a Sealed image (D5, A6).
       - 'no_image': a hardware job's model has no image for the machine's GPU runtime (D4).
+      - 'capability_missing_<flag>': the host reports capability flags (W1) and lacks the one this job needs.
 
     ``image_runtimes`` is the set of runtimes the job's model has an image for
     (``model_image_runtimes``); pass it for hardware jobs, None for simulated ones. It is looked
@@ -127,6 +128,14 @@ def is_gpu_compatible(
 
         if req_rt != "any" and req_rt != machine_rt:
             return False, "gpu_runtime"
+
+        # W1 / X4: a host that reports capability flags must list the flag for its GPU runtime (nvidia_cuda / amd_rocm),
+        # and multi_gpu for a 2+ GPU job. Legacy agents (no platform object) are unchanged.
+        from app.services.capability_flags import gpu_flag_reason
+
+        flag_reason = gpu_flag_reason(machine, machine_rt, req_count)
+        if flag_reason:
+            return False, flag_reason
 
         # D5: Isolation for AMD GPU jobs is container only in v1.
         if machine_vendor == "amd" or machine_rt == "rocm":

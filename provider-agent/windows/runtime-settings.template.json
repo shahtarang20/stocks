@@ -1,0 +1,23 @@
+{
+  "_comment": "Template for computecoin_agent.windows.runtime.provision --settings. Copy, edit, never commit real keys. Keys starting with underscore are ignored.",
+  "manifest_public_key": "",
+  "_manifest_public_key_help": "PINNED Ed25519 public key (32 bytes, base64 or 64 hex characters) of the release signing key. Empty = every manifest is refused. This is a PUBLIC key; never put a private key here.",
+  "install_dir": "C:\\ProgramData\\ComputeCoin\\runtime\\computecoin",
+  "staging_dir": "C:\\ProgramData\\ComputeCoin\\runtime\\staging",
+  "distro_name": "computecoin",
+  "runner_user": "ccrunner",
+  "wsl_exe": "wsl.exe",
+  "arch": "amd64",
+  "limits": {
+    "memory_mb": 12288,
+    "cpus": 6,
+    "disk_gb": 120
+  },
+  "_limits_help": "memory_mb and cpus cap ALL job containers together (systemd slice inside the distro). disk_gb caps the distro's virtual disk. vm_memory_mb and vm_processors are used only with wslconfig_policy add_missing.",
+  "wslconfig_policy": "never",
+  "_wslconfig_policy_help": "never = never touch the owner's %UserProfile%\\.wslconfig (default). add_missing = add only keys the owner has not set, marked, with a backup.",
+  "wslconfig_path": null,
+  "require_disk_cap": true,
+  "allow_downgrade": false,
+  "min_gpus": 1
+}

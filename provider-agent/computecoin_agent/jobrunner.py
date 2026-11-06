@@ -797,8 +797,12 @@ def run_one(
     attestation_session: Optional[AttestationSession] = None,
     attest_fn: Callable[..., AttestationSession] = perform_attestation,
     hardware: Optional[Callable[[str], tuple[str, dict[str, Any]]]] = None,
+    control: Any = None,
 ) -> dict[str, Any]:
     """Claim at most ONE job, execute it, and submit the receipt.
+
+    ``control`` (W4, default None = unchanged behaviour): a ``control_channel.RunnerControl``; told when a job starts
+    so the supervisor sees ``job_started``. The matching ``job_finished`` is reported by :func:`poll_loop`.
 
     ``attestation_session`` is the machine-level session: it only tells the backend this agent
     may take private work. A private job never uses it for keys (R5, one job, one key set).
@@ -825,6 +829,8 @@ def run_one(
         return {"claimed": False}
 
     spec = JobSpec.from_claim(claim)
+    if control is not None:
+        control.job_started(spec.job_id)
     grant = claim.get("artifact_upload") or {}
     v2_descriptors: Optional[list[dict[str, Any]]] = None
     is_private = spec.isolation_tier in ("sealed", "sealed_pro", "confidential")
@@ -935,8 +941,13 @@ def poll_loop(
     multinode_network: Optional[str] = None,
     multinode_network_firewalled: bool = False,
     cluster_addr: Optional[str] = None,
+    control: Any = None,
 ) -> list[dict[str, Any]]:
     """Run the claim->execute->result loop a bounded number of times.
+
+    ``control`` (W4, default None = unchanged behaviour): a ``control_channel.RunnerControl`` obeying the supervisor.
+    No claim is made before ``start`` or while draining / stopped / not ``online`` / the supervisor is gone; a
+    ``stop`` ends the loop after the current job; job events are reported to the supervisor.
 
     ``thermal_guard`` (B6, a :class:`computecoin_agent.thermal.ThermalGuard`): while the GPU is at
     or above its cap no job is claimed (``{"claimed": False, "throttled": True}``) until it cools
@@ -977,8 +988,22 @@ def poll_loop(
             )
 
         extra["executor_selector"] = _selector
+    if control is not None:
+        extra["control"] = control
     while iterations <= 0 or i < iterations:
+        if control is not None and control.should_stop():
+            break
         try:
+            held = control.claim_block_reason() if control is not None else None
+            if held is not None:
+                summary = {"claimed": False, "held": held}
+                results.append(summary)
+                if emit is not None:
+                    emit(i, summary)
+                i += 1
+                if iterations <= 0 or i < iterations:
+                    sleeper(interval)
+                continue
             if thermal_guard is not None and not thermal_guard.may_claim():
                 summary = {"claimed": False, "throttled": True}
                 results.append(summary)
@@ -999,8 +1024,12 @@ def poll_loop(
                 hardware=getattr(attestation_manager, "hardware", None),
                 **extra,
             )
+            if control is not None and summary.get("claimed"):
+                control.job_finished(summary.get("job_id"), summary.get("status"))
         except Exception as exc:  # transient: record and keep polling
             summary = {"claimed": False, "error": str(exc)}
+            if control is not None:
+                control.abort_active()  # a job that raised out of run_one must not stay "active" for the supervisor
         results.append(summary)
         if emit is not None:
             emit(i, summary)

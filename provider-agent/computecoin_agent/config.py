@@ -10,8 +10,6 @@ with 0700. See the trust model in ``computecoin_agent.security``.
 
 from __future__ import annotations
 
-import os
-import stat
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,9 +22,11 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from .platform import get_platform
+
 
 def default_config_dir() -> Path:
-    return Path(os.environ.get("COMPUTECOIN_CONFIG_DIR", str(Path.home() / ".computecoin")))
+    return get_platform().paths.config_dir()
 
 
 def default_config_path() -> Path:
@@ -155,6 +155,49 @@ class AgentConfig(BaseSettings):
     netbench_enabled: bool = False
     # This host's private cluster address (literal IP). The benchmark responder binds ONLY here.
     cluster_addr: Optional[str] = None
+    # ---- W5 resource governance (X13: the host yields to its owner). Defaults are the CONSERVATIVE ones.
+    # None = on for Windows hosts, off elsewhere (a Linux desktop opts in with true). See windows/governance/policy.py.
+    governance_enabled: Optional[bool] = None
+    governance_headless: bool = False  # no desktop session (server): activity signals are not required to be known
+    governance_yield_to_owner: bool = True  # foreground GPU app / recent input stop new claims (full-screen always does)
+    governance_idle_threshold_seconds: int = 300
+    governance_resume_clear_seconds: int = 60  # hysteresis: calm this long before claiming again
+    governance_allow_on_battery: bool = False
+    governance_vram_reserve_mb: int = 1024  # GPU memory kept free for the owner
+    # Allowed hours; empty = no limit. Each: {days = ["mon", ...] | "daily" | "weekdays", start = "22:00", end = "07:00",
+    # timezone = "Europe/Berlin"}. A window may cross midnight. A typo is refused when the config loads.
+    governance_schedule: list[dict[str, Any]] = []
+    governance_ignored_processes: list[str] = []  # extra process names that never count as "the owner is using the GPU"
+    governance_stop_now_hold_minutes: int = 0  # 0 = a "stop now" lasts until the owner resumes
+    governance_preempt_on_fullscreen: bool = False  # True: stop a RUNNING job when a full-screen app appears
+    # ---- W6 updates (signed manifests, rings, rollback; see computecoin_agent/updater/).
+    update_enabled: bool = True
+    update_ring: str = "general"  # the ring this host ASKS for; the server decides what it may have (never a wider ring)
+    update_check_interval_seconds: int = 6 * 3600
+
+    @field_validator("governance_schedule")
+    @classmethod
+    def _check_governance_schedule(cls, value: list) -> list:
+        from .windows.governance.policy import parse_schedule
+
+        parse_schedule(value)  # raises ValueError on a malformed window, unknown zone or day
+        return value
+
+    @field_validator("governance_idle_threshold_seconds", "governance_resume_clear_seconds", "governance_vram_reserve_mb",
+                     "governance_stop_now_hold_minutes", "update_check_interval_seconds")
+    @classmethod
+    def _governance_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be >= 0")
+        return value
+
+    @field_validator("update_ring", mode="before")
+    @classmethod
+    def _check_update_ring(cls, value: Any) -> str:
+        ring = str(value).strip().lower() if value is not None else "general"
+        if ring not in ("canary", "early", "general"):
+            raise ValueError("update_ring must be 'canary', 'early' or 'general'")
+        return ring
 
     @field_validator("cache_max_bytes", "checkpoint_max_bytes")
     @classmethod
@@ -212,23 +255,12 @@ class AgentConfig(BaseSettings):
         """Write config to toml with 0600 perms (0700 on the parent dir)."""
         path = path or default_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(path.parent, stat.S_IRWXU)  # 0700
-        except OSError:
-            pass
+        plat = get_platform()
+        plat.paths.restrict_dir(path.parent)  # 0700 on Linux
 
         data = self.model_dump(exclude_none=True)
-        # Write atomically-ish: create with restrictive perms, then write.
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(tomli_w.dumps(data).encode("utf-8"))
-        finally:
-            # Ensure perms even if umask interfered on some platforms.
-            try:
-                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-            except OSError:
-                pass
+        # Create with restrictive perms, then write (0600 file on Linux; an OS secret store on Windows, X7).
+        plat.secrets.write_file(path, tomli_w.dumps(data).encode("utf-8"))
         return path
 
     def is_enrolled(self) -> bool:

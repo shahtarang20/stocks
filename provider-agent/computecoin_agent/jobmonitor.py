@@ -31,6 +31,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from .platform import PlatformUnsupported, get_platform
+
 STREAM_FILE = "stream.ndjson"
 PROGRESS_FILE = "progress.json"
 MAX_READ_BYTES = 8 * 1024 * 1024  # per read of a job-written file (stream / progress): the job controls these files
@@ -300,10 +302,10 @@ class JobMonitor:
         try:
             if os.path.lexists(path):
                 os.unlink(path)
-            os.mkfifo(path, 0o622)
-            os.chmod(path, 0o622)
-            self._fifo_fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-        except OSError:
+            fifo = get_platform().fifo
+            fifo.create(path, 0o622)
+            self._fifo_fd = fifo.open_reader(path)
+        except (OSError, PlatformUnsupported):
             self._fifo_fd = None
             self._stream_dead = True  # no RAM pipe, no stream: never fall back to a plaintext file
 

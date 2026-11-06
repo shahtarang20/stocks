@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ComputeCoin Agent installer, WiX Toolset v4 (cross-platform plan W6, X10, X14).
+
+  WRITTEN, NEVER BUILT OR RUN. Every WiX v4 element, attribute and extension name below is marked TODO(verify-docs)
+  (X11): check against https://wixtoolset.org/docs/ and record URL and date before the first build.
+
+  Build (see build.ps1):  wix build Package.wxs -arch x64 -ext WixToolset.UI.wixext
+        -d Version=<x.y.z> -d PayloadDir=<folder> -d ConsentRtf=<consent.rtf> -o ComputeCoinAgent-<x.y.z>.msi
+
+  PAYLOAD (an owner decision, see docs/operations/windows-installer.md): PayloadDir holds
+        python\            a relocatable Python with computecoin-agent and its dependencies installed
+        msi_actions.py     from provider-agent/windows/installer
+        consent.txt        the text of the consent screen, kept so the owner can re-read it
+  and nothing else. Secrets never go in the payload (L7).
+
+  What the MSI does:
+    install    copy files, run the requirements checker (a failing check aborts and rolls back), register the service
+               (NOT started, NOT enrolled: that is a separate, explicit step), add an OUTBOUND-only firewall rule
+    upgrade    MajorUpgrade replaces the old version; the data folder, credentials and the runtime distro are kept
+    uninstall  remove the service, the runtime distro, the firewall rule, stored credentials and the data folder
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="ComputeCoin Agent"
+           Manufacturer="ComputeCoin"
+           Version="$(var.Version)"
+           UpgradeCode="CAA81EEF-06DE-4F86-B012-A8E47FE84EDC"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ComputeCoin Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Windows 10 (build 19041) or later is needed for WSL2 with GPU compute. The requirements checker gives the exact
+         verdict; this is only a coarse floor so the installer fails early on an unsupported system. TODO(verify-docs): the
+         VersionNT / BuildNumber properties and the minimum build (owner decision, plan section 9). -->
+    <Launch Condition="Installed OR (VersionNT64 &gt;= 603)" Message="ComputeCoin Agent needs a 64-bit version of Windows 10 or later." />
+
+    <!-- CONSENT (X14). Interactive installs show consent.rtf as the licence page of WixUI_Minimal; the box must be ticked.
+         A silent install (winget, msiexec /qn) shows no page, so it must say LicenseAccepted=1 on the command line, which
+         winget only does after the person accepted the package agreement shown from the manifest. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.ConsentRtf)" />
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <CustomAction Id="ConsentRequired"
+                  Error="Installation needs your consent. Read consent.txt, then run the installer again with LicenseAccepted=1." />
+    <InstallExecuteSequence>
+      <Custom Action="ConsentRequired" After="LaunchConditions" Condition="NOT Installed AND NOT (LicenseAccepted = &quot;1&quot;)" />
+    </InstallExecuteSequence>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="ComputeCoin" />
+    </StandardDirectory>
+
+    <!-- Everything in the payload folder, with its sub-folders. TODO(verify-docs): the v4 <Files> element and its Include glob. -->
+    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PayloadDir)\**" />
+    </ComponentGroup>
+
+    <!-- The service is registered by the agent's own CLI (one registration path, owned by the supervisor), not by a
+         ServiceInstall element. Stop it before files are replaced or removed, on upgrade and on uninstall. It is never
+         started here. TODO(verify-docs): ServiceControl on a service this MSI did not register with ServiceInstall. -->
+    <ComponentGroup Id="ServiceHandling" Directory="INSTALLFOLDER">
+      <Component Id="ServiceStopper" Guid="*">
+        <RegistryValue Root="HKLM" Key="Software\ComputeCoin\Agent" Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <ServiceControl Id="StopAgentService" Name="ComputeCoinAgent" Stop="both" Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="ComputeCoin Agent" Level="1">
+      <ComponentGroupRef Id="Payload" />
+      <ComponentGroupRef Id="ServiceHandling" />
+    </Feature>
+
+    <!--
+         Custom actions. All deferred, run as SYSTEM (Impersonate="no"), and run the bundled Python: no system Python
+         is used, nothing is looked up on PATH. Type 34 (Directory + ExeCommand). TODO(verify-docs): that [INSTALLFOLDER]
+         in ExeCommand of a deferred action is resolved when the action is scheduled.
+         -->
+
+    <!-- 1. Requirements checker (another work package: computecoin_agent.windows.runtime.requirements_check, called by
+            module path). Exit 3 = a requirement is not met, so Return="check" aborts the install and rolls back the files. -->
+    <CustomAction Id="RequirementsCheck" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="&quot;[INSTALLFOLDER]python\python.exe&quot; -I -m computecoin_agent.windows.runtime.requirements_check --json --install-dir &quot;[CommonAppDataFolder]ComputeCoin&quot;" />
+
+    <!-- 2. Register the service and the outbound-only firewall rule; start only an already-enrolled host (upgrade). -->
+    <CustomAction Id="RegisterAgent" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="check"
+                  ExeCommand="&quot;[INSTALLFOLDER]python\python.exe&quot; -I &quot;[INSTALLFOLDER]msi_actions.py&quot; install --python &quot;[INSTALLFOLDER]python\python.exe&quot; --data-dir &quot;[CommonAppDataFolder]ComputeCoin&quot;" />
+
+    <!-- 3. Full uninstall (X14): service, runtime distro, firewall rule, credentials, data folder. NEVER on an upgrade
+            (UPGRADINGPRODUCTCODE is set while the old version is removed by MajorUpgrade). Return="ignore": a leftover must
+            not trap the person in a half-uninstalled state; msi_actions prints what it could not remove. -->
+    <CustomAction Id="CleanupAgent" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]python\python.exe&quot; -I &quot;[INSTALLFOLDER]msi_actions.py&quot; cleanup --python &quot;[INSTALLFOLDER]python\python.exe&quot; --data-dir &quot;[CommonAppDataFolder]ComputeCoin&quot;" />
+
+    <InstallExecuteSequence>
+      <Custom Action="RequirementsCheck" After="InstallFiles" Condition="NOT Installed" />
+      <Custom Action="RegisterAgent" After="RequirementsCheck" Condition="NOT Installed" />
+      <Custom Action="CleanupAgent" After="StopServices" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

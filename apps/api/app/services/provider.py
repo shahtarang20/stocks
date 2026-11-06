@@ -105,6 +105,12 @@ def _isolation_tiers(machine: ProviderMachine) -> list[str]:
     return list(machine.capability.supported_isolation_tiers)
 
 
+def _platform_view(machine: ProviderMachine) -> tuple[dict | None, list[str] | None]:
+    from app.services.capability_flags import machine_platform_view
+
+    return machine_platform_view(machine)
+
+
 def shape_machine(machine: ProviderMachine) -> MachineOut:
     return MachineOut(
         machine_id=machine.id,
@@ -123,6 +129,8 @@ def shape_machine(machine: ProviderMachine) -> MachineOut:
         supported_workloads=_workloads(machine),
         supported_isolation_tiers=_isolation_tiers(machine),
         created_at=machine.created_at,
+        platform=_platform_view(machine)[0],
+        capabilities=_platform_view(machine)[1],
     )
 
 

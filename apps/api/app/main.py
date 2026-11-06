@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api.routers import (
     admin,
+    agent_releases,
     agent_v2,
     multi_node,
     agents,
@@ -297,6 +298,8 @@ def create_app() -> FastAPI:
     application.include_router(agent_v2.router)
     application.include_router(multi_node.router)
     application.include_router(multi_node.admin_router)
+    application.include_router(agent_releases.admin_router)
+    application.include_router(agent_releases.host_router)
     application.include_router(jobs_v2.router)
     from app.api.routers import byoc as _byoc  # U8
 

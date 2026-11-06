@@ -68,7 +68,7 @@ def test_verification_methods_are_registered(slug):
 
 def test_param_schema_defaults_validate_through_runtime_validator():
     for slug in SLUGS:
-        schema = json.loads((KITS / slug / "params.schema.json").read_text())
+        schema = json.loads((KITS / slug / "params.schema.json").read_text(encoding="utf-8"))
         sample = {"ai-image": {"prompts": ["x"]}, "blender-render": {"frame_start": 1, "frame_end": 2}}.get(slug, {})
         out = kitrt.validate(sample, schema)
         for k, sub in schema["properties"].items():
@@ -141,7 +141,7 @@ def test_commit_marker_roundtrip_and_tamper(tmp_path, monkeypatch):
 
 def test_smoke_specs_list_three_gpu_models_and_pending_fixtures():
     for slug in SLUGS:
-        s = json.loads((KITS / slug / "smoke" / "smoke.json").read_text())
+        s = json.loads((KITS / slug / "smoke" / "smoke.json").read_text(encoding="utf-8"))
         assert len(set(s["gpu_models_required"])) >= 3
 
 

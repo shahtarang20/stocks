@@ -397,6 +397,15 @@ rejected with 401 — verified by test.
 - **Mixed-Vendor Hosts (D2 Policy)**: ComputeCoin requires exactly one GPU vendor per machine. If a host contains both NVIDIA and AMD GPUs, enrollment is refused unless `gpu_vendor = "nvidia"` or `gpu_vendor = "amd"` is pinned in `computecoin.toml` (or via `--gpu-vendor`).
 - **Isolation Tier (D5)**: AMD GPU jobs run under the `container` tier only in v1. Non-container tiers (gVisor, microVM) are refused.
 
+#### Windows hosts (planned, not available yet)
+A Windows 10 or 11 PC with an NVIDIA card is meant to be able to host later: a native Windows service plus a managed WSL2 distro that runs the same Linux agent
+(cross-platform plan W2 to W7). **Limits:** container tier only (no private tiers, BYOC, gVisor, microVM or multi-node jobs), NVIDIA only (AMD on Windows is a recorded
+no-go), and the agent yields to the PC's owner by default. Nothing here has run on a Windows machine yet and there is no installer. Requirements, enrolment and troubleshooting:
+[windows-host-guide.md](operations/windows-host-guide.md); plain-language website page: `/share/windows`. The Linux steps above do not change.
+
+**Windows and the command line.** Every operator command in this guide and in [operator-cheatsheet.md](operations/operator-cheatsheet.md) has a PowerShell equivalent; the
+support command `computecoin-agent support-bundle` writes a redacted diagnostics zip on either OS.
+
 ---
 
 ## 2.2 Provider overview — `/provider/dashboard`
@@ -556,6 +565,10 @@ Real-time GPU time-series: thermal, memory, power, and threshold alerts.
 
 Use it to catch a machine overheating or running out of memory before customers
 notice.
+
+Fleet metrics for operators (Prometheus, not this page) carry a `platform` label (`linux`, `windows`, `unknown` when a host reports nothing) and there are
+Windows alert rules (runtime distro unhealthy, GPU smoke test failing, update rollbacks, hosts yielding): see [operator-cheatsheet.md](operations/operator-cheatsheet.md).
+The page itself does not show the platform yet (fleet view is the W1 work package).
 
 ---
 

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .executor import ExecutionResult, JobSpec, check_mount_target, ExecutorError
+from .platform import get_platform
 
 PRIVATE_TIERS = ("sealed", "sealed_pro", "confidential")
 _NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -289,13 +290,13 @@ class ContentCache:
         if not self._evict_for(size):
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(src, 0o444)
+        get_platform().paths.set_mode(src, 0o444)
         try:
             os.replace(src, path)
         except OSError:  # different filesystem: copy beside the target, then rename atomically
             tmp = str(path) + ".tmp"
             shutil.copyfile(src, tmp)
-            os.chmod(tmp, 0o444)
+            get_platform().paths.set_mode(tmp, 0o444)
             os.replace(tmp, path)
             _rm(src)
         return path
@@ -442,7 +443,7 @@ def safe_extract(tar_path: str, dest: str, *, max_bytes: int) -> None:
                 raise V2Error("unsafe_checkpoint", "member escapes the checkpoint dir")
             if member.isdir():
                 os.makedirs(target, exist_ok=True)
-                os.chmod(target, 0o777)
+                get_platform().paths.set_mode(target, 0o777)
                 continue
             total += member.size
             if total > max_bytes:
@@ -452,7 +453,7 @@ def safe_extract(tar_path: str, dest: str, *, max_bytes: int) -> None:
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o666)
             with os.fdopen(fd, "wb") as out:
                 shutil.copyfileobj(src, out, CHUNK)
-            os.chmod(target, 0o666)
+            get_platform().paths.set_mode(target, 0o666)
 
 
 def _newest_mtime(path: str) -> float:
@@ -537,7 +538,7 @@ class V2Context:
 
 
 def context_from_config(config: Any, api: V2Api, **kw: Any) -> V2Context:
-    cache_dir = config.cache_dir or str(Path.home() / ".computecoin" / "cache")
+    cache_dir = config.cache_dir or str(get_platform().paths.cache_dir())
     return V2Context(
         api=api,
         cache=ContentCache(cache_dir, config.cache_max_bytes),
@@ -598,7 +599,7 @@ def stage_items(ctx: V2Context, job_id: str, plan: Plan, jobdir: str, pins: list
                     source = ctx.cache.store(plan.kit, sha, tmp, size)
                 if source is None:
                     final = os.path.join(in_dir, f"{kind}-{name}")
-                    os.chmod(tmp, 0o444)
+                    get_platform().paths.set_mode(tmp, 0o444)
                     os.replace(tmp, final)
                     source = Path(final)
             if str(source).startswith(str(ctx.cache.root)):
@@ -621,7 +622,7 @@ def restore_checkpoint(ctx: V2Context, job_id: str, plan: Plan, jobdir: str, ckp
     except V2Error as exc:  # start from scratch rather than run on a damaged or unsafe checkpoint
         shutil.rmtree(ckpt_dir, ignore_errors=True)
         os.makedirs(ckpt_dir, exist_ok=True)
-        os.chmod(ckpt_dir, 0o777)
+        get_platform().paths.set_mode(ckpt_dir, 0o777)
         logs.append(f"[checkpoint] could not resume ({exc.code}); starting from scratch")
         return False
     finally:
@@ -680,7 +681,7 @@ def run_v2(
     try:
         for d, mode in ((out_dir, 0o777), (ckpt_dir, 0o777), (in_dir, 0o700)):
             os.makedirs(d, exist_ok=True)
-            os.chmod(d, mode)
+            get_platform().paths.set_mode(d, mode)
         try:
             mounts = stage_items(ctx, spec.job_id, plan, jobdir, pins, logs)
             env = {}
@@ -813,7 +814,7 @@ def run_vm_v2(
     base = ctx.work_dir or tempfile.gettempdir()
     os.makedirs(base, exist_ok=True)
     jobdir = tempfile.mkdtemp(prefix=f"ccoin-vm-{spec.job_id[:8]}-", dir=base)
-    os.chmod(jobdir, 0o700)
+    get_platform().paths.set_mode(jobdir, 0o700)
     out_dir, vm_in = os.path.join(jobdir, "out"), os.path.join(jobdir, "vm_in")
     try:
         for d in (out_dir, vm_in, os.path.join(jobdir, "in")):

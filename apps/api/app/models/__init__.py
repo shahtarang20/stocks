@@ -77,6 +77,7 @@ from app.models.services import Service, ServiceReplica, ServiceRequest, Service
 from app.models.pipelines import PipelineRun, PipelineStep  # noqa: F401
 from app.models.unit_quotes import UnitQuote, UnitQuoteSample  # noqa: F401
 from app.models.sessions import ComputeSession  # noqa: F401
+from app.models.agent_releases import AgentRelease, AgentRingAssignment  # noqa: F401
 from app.models.node_group import NetworkBenchmark, NodeGroup, NodeGroupMember  # noqa: F401
 
 # Phase B — verification, reputation, spend controls and webhooks.

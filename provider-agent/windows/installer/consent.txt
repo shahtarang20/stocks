@@ -1,0 +1,42 @@
+ComputeCoin Agent - what you are agreeing to
+
+Please read this before you install. You can stop sharing and remove everything at any time (see "How to stop and remove" below).
+
+WHAT IS INSTALLED
+  * The ComputeCoin Agent: a Windows service called "ComputeCoin Agent" that starts with Windows, plus a small bundled
+    Python runtime and the program files, in C:\Program Files\ComputeCoin.
+  * A data folder, C:\ProgramData\ComputeCoin, for settings, logs and your encrypted ComputeCoin credential. Only the
+    SYSTEM account and local Administrators can open it.
+  * A Windows Firewall rule that lets the agent make OUTBOUND connections only. The agent opens no inbound port that
+    other computers can reach.
+  * Later, in a separate step you start yourself: a dedicated, isolated Linux environment (a WSL2 distro named "computecoin")
+    where customers' jobs run. Installing this program does NOT create it and does NOT enrol this PC.
+
+WHAT IS SHARED
+  * Your graphics card (GPU), some CPU, memory and disk space, while a job runs. You choose the limits.
+  * Basic facts about this PC so jobs can be matched to it: Windows version, GPU model and memory, free resources,
+    agent version, and whether the GPU is busy. No files, no documents, no browsing data, no passwords.
+  * Customers' jobs run only inside the isolated Linux environment, never directly on Windows. They cannot see your
+    Windows files or drives. They have no network access except through a restricted, allow-listed connection.
+
+WHEN IT WORKS AND WHEN IT STAYS OUT OF YOUR WAY
+  * By default the agent does NOT take the GPU while you are using it: not while a program that uses the GPU is in front,
+    not shortly after you touched the keyboard or mouse, and never while a full-screen app or game is running.
+  * By default it does not run on battery power, and it holds off while Windows needs a restart for updates.
+  * While a job runs the agent asks Windows not to put the PC to sleep. It never keeps the screen on.
+  * You can pause sharing at any time ("Stop now"), and you can set the hours when sharing is allowed.
+
+UPDATES
+  * The agent updates itself with digitally signed updates. A signature that does not verify is refused. An update
+    never starts while a job is running, and a failed update is rolled back to the previous version automatically.
+
+COSTS AND EARNINGS
+  * Sharing uses electricity and wears hardware like any heavy GPU use. Earnings depend on demand and are not guaranteed.
+
+HOW TO STOP AND REMOVE
+  * Pause: use "Stop now" in the ComputeCoin app, or run  computecoin-agent service stop  as an administrator.
+  * Remove everything: Settings > Apps > ComputeCoin Agent > Uninstall (or  winget uninstall ComputeCoin.Agent).
+    Uninstall removes the service, the isolated Linux environment, the firewall rule, your stored ComputeCoin credential
+    and the data folder.
+
+By continuing you confirm that you have read this and that you are allowed to share this computer.

@@ -127,6 +127,10 @@ export interface Machine {
   created_at: string;
   /** Present on GET /provider/machines/{id}. */
   last_health?: unknown;
+  /** W1: the host's OS and runtime backend as its agent reported them (sanitised). Absent/null for older agents. */
+  platform?: { os?: string; os_version?: string; runtime_backend?: string; agent_version?: string; supervisor_version?: string } | null;
+  /** W1: capability flags the host reports (known flags only). Absent/null for older agents. */
+  capabilities?: string[] | null;
   [key: string]: unknown;
 }
 

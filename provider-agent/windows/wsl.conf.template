@@ -1,0 +1,14 @@
+# Managed by ComputeCoin. Edits are overwritten by repair. Windows files must never be reachable from jobs (X6).
+[automount]
+enabled=false
+mountFsTab=false
+
+[interop]
+enabled=false
+appendWindowsPath=false
+
+[boot]
+systemd=true
+
+[user]
+default={{runner_user}}

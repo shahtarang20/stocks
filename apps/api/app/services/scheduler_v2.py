@@ -175,6 +175,11 @@ def machine_fit_reason(job: Any, machine: Any) -> str | None:
 
     A job needing N GPUs needs ONE host with N GPUs; it is never split (gang on one host).
     """
+    from app.services.capability_flags import capability_refusal
+
+    cap_reason = capability_refusal(job, machine)  # W1 / X4 / X5: capability flags, and no private / BYOC / VM work on Windows
+    if cap_reason:
+        return cap_reason
     vm_reason = windows_vm_reason(job, machine)  # U14
     if vm_reason:
         return vm_reason

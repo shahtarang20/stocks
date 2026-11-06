@@ -313,6 +313,20 @@ def verify_receipt(
     return {"verified": verified, "isolation_tier": receipt.get("isolation_tier"), "machine_id": receipt.get("machine_id"), "checks": checks}
 
 
+def read_json_file(path: str) -> Any:
+    """Read a JSON file the way it may arrive from Windows: UTF-8, UTF-8 with a BOM, or UTF-16 with a BOM.
+
+    Windows PowerShell 5.1 writes ``>`` and ``Out-File`` output as UTF-16 LE (or UTF-8 with a BOM with
+    ``-Encoding utf8``). Decoding is explicit, never the locale code page, and line endings do not matter to JSON."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = raw.decode("utf-16")  # the BOM selects the byte order and is removed
+    else:
+        text = raw.decode("utf-8-sig")
+    return json.loads(text)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify a ComputeCoin Privacy Receipt offline")
     parser.add_argument("receipt_file")
@@ -324,10 +338,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--witness-threshold", type=int, default=0, help="Required number of valid witness cosignatures")
     parser.add_argument("--log-key", help="Pinned transparency-log Ed25519 public key (hex) the witnesses must have cosigned for")
     args = parser.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):  # a legacy Windows console code page must not crash the report
+        try:
+            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
     try:
-        with open(args.receipt_file, "r", encoding="utf-8") as f:
-            receipt = json.load(f)
-    except (OSError, ValueError) as exc:
+        receipt = read_json_file(args.receipt_file)
+    except (OSError, ValueError) as exc:  # UnicodeDecodeError is a ValueError
         print(f"cannot read receipt: {exc}", file=sys.stderr)
         return 2
 
@@ -340,10 +358,9 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(parsed, dict):
                     w_keys = {str(k): str(v).lower() for k, v in parsed.items()}
             elif os.path.isfile(val):
-                with open(val, "r", encoding="utf-8") as f:
-                    parsed = json.load(f)
-                    if isinstance(parsed, dict):
-                        w_keys = {str(k): str(v).lower() for k, v in parsed.items()}
+                parsed = read_json_file(val)
+                if isinstance(parsed, dict):
+                    w_keys = {str(k): str(v).lower() for k, v in parsed.items()}
             else:
                 for part in val.split(","):
                     if "=" in part:

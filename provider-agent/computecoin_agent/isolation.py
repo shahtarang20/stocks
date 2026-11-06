@@ -18,10 +18,11 @@ rather than silently falling back to a weaker tier.
 
 from __future__ import annotations
 
-import os
 from enum import Enum
 from shutil import which
 from typing import Callable, Optional
+
+from .platform import get_platform
 
 
 class IsolationTier(str, Enum):
@@ -70,59 +71,20 @@ def probe_microvm() -> bool:
 def probe_confidential_computing() -> bool:
     """Check for hardware-level Confidential Computing capabilities on the host.
 
-    Probes:
-    - AMD SEV-SNP: /dev/sev, /dev/sev-guest, /sys/module/kvm_amd/parameters/sev_snp
-    - Intel TDX: /dev/tdx-guest, /dev/tdx_guest
-    - NVIDIA CC: NVML or /proc/driver/nvidia/...
+    Probes (in the platform layer): AMD SEV-SNP and Intel TDX device nodes. Unknown means False.
     """
-    # 1. AMD SEV-SNP
-    sev_paths = (
-        "/dev/sev-guest",
-        "/dev/sev",
-        "/sys/module/kvm_amd/parameters/sev_snp",
-    )
-    for p in sev_paths:
-        if os.path.exists(p):
-            return True
-
-    # 2. Intel TDX
-    tdx_paths = (
-        "/dev/tdx-guest",
-        "/dev/tdx_guest",
-    )
-    for p in tdx_paths:
-        if os.path.exists(p):
-            return True
-
-    return False
+    return _hw().has_confidential_device()
 
 
 def probe_tpm2() -> bool:
     """Check if a TPM 2.0 device node or management daemon is available."""
-    tpm_paths = ("/dev/tpmrm0", "/dev/tpm0", "/sys/class/tpm/tpm0")
-    for p in tpm_paths:
-        if os.path.exists(p):
-            return True
+    if _hw().has_tpm_device():
+        return True
     return which("tpm2_getcap") is not None
 
 
-def _read(path: str) -> str:
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except OSError:
-        return ""
-
-
-def _kernel_log() -> str:
-    """Boot messages, if this process may read them (needs root or kernel.dmesg_restrict=0)."""
-    try:
-        import subprocess
-
-        out = subprocess.run(["dmesg"], capture_output=True, text=True, timeout=5)
-        return out.stdout if out.returncode == 0 else ""
-    except (OSError, subprocess.SubprocessError):
-        return ""
+def _hw():
+    return get_platform().hardware
 
 
 def probe_memory_encryption(
@@ -135,8 +97,8 @@ def probe_memory_encryption(
     This is still the host's own report; the platform does not trust it for Sealed Pro (an
     administrator sets ``memory_encryption_active`` after checking).
     """
-    flags = (cpuinfo if cpuinfo is not None else _read("/proc/cpuinfo")).lower()
-    log = kernel_log if kernel_log is not None else _kernel_log()
+    flags = (cpuinfo if cpuinfo is not None else _hw().cpu_flags_text()).lower()
+    log = kernel_log if kernel_log is not None else _hw().kernel_log()
     amd = " sme" in flags and "memory encryption features active: sme" in log.lower()
     intel = " tme" in flags and "x86/tme: enabled by bios" in log.lower()
     return amd or intel
@@ -147,27 +109,23 @@ _VM_NAMES = ("qemu", "kvm", "vmware", "virtualbox", "virtual machine", "hyper-v"
 
 def probe_bare_metal(*, cpuinfo: Optional[str] = None, dmi_values: Optional[list[str]] = None) -> bool:
     """False if anything says we run under a hypervisor: the CPU 'hypervisor' flag or DMI vendor strings."""
-    flags = (cpuinfo if cpuinfo is not None else _read("/proc/cpuinfo")).lower()
+    flags = (cpuinfo if cpuinfo is not None else _hw().cpu_flags_text()).lower()
     if " hypervisor" in flags:
         return False
     if dmi_values is None:
-        dmi_values = [_read(f"/sys/class/dmi/id/{f}") for f in ("product_name", "sys_vendor", "board_vendor", "bios_vendor")]
+        dmi_values = _hw().dmi_values()
     joined = " ".join(dmi_values).lower()
     return not any(name in joined for name in _VM_NAMES)
 
 
-def probe_iommu(*, iommu_dir: str = "/sys/class/iommu") -> bool:
+def probe_iommu(*, iommu_dir: Optional[str] = None) -> bool:
     """True if the kernel has at least one active IOMMU (DMA remapping) unit."""
-    try:
-        return len(os.listdir(iommu_dir)) > 0
-    except OSError:
-        return False
+    return _hw().iommu_active(iommu_dir)
 
 
-def probe_kernel_lockdown(*, lockdown_file: str = "/sys/kernel/security/lockdown") -> bool:
+def probe_kernel_lockdown(*, lockdown_file: Optional[str] = None) -> bool:
     """True if kernel lockdown is in 'integrity' or 'confidentiality' mode (the bracketed one is active)."""
-    content = _read(lockdown_file)
-    return "[integrity]" in content or "[confidentiality]" in content
+    return _hw().kernel_lockdown_active(lockdown_file)
 
 
 def measure_security_state() -> dict[str, bool]:

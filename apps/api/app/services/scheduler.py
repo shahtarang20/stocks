@@ -130,6 +130,14 @@ def _machine_supports_tier_and_policy(m: ProviderMachine, job: Job) -> tuple[boo
     if getattr(m, "is_banned", False):
         return False, "machine_is_banned"
 
+    # W1 / X4 / X5: the host must report every capability flag the job needs; a Windows host never gets private-tier,
+    # BYOC, gVisor, microVM, Windows-VM or multi-node work. Legacy agents (no platform object) are unchanged.
+    from app.services.capability_flags import capability_refusal
+
+    cap_reason = capability_refusal(job, m)
+    if cap_reason:
+        return False, cap_reason
+
     req_tier = (getattr(job, "isolation_tier", None) or "container").lower()
     machine_tiers = [
         t.lower()

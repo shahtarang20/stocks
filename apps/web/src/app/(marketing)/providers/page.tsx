@@ -24,7 +24,13 @@ export default function ProvidersPage() {
           <ul>
             <li>
               <strong>A Linux computer.</strong> Our setup guide is written for Ubuntu 22.04 or
-              24.04. Windows and Mac are not supported yet.
+              24.04. Mac is not supported.
+            </li>
+            <li>
+              <strong>Windows is planned, but not available yet.</strong> A Windows 10 or 11 PC with an
+              NVIDIA graphics card is meant to be able to join later. Windows PCs would only take
+              ordinary jobs (no private jobs), and NVIDIA cards only. Read{" "}
+              <Link href="/share/windows">what a Windows PC would need</Link>.
             </li>
             <li>
               <strong>Docker.</strong> This is free software that keeps each job in its own

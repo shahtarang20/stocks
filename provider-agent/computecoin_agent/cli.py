@@ -11,6 +11,7 @@ This skeleton does NOT execute customer jobs -- only detect / enroll / heartbeat
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 
@@ -59,6 +60,16 @@ def enroll(
             "or COMPUTECOIN_GPU_VENDOR before enrolling."
         )
         raise typer.Exit(code=1)
+
+    if sys.platform == "win32":
+        # X7: never leave a plain-text credential in a Windows profile. Enrol through the DPAPI-backed path instead.
+        if not server:
+            typer.echo("Offline enrollment writes a plain-text secret and is not supported on Windows. Use --server.")
+            raise typer.Exit(code=1)
+        from .windows.cli_commands import enroll_windows
+
+        enroll_windows(server, token, build_capability_report(config_gpu_vendor=config.gpu_vendor))
+        return
 
     if server:
         report = build_capability_report(config_gpu_vendor=config.gpu_vendor)
@@ -156,6 +167,18 @@ def work(
     private_tier: Optional[str] = typer.Option(
         None, "--private-tier", help="Also take private jobs (sealed, sealed_pro or confidential). Each job is attested with its own fresh in-RAM keys, wiped when it ends."
     ),
+    control_socket: Optional[str] = typer.Option(
+        None, "--control-socket",
+        help="HOST:PORT to listen on for a supervisor (W4 control channel; loopback only). Off by default: without it "
+             "the runner behaves exactly as before. With it no job is claimed until the supervisor sends `start`.",
+    ),
+    control_token_file: Optional[str] = typer.Option(
+        None, "--control-token-file",
+        help="File holding the control token (mode 600). Or set COMPUTECOIN_CONTROL_TOKEN. Never put it on the command line.",
+    ),
+    control_allow_private: bool = typer.Option(
+        False, "--control-allow-private", help="Allow HOST to be a private address (the WSL2 distro address) instead of loopback.",
+    ),
 ) -> None:
     """Run the claim -> execute -> result loop.
 
@@ -180,6 +203,8 @@ def work(
         label = f"{i + 1}"
         if summary.get("throttled"):
             typer.echo(f"iter {label}: GPU too hot, not claiming")
+        elif summary.get("held"):
+            typer.echo(f"iter {label}: not claiming ({summary['held']})")
         elif summary.get("error"):
             typer.echo(f"iter {label}: error {summary['error']}")
         elif summary.get("claimed"):
@@ -191,8 +216,34 @@ def work(
 
     from .thermal import ThermalGuard
 
-    thermal_guard = ThermalGuard.from_config(config)  # B6: no new claim while the GPU is at its temperature cap
+    control = None
+    control_server = None
+    if control_socket:
+        from .control_channel import AuthError, load_token, start_runner_control
+        from . import __version__ as _agent_version
 
+        try:
+            _token = load_token(control_token_file)
+            control, control_server = start_runner_control(
+                control_socket, _token, allow_private=control_allow_private, agent_version=_agent_version,
+            )
+        except (AuthError, ValueError, OSError) as exc:
+            typer.echo(f"Control channel not started: {exc}")
+            raise typer.Exit(code=1)
+        # the supervisor's native temperature (Windows NVML) feeds the guard; the guard's limits are set over the channel
+        thermal_guard = ThermalGuard.from_config(config, sampler=control.temperature_sampler)
+        control.bind_thermal_guard(thermal_guard)
+    else:
+        thermal_guard = ThermalGuard.from_config(config)  # B6: no new claim while the GPU is at its temperature cap
+
+    try:
+        _work_poll(base_url, config, n, interval, _emit, private_tier, thermal_guard, control)
+    finally:
+        if control_server is not None:
+            control_server.close()
+
+
+def _work_poll(base_url, config, n, interval, _emit, private_tier, thermal_guard, control) -> None:
     poll_loop(
         base_url,
         config.machine_id,
@@ -206,6 +257,7 @@ def work(
         multinode_network=config.multinode_network,
         multinode_network_firewalled=config.multinode_network_firewalled,
         cluster_addr=config.cluster_addr,
+        **({"control": control} if control is not None else {}),  # W4: absent unless --control-socket is used
     )
 
 
@@ -428,6 +480,60 @@ def security_info() -> None:
     typer.echo("Forbidden in workloads (even once job execution lands):")
     for item in security.FORBIDDEN_IN_WORKLOADS:
         typer.echo(f"  - {item}")
+
+
+@app.command("support-bundle")
+def support_bundle_cmd(
+    out: Optional[str] = typer.Option(
+        None, "--out", help="Where to write the zip (default: computecoin-support-<time>.zip in the current folder)."
+    ),
+    log_file: list[str] = typer.Option(
+        [], "--log-file", help="An agent or supervisor log to include (repeatable). Default: the platform's log folder."
+    ),
+    log_dir: Optional[str] = typer.Option(None, "--log-dir", help="A folder of .log files to include."),
+    max_log_lines: int = typer.Option(2000, "--max-log-lines", min=0, max=20000, help="Lines kept from the end of each log."),
+    no_hardware: bool = typer.Option(False, "--no-hardware", help="Skip hardware detection."),
+) -> None:
+    """Write a REDACTED diagnostics zip to attach to a support request (W10, L7).
+
+    It holds versions, the platform report, hardware, the settings with every secret replaced, requirement and runtime
+    health results and the end of the logs with secrets scrubbed. It never holds credentials or keys. Read it before you
+    send it. If a secret still looks present, nothing is written.
+    """
+    from pathlib import Path
+
+    from .support_bundle import BundleLeakError, build_bundle, default_bundle_name
+
+    try:
+        config = AgentConfig.load()
+    except Exception as exc:  # the bundle is most useful exactly when the config is broken; never echo the message (it can hold values)
+        typer.echo(f"Note: the agent settings could not be read ({type(exc).__name__}); they are left out.")
+        config = None
+    target = Path(out) if out else Path.cwd() / default_bundle_name()
+    try:
+        manifest = build_bundle(
+            target,
+            config=config,
+            log_files=[Path(p) for p in log_file],
+            log_dir=Path(log_dir) if log_dir else None,
+            max_log_lines=max_log_lines,
+            include_hardware=not no_hardware,
+        )
+    except FileExistsError:
+        typer.echo(f"Refusing to overwrite {target}. Choose another --out.")
+        raise typer.Exit(code=1)
+    except BundleLeakError as exc:
+        typer.echo(f"Not written: the redaction check failed ({exc}). Nothing was saved. Please report this.")
+        raise typer.Exit(code=2)
+    typer.echo(f"Support bundle written: {target}")
+    typer.echo(f"  {len(manifest['files'])} file(s), {manifest['redaction_total']} replacement(s) made, {len(manifest['logs'])} log file(s).")
+    typer.echo("  Open it and read it before you send it. It must not contain any password, token or key.")
+
+
+if sys.platform == "win32":  # W2: `computecoin-agent service install|start|stop|remove|status|run|enroll|migrate`
+    from .windows.cli_commands import register as _register_windows_service
+
+    _register_windows_service(app)
 
 
 if __name__ == "__main__":

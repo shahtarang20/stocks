@@ -48,8 +48,10 @@ from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
 
 from .attestation import AttestationClientError
+from .nvidia_eat import NvidiaEatError, normalize_tool_output
+from .platform import get_platform
 
-TSM_REPORT_ROOT = "/sys/kernel/config/tsm/report"
+TSM_REPORT_ROOT = get_platform().hardware.tsm_report_root()  # "" where the platform has no configfs-tsm
 SNP_REPORT_SIZE = 0x4A0
 SGX_EXT_OID = "1.2.840.113741.1.13.1"
 PEM_RE = re.compile(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----\n?", re.S)
@@ -104,6 +106,9 @@ def _http_fetch(url: str) -> "tuple[bytes, dict[str, str]]":
 class NvidiaGpuCollector:
     """SPDM GET_MEASUREMENTS evidence from an NVIDIA GPU in confidential-computing mode.
 
+    Tool output is read by ``nvidia_eat.normalize_tool_output`` (contract JSON, or NVIDIA's evidence list; an attestation
+    RESULT is refused). The operator wrapper contract is docs/operations/nvidia-attestation-wrapper.md.
+
     ``command`` is NVIDIA's evidence tool. TODO(verify-docs): UNVERIFIED. NVIDIA's documented CLI
     (``nvattest attest --device gpu --verifier local``, https://docs.nvidia.com/attestation/nv-attestation-sdk-cpp/latest/overview.html,
     checked 2026-11-03) is documented to emit an Entity Attestation Result, not raw SPDM
@@ -135,14 +140,13 @@ class NvidiaGpuCollector:
             err = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
             raise TeeError(f"NVIDIA attestation tool failed: {err[-1] if err else proc.returncode}")
         try:
-            raw = json.loads((proc.stdout or b"").decode("utf-8"))
-            request, response = bytes.fromhex(raw["request"]), bytes.fromhex(raw["response"])
-            chain = [str(p) for p in raw["certificate_chain"]]
-            # Optional revocation / reference collateral (NVIDIA OCSP responses or CRLs for the device
-            # chain, signed RIMs). Relayed untouched: the API verifies each by signature against its pins.
-            collateral = {k: [str(x) for x in raw[k]] for k in ("crls", "ocsp_responses", "rims") if raw.get(k)}
-        except (ValueError, KeyError, TypeError) as exc:
-            raise TeeError("NVIDIA attestation tool output is not {request, response, certificate_chain}") from exc
+            # The adapter accepts our wrapper contract and NVIDIA's evidence-list form, and refuses an attestation
+            # RESULT (it holds no SPDM evidence). Optional revocation / reference collateral (OCSP responses or CRLs for
+            # the device chain, signed RIMs) is relayed untouched: the API verifies each by signature against its pins.
+            ev = normalize_tool_output(proc.stdout or b"", nonce=nonce, gpu_index=self.gpu_index)
+        except NvidiaEatError as exc:
+            raise TeeError(str(exc)) from exc
+        request, response, chain, collateral = ev.request, ev.response, ev.certificate_chain, ev.collateral
         if len(request) != 37 or request[0] != 0x11 or request[1] != 0xE0 or not request[2] & 1:
             raise TeeError("GPU request is not a signed SPDM 1.1 GET_MEASUREMENTS")
         if request[4:36] != nonce:
@@ -169,6 +173,8 @@ def tsm_report(
     """
     if len(report_data) != 64:
         raise TeeError("report data must be 64 bytes")
+    if not root:
+        raise TeeError("configfs-tsm is not available on this platform")  # never mkdir relative to the working directory
     entry = os.path.join(root, f"computecoin-{uuid.uuid4().hex}")
     try:
         os.mkdir(entry)

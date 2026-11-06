@@ -67,7 +67,7 @@ jobs:
       CC_LINUX_KIT_JOB_CMD: ${{ vars.E2E_LINUX_KIT_JOB_CMD }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Refuse an unpinned image or a missing command
@@ -116,7 +116,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           clean: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install the agent and test tools
@@ -203,7 +203,7 @@ jobs:
       CC_SOAK_REBOOT_CMD: ${{ vars.E2E_SOAK_REBOOT_CMD }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install the agent

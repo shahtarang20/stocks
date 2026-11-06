@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Kit manifests, schemas, Dockerfiles, smoke specs
@@ -151,7 +151,7 @@ jobs:
               BASE_IMAGE=${{ vars.KIT_BASE_SCIENTIFIC_COMPUTE }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: docker/setup-buildx-action@v3

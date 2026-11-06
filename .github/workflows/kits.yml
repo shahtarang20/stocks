@@ -40,7 +40,7 @@ jobs:
     name: Offline gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -150,7 +150,7 @@ jobs:
             build_args: |
               BASE_IMAGE=${{ vars.KIT_BASE_SCIENTIFIC_COMPUTE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -215,7 +215,7 @@ jobs:
           - {slug: scientific-compute, gpu: cpu-b}
           - {slug: scientific-compute, gpu: cpu-c}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: manifest-${{ matrix.slug }}
@@ -256,7 +256,7 @@ jobs:
       matrix:
         slug: [ai-image, blender-render, ffmpeg-transcode, upscale, whisper-transcribe, llm-finetune-lora, video-upscale-frames, comfyui-workflow-runner, batch-embeddings, 3d-gaussian-splat-train, ai-video, text-to-speech, scientific-compute, llm-serve, notebooks]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: manifest-${{ matrix.slug }}

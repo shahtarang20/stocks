@@ -95,14 +95,15 @@ are a security boundary they are not.
 
 ### D5 Isolation Tier Matrix for AMD GPU Workloads
 
-In v1, AMD GPU workloads run strictly under the **container** isolation tier:
+By default, AMD GPU workloads run under the **container** isolation tier. `sealed` / `sealed_pro` are coded but OFF by default behind three locks (addendum A6 below); the table shows the default:
 
 | Isolation Tier | NVIDIA GPU | AMD GPU (ROCm) | CPU (Simulated) |
 | :--- | :--- | :--- | :--- |
 | `container` | Supported | **Supported (v1)** | Supported |
 | `gvisor` (`runsc`) | Experimental | **Refused (422 / IsolationUnavailableError)** | Supported |
 | `microvm` (Kata / Firecracker) | Planned (VFIO) | **Refused (422 / IsolationUnavailableError)** | Supported |
-| `sealed` / `sealed_pro` / `confidential` | Host-memory encryption | **Refused (v1)** | Supported |
+| `sealed` / `sealed_pro` | Host-memory encryption | **Refused by default; coded but off behind three locks (A6)** | Supported |
+| `confidential` | Host-memory encryption | **Refused (no AMD GPU confidential mode)** | Supported |
 
 Rationale: Kata Containers and gVisor do not have battle-tested, upstream-supported ROCm KFD + render-node virtualization paths in our production stack. Silently downgrading an isolation tier is forbidden: any AMD GPU job requesting non-container isolation is rejected at validation (`validate_job` -> 422), and at the agent (`IsolationUnavailableError`).
 
@@ -136,7 +137,7 @@ Code now allows `sealed` and `sealed_pro` for ROCm in `app/services/gpu_runtime.
 
 Still refused on ROCm: `confidential` (it needs a GPU TEE, which current AMD GPUs do not have; a hardware limit, not a code task), `gvisor` and `microvm`.
 
-This changes the D5 matrix row above (`sealed` / `sealed_pro`: Refused). **The owner has not yet decided D5.** Until they do, treat the matrix above as the policy of record, and do not advertise AMD Sealed to customers. The machine-level verdict is persisted on `provider_machines.sealed_verdict` (migration `0040_sealed_verdict`, written when a non-job-bound Sealed verdict is issued) and `is_gpu_compatible` additionally requires the owner flag `AMD_SEALED_ENABLED` (default `false`), so AMD Sealed stays refused until the owner flips D5 and a real AMD + TPM host has been attested (P4/P5).
+This changes the D5 matrix row above (`sealed` / `sealed_pro`: Refused). **The owner has not yet decided D5.** Until they do, treat the matrix above as the policy of record, and do not advertise AMD Sealed to customers. The machine-level verdict is persisted on `provider_machines.sealed_verdict` (migration `0040_sealed_verdict`, written when a non-job-bound Sealed verdict is issued) and `is_gpu_compatible` additionally requires the owner flag `AMD_SEALED_ENABLED` (default `false`), so AMD Sealed stays refused until the owner flips D5 and a real AMD + TPM host has been attested (P4/P5). The agent adds a third lock: the host must set `amd_sealed_enabled = true` in its own agent config (default `false`, `provider-agent/computecoin_agent/config.py`), otherwise the executor raises `IsolationUnavailableError`. None of this has run on real AMD hardware.
 
 ### Addendum U13: multi-node group network (code written, never run; OWNER DECISION before `MULTI_NODE_ENABLED`)
 

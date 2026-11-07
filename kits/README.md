@@ -8,9 +8,10 @@ A Kit is a signed, versioned bundle (ADR-0006 section 8, U1 design note). This d
 Written to the same pattern, never built or run: wave 2 `whisper-transcribe` (speech to text), `llm-finetune-lora`
 (multi-GPU capable through U13: one host, or several nodes when multi-node is enabled), `video-upscale-frames` (pipeline
 helper between two `ffmpeg-transcode` steps), `comfyui-workflow-runner`, `batch-embeddings`; wave 3
-`3d-gaussian-splat-train`. ADR-0006 section 8 names categories (AI video, LLM serving, notebooks, scientific, TTS) that
-are NOT built here: LLM serving needs services (U11), notebooks need sessions, AI video, TTS and scientific kits need an
-owner choice of model and licence. The list, each Kit's licence record, the verification method and thresholds are owner
+`3d-gaussian-splat-train`. ADR-0006 section 8 names categories (AI video, LLM serving, notebooks, scientific, TTS); each now
+has Kit code here too (`ai-video`, `llm-serve` (runs as a U11 Service replica), `notebooks` (runs in a U10 session), `text-to-speech`,
+`scientific-compute`), plus a `byoc-template` for U8. All of it is written but never built or run: image digests and weights
+hashes are `PENDING` placeholders, and the owner still has to choose the models and confirm licences. Nothing from that list is unbuilt as code. The list, each Kit's licence record, the verification method and thresholds are owner
 decisions. Weights and extra code arrive as one hash-pinned archive (`ASSET_URL`, `ASSET_SHA256`) and are re-checked at start.
 Verification: `whisper-transcribe` (`wer`), `batch-embeddings` (`cosine`) and `llm-finetune-lora` (`loss_curve`) use metric plug-ins with conservative thresholds marked OWNER DECISION (see each README); do not publish with redundancy
 sampling on until the owner decides.

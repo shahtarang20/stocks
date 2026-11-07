@@ -1,9 +1,10 @@
 # ComputeCoin Provider Agent
 
 A small, separately-installable agent that a GPU provider runs on their own
-machine to join the ComputeCoin marketplace. **Phase-1 skeleton**: it detects
-hardware, enrolls the machine, and sends signed heartbeats. It does **not** run
-customer jobs yet (see [Security model](#security-model)).
+machine to join the ComputeCoin marketplace. It detects hardware, enrolls the
+machine, sends signed heartbeats, and claims and runs jobs (a simulated executor
+or a hardened Docker container; see [Security model](#security-model)). The
+sections below that describe the first-phase skeleton are marked as such.
 
 Linux-first. Runs fine on a CPU-only host (no GPU required).
 
@@ -68,7 +69,7 @@ built around (see `computecoin_agent/security.py`):
 - **MUST NOT** execute arbitrary customer shell commands on the host.
 - **MUST NOT** mount the host filesystem, the Docker socket, or host
   credentials into any workload.
-- **MUST** run workloads (when job execution lands) under least privilege:
+- **MUST** run workloads under least privilege:
   non-root, dropped capabilities, read-only rootfs where possible, restricted
   egress, and resource quotas.
 
@@ -77,10 +78,11 @@ See `docs/architecture/ADR-0003-isolation.md` and
 
 ## Not yet implemented (labelled skeleton)
 
-- **Job execution / sandboxing** — none. The agent only does detect / enroll /
-  heartbeat.
-- **Server exchange on enroll** — the skeleton records the token and mints a
-  local signing secret offline; it does not yet POST to `/v1/agents/enroll`.
+Job execution (`executor.py`, `jobrunner.py`) and the server exchange on enroll
+(`computecoin-agent enroll --server <url>` POSTs to `/v1/agents/enroll`) now
+exist, so they are no longer listed here. Offline enroll (no `--server`) still
+mints a local signing secret without contacting the backend. Still open:
+
 - **Benchmark-based verification** — capabilities are `DETECTED` only.
 - **Stable hardware-bound machine id** — the skeleton uses a random id; a
   production agent would bind it to stable hardware identifiers.

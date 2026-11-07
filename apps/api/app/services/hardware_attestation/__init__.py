@@ -8,10 +8,10 @@ Fail-closed verifiers for hardware evidence. Rules every verifier follows:
   (``PRIVACY_HARDWARE_ROOT_CERTS``); no pinned roots means nothing verifies;
 - the challenge nonce is bound exactly (no prefix or "one of several encodings" matching).
 
-Status (R9): TPM 2.0 and AMD SEV-SNP parse and verify their real binary formats, but have only
-been exercised with synthetic evidence; recorded evidence from real machines (checklist F5) is
-still required before PRIVACY_HARDWARE_ATTESTATION may be enabled anywhere. Intel TDX and NVIDIA
-CC refuse all evidence until they are built on the vendors' DCAP / SPDM formats.
+Status (R9): all four verifiers (TPM 2.0, AMD SEV-SNP, Intel TDX, NVIDIA CC) parse and verify their
+real binary formats, but have only been exercised with synthetic evidence; recorded evidence from
+real machines (checklist F5) is still required before PRIVACY_HARDWARE_ATTESTATION may be enabled
+anywhere.
 """
 
 from __future__ import annotations

@@ -104,6 +104,6 @@ docker and, for the default tier, runsc. Written, never run in this change. A pa
 
 * Registry allowlist, scanner choice and Trivy install on the API host (or a scan worker): owner.
 * Runtime resource monitoring and miner kill (E2E-U10) is U16/U19 territory.
-* Redundancy sampling for BYOC verification is not wired; BYOC jobs use the existing verification path unchanged.
+* Redundancy sampling for BYOC verification is wired behind `BYOC_VERIFICATION_SAMPLE_RATE`, default off (0.0); with it off, BYOC jobs use the existing verification path unchanged. Not yet run against real jobs.
 * Billing, ledger, pricing unchanged; BYOC uses the same GPU-second billing and hold.
 * Registry pull credentials for private images are not supported (public or provider-reachable registries only).

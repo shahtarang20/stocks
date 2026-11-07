@@ -9,8 +9,10 @@ EXECUTION MODES
   NEVER real model inference; the ``computecoin.execution_mode`` field is
   always ``"simulated"``.  Used when the model version's ``runtime`` is
   ``"simulated"`` (Phase 4 SimulatedExecutor contract).
-* **hardware** — routed to a real GPU provider (future — requires Phase 4
-  hardened containers with an actual inference server).
+* **hardware** — routed to a real GPU provider as a real job, placed by the
+  scheduler and billed as a job (P3, see ``_create_inference_job``); it needs a
+  provider machine running an actual inference image, which this repo has not
+  yet exercised on real hardware.
 
 BILLING
 -------

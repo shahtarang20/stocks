@@ -33,8 +33,9 @@ also writes an audit record.
 ## 4. Payout worker (`services/withdrawals.py::run_payout_cycle`, a step in `app/worker.py` with its own try/except)
 
 * **Signer is injectable** (`WithdrawalSigner`). The production one, `KmsWithdrawalSigner`, signs through a `KmsAdapter`.
-  The adapter shipped is a **stub that raises `NotConfigured`**. The key is never in a file, a setting or the database; only
-  a key id and the public hot-wallet address are settings. Choosing the KMS/HSM and writing its adapter is an owner decision.
+  `AwsKmsAdapter` (AWS KMS, secp256k1 key) is the adapter the worker uses (`build_default_signer`); it has not been run against a
+  real key. `StubKmsAdapter`, the default when no adapter is passed, raises `NotConfigured`. The key is never in a file, a setting
+  or the database; only a key id and the public hot-wallet address are settings. Approving the KMS/HSM product is still an owner decision.
 * **One in-flight transaction per hot wallet:** an advisory lock, a single-pass worker, and a unique partial index on
   `hot_wallet` where status is `sending` or `broadcast`.
 * The signed transaction and its hash are stored **before** broadcast, so a crash re-sends the same transaction.

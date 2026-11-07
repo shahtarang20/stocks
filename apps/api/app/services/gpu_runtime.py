@@ -140,7 +140,7 @@ def is_gpu_compatible(
             if flag_reason:
                 return False, flag_reason
 
-        # D5: Isolation for AMD GPU jobs is container only in v1.
+        # D5: AMD GPU jobs run in the container tier by default; sealed / sealed_pro only behind the A6 locks below.
         if machine_vendor == "amd" or machine_rt == "rocm":
             tier = (
                 isolation_tier

@@ -6,8 +6,10 @@ transparency-log root. ``verify_privacy_receipt_offline`` (and the SDK's ``ccver
 with nothing but the verifier's public key: signatures are Ed25519, and every proof is checked
 against the payload it claims to cover.
 
-What a receipt does NOT prove: that the log root was anchored on-chain (anchoring is not built),
-or what the host's hardware really did (see attestation_verifier for the attestation limits).
+What a receipt does NOT prove: that the log root was anchored on-chain (anchoring is built, see
+log_anchor, but runs only when PRIVACY_ANCHOR_ENABLED is on; a receipt carries an anchor section
+only once an anchored checkpoint covers it), or what the host's hardware really did (see
+attestation_verifier for the attestation limits).
 """
 
 from __future__ import annotations

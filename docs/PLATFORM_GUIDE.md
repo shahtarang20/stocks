@@ -395,7 +395,7 @@ rejected with 401 — verified by test.
 - **Driver & Groups**: Kernel driver with `/dev/kfd` and render nodes (`/dev/dri/renderD*`). The agent user must belong to both `render` and `video` groups (`sudo usermod -aG render,video $USER`).
 - **Agent AMD Extra**: The agent must be installed with the optional `amd` extra (`pip install -e ".[amd]"`), which pulls in `amdsmi` matching the host's ROCm version.
 - **Mixed-Vendor Hosts (D2 Policy)**: ComputeCoin requires exactly one GPU vendor per machine. If a host contains both NVIDIA and AMD GPUs, enrollment is refused unless `gpu_vendor = "nvidia"` or `gpu_vendor = "amd"` is pinned in `computecoin.toml` (or via `--gpu-vendor`).
-- **Isolation Tier (D5)**: AMD GPU jobs run under the `container` tier only in v1. Non-container tiers (gVisor, microVM) are refused.
+- **Isolation Tier (D5)**: AMD GPU jobs run under the `container` tier by default. gVisor, microVM and Confidential are always refused on AMD (Confidential needs a GPU confidential mode that current AMD GPUs do not have). Sealed and Sealed Pro on AMD are coded but OFF by default, behind three locks that must all be open: the server setting `AMD_SEALED_ENABLED`, a current attestation verdict that names a Sealed image for the machine, and the host's own `amd_sealed_enabled` agent setting. This path has not been proven on real hardware, and an owner decision on D5 is still pending, so do not advertise AMD Sealed.
 
 #### Windows hosts (planned, not available yet)
 A Windows 10 or 11 PC with an NVIDIA card is meant to be able to host later: a native Windows service plus a managed WSL2 distro that runs the same Linux agent

@@ -1,21 +1,23 @@
 # ComputeCoin — Architecture Overview
 
-Status: Phase 0/1. This document maps the components and the lifecycle of a job,
-and marks what is built vs planned.
+Status: written in Phase 0/1; the component status column below was brought up to
+date on 2026-11-07 against the code. This document maps the components and the
+lifecycle of a job, and marks what is built vs planned. "Built" means code exists
+in this repo; nothing here has been deployed or run in production.
 
 ## Component map
 
-| Component | Responsibility | Phase 1 status |
+| Component | Responsibility | Status |
 | --- | --- | --- |
-| **web** | Customer + provider dashboard (projects, keys, jobs, billing). | Planned |
-| **api** | FastAPI gateway: auth, projects, API keys, job submission, balances. Source of truth for requests. | Partially built (auth/projects skeletoned via SDK contract) |
-| **scheduler** | Matches jobs to provider machines; holds short-lived leases (Redis); makes atomic reservations against balances (Postgres). | Planned |
-| **job-worker** | Backend worker that drives a job through its state machine, talks to the assigned provider-agent, collects artifacts. | Planned |
-| **billing** | Double-entry ledger, reservations capture/release, invoices. Postgres, exact NUMERIC. | Planned |
-| **verification** | Benchmarks/attests provider capabilities; only this may mark capabilities VERIFIED. | Planned |
-| **provider-agent** | Runs on provider hardware: detect / enroll / signed heartbeat (this repo). Job execution NOT yet implemented. | **Built (skeleton)** |
-| **contracts** | On-chain settlement / token (future). | Planned |
-| **SDKs** | Typed Python + TypeScript clients. | **Built (skeleton)** |
+| **web** | Customer + provider dashboard (projects, keys, jobs, billing). | Built (`apps/web`) |
+| **api** | FastAPI gateway: auth, projects, API keys, job submission, balances. Source of truth for requests. | Built (`apps/api`: auth, projects, keys, jobs, billing and many more routers) |
+| **scheduler** | Matches jobs to provider machines; holds short-lived leases (Redis); makes atomic reservations against balances (Postgres). | Built (`apps/api/app/services/scheduler.py`, `scheduler_v2.py`) |
+| **job-worker** | Backend worker that drives a job through its state machine, talks to the assigned provider-agent, collects artifacts. | Built (`apps/api/app/worker.py`) |
+| **billing** | Double-entry ledger, reservations capture/release, invoices. Postgres, exact NUMERIC. | Built (`services/ledger.py`, `billing.py`, `settlement.py`) |
+| **verification** | Benchmarks/attests provider capabilities; only this may mark capabilities VERIFIED. | Built (`services/verification.py` checks output shape; kit verification runs separately) |
+| **provider-agent** | Runs on provider hardware: detect / enroll / signed heartbeat (this repo). Also claims and runs jobs (`executor.py`, `jobrunner.py`). | **Built** |
+| **contracts** | On-chain settlement / token. | Built (`contracts/src`: token, settlement, stake vault, governance); deployment is a separate owner step (see `docs/operations/launch-checklist.md`) |
+| **SDKs** | Typed Python + TypeScript clients. | **Built** (`sdk/python`, `sdk/typescript`) |
 
 Datastores (see ADR-0001): **PostgreSQL** (authoritative), **Redis** (cache /
 rate-limit / leases), **S3-compatible object storage** (artifacts; MinIO local /
@@ -64,12 +66,10 @@ Rules:
 - **Capabilities**: the machine's reported capabilities are `DETECTED` until the
   verification component benchmarks/attests them (never trusted blindly).
 
-## Built vs planned in Phase 1
+## Built vs planned
 
-- **Built (skeleton, tested):** provider-agent (detect/enroll/heartbeat),
-  Python SDK, TypeScript SDK, Phase-0 docs.
-- **Contract-level (shaped, not served):** auth/projects/api-key/inference
-  endpoints exist as SDK methods; backend may return availability errors until
-  implemented.
-- **Planned:** scheduler, job-worker, billing/ledger, verification, web,
-  on-chain contracts, job execution + sandboxing in the agent.
+The original Phase 1 split (provider-agent skeleton, SDKs and docs built; scheduler, job-worker,
+billing, verification, web, contracts and agent job execution planned) is out of date: all of
+those now have code in this repo (see the table above). What is NOT done is deployment, real
+hardware runs, and the owner decisions tracked in `docs/operations/` (for example
+`launch-checklist.md` and `proof-of-privacy-remaining-work.md`).

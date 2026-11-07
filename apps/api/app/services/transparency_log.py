@@ -9,7 +9,8 @@ Leaf hash: ``SHA-256(0x00 || event_type || ":" || canonical_json(payload))``. A 
 it from the payload, so a proof always says what was logged, not just that "something" was.
 
 Entries: IMAGE_HASH, ATTESTATION_VERDICT, KEY_RELEASE, WIPE_RECEIPT, TAMPER_EVIDENCE.
-Not built yet: periodic anchoring of the root on-chain (the ``anchored_*`` columns stay empty).
+On-chain anchoring of the root is built (``log_anchor``) but runs only when PRIVACY_ANCHOR_ENABLED is on;
+otherwise the ``anchored_*`` columns stay empty.
 """
 
 from __future__ import annotations

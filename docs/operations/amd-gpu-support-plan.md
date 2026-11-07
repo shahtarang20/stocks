@@ -1,6 +1,6 @@
 # AMD GPU Support: Master Prompt and Checklist
 
-_Status date: 2026-10-26 · Owner: engineering · Status: **planned, not started** ·
+_Status date: 2026-10-26 · Owner: engineering · Status: **code written (most checklist items below are ticked); the real-AMD-hardware validation (WP9) is unticked, so nothing has run on an AMD GPU yet** ·
 Companion to [implementation-checklist.md](implementation-checklist.md),
 [ADR-0003-isolation.md](../architecture/ADR-0003-isolation.md) and
 [gpu-validation-runbook.md](gpu-validation-runbook.md)._
@@ -84,7 +84,7 @@ backfilled as `cuda` rows; the column stays for compatibility. All reads go thro
 helper, `image_for(model_version, gpu_runtime) -> str | None`. A hardware model version
 with no image for a machine's runtime makes that machine ineligible for it.
 
-**D5. Isolation for AMD GPU jobs is `container` only in v1.**
+**D5. Isolation for AMD GPU jobs is `container` by default.** (Later addition A6: `sealed` / `sealed_pro` on AMD are coded but OFF by default behind three locks: server `AMD_SEALED_ENABLED`, a current Sealed-image verdict, and the host's own `amd_sealed_enabled` agent setting. Confidential on AMD is never available, and none of it is proven on real hardware. See ADR-0003 addendum A6.)
 - gVisor: its GPU proxy supports NVIDIA only.
 - microVM: an AMD GPU needs VFIO PCI passthrough into the VM, which this repo does not do.
 - confidential: there is no AMD GPU TEE path in this repo.
@@ -217,7 +217,7 @@ WP2 Agent execution (executor.py, isolation.py)
 - One helper builds GPU argv for a vendor and gpu_count. NVIDIA output must be
   byte-identical to today. AMD output follows D6, using the first gpu_count AMD render
   nodes and numeric host GIDs for render and video.
-- AMD GPU job with a tier other than container: raise IsolationUnavailableError (D5).
+- AMD GPU job with a tier other than container: raise IsolationUnavailableError (D5; sealed / sealed_pro excepted only behind the A6 locks).
   AMD GPU job without /dev/kfd: raise HardwareUnavailableError.
 - Collect run metrics from whichever vendor ran the job.
 - Tests: exact argv for AMD with 1 and 2 GPUs; none of the D6 forbidden flags appear;

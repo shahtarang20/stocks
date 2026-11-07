@@ -79,14 +79,14 @@ part URL, confirm part, complete, abort), files (list, download link, delete), u
 - P4: no endpoint accepts or returns file bytes. The only byte reader is the verifier (`sha256_of`), streaming.
 - Dedup oracle: confirming "this hash exists" lets an attacker who knows a hash claim someone else's file.
   Default is per-account dedup (scope key = owner); cross-account dedup is an owner decision and, if enabled,
-  should require a proof-of-possession step (not built) and stay off for privacy tiers.
+  should require a proof-of-possession step (implemented, off unless cross-account dedup is enabled; never run against real storage) and stay off for privacy tiers.
 - Presigned URLs are bearer capabilities: short TTL, one key, one part, never logged by us.
 - Staged bytes are never addressable until the whole-file hash is proven.
 - BYO credentials: encrypted at rest, write-only (never returned), wiped on revoke, key required to enable.
   Endpoints must be https and not loopback/private/link-local literals; a DNS name resolving to a private
   address is NOT caught (residual risk: the API never connects to a customer endpoint, it only signs).
-- Privacy tiers (ADR-0005): crypto-shredding of private-tier data (WP24) is not built here; deleting a
-  file only drops a reference and the object after the grace period.
+- Privacy tiers (ADR-0005): crypto-shredding of private-tier data (WP24) is implemented for private-tier deletion (never run against real
+  storage); for other data, deleting a file only drops a reference and the object after the grace period.
 - Names are validated (no control chars or separators); keys are opaque (`..` and leading `/` rejected).
 
 ## Tests (`apps/api/tests/test_u2_data_plane.py`, written, not run)

@@ -1,6 +1,6 @@
 # Proof-of-Privacy: remaining work — master prompt and master checklist
 
-_Status date: 2026-10-28 · Owner: engineering · Status: **WP-A to WP-E done; WP-F partly (F3 TDX/NVIDIA not built, F5 needs hardware); reviewed 2026-10-28; awaiting owner approval (X8)** ·
+_Status date: 2026-10-28 · Owner: engineering · Status: **WP-A to WP-E done; WP-F partly (F3 TDX/NVIDIA verifiers built, synthetic evidence only; F5 needs hardware); reviewed 2026-10-28; awaiting owner approval (X8)** ·
 Baseline: `main` with reviewed WP1–WP5 work (548 API, 91 agent, 48 SDK, 15 guardian, 7 e2e,
 8 web, 33 contract tests passing). Companion to [ADR-0005](../architecture/ADR-0005-proof-of-privacy.md)
 and [proof-of-privacy-completion.md](../architecture/proof-of-privacy-completion.md)._

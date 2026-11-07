@@ -13,8 +13,7 @@ formats; TPM AK enrolment (MakeCredential / ActivateCredential) is built, and th
 (checklist F5). SEV-SNP, Intel TDX (DCAP + Intel collateral) and NVIDIA CC (SPDM) verifiers, and the
 Confidential CPU+GPU pairing, are built from the published formats and tested on synthetic evidence
 only; CRL/OCSP revocation (Intel, AMD, NVIDIA), the TDX-module identity and NVIDIA RIM parsing are now coded (P2, fail closed, collateral trusted by signature to pinned roots) but have no recorded real-vendor collateral yet (R8), so their formats remain unverified. Guardian
-key sets can be pinned by a published fingerprint (SDK and website). Also not built: the Sealed OS image, DB-stake sync with the vault, an audit of
-ComputeStakeVault. Owner approval is still needed for the decisions in section 12.
+key sets can be pinned by a published fingerprint (SDK and website). The Sealed OS image definition and its build, signing and PCR-prediction scripts exist in `os/sealed/`, but the image has never been built or booted on hardware. Stake sync with the vault exists (`apps/api/app/services/stake_sync.py`, run by the worker) and is off unless `STAKE_SYNC_ENABLED` is set. Still NOT done: no real hardware attestation run (no recorded evidence from physical TPM, TDX, SEV-SNP or NVIDIA CC hardware), no real TPM boot of a Sealed host, the services are not deployed, and the independent review (including of ComputeStakeVault) is pending. Owner approval is still needed for the decisions in section 12.
 Date: 2026-10-28. Supersedes the "Residual risk: provider-side confidentiality" note in
 [ADR-0003](ADR-0003-isolation.md).
 

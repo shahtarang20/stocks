@@ -179,7 +179,8 @@ async def get_latest_transparency_anchor(db: AsyncSession = Depends(get_db)) -> 
         "merkle_root": latest.merkle_root,
         "total_leaves": await get_log_size(db),
         "latest_leaf_index": latest.leaf_index,
-        # On-chain anchoring is not built yet; these stay null until it is.
+        # On-chain anchoring is built (log_anchor.run_anchor_cycle) but runs only when PRIVACY_ANCHOR_ENABLED
+        # is on; these stay null until a cycle has anchored this leaf.
         "anchored_tx_hash": latest.anchored_tx_hash,
         "anchored_block_number": latest.anchored_block_number,
     }

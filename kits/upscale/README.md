@@ -23,4 +23,4 @@ default to `PENDING` and fail the build), `BASE_IMAGE`, `FETCH_IMAGE`. Weights a
 
 fp32 inference; tiling with 16 px context padding to avoid seams (`tile=0` disables tiling, needs more VRAM).
 Scale 2 resizes the native 4x result down with Lanczos. Video upscaling is composed from this kit and
-ffmpeg-transcode in a pipeline (U9), not built here.
+ffmpeg-transcode in a pipeline (U9); the frame-upscaling step is the separate `video-upscale-frames` kit (written, never built or run).

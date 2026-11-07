@@ -1,8 +1,8 @@
 # Proof-of-Privacy: completion plan and end-to-end readiness checkpoints
 
 _Status date: 2026-10-28 · Companion to [ADR-0005](ADR-0005-proof-of-privacy.md) ·
-Status: **WP-A to WP-E built and tested; WP-F code only (TPM 2.0 and SEV-SNP verify synthetic
-evidence, TDX and NVIDIA refuse everything); no hardware attestation is live (see ADR-0005 status).**_
+Status: **WP-A to WP-E built and tested; WP-F code only (TPM 2.0, SEV-SNP, Intel TDX and NVIDIA CC verifiers
+are built and verify synthetic evidence only); no hardware attestation is live (see ADR-0005 status).**_
 
 ADR-0005 describes the architecture. Commit `7c195f4` built and tested its software building blocks.
 This document lists **everything still missing** to run a real private job end to end, in the order

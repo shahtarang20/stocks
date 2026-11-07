@@ -9,12 +9,16 @@ a verdict offline and nobody without the private key can forge one.
 
 What is and is not verified (stated plainly, ADR-0005 section 3):
 the caller (the attestation route) has already checked nonce freshness, the quote's binding to
-the nonce and measurements, and the machine's signature. That "quote" is produced in software
-with a key the host itself holds, so it does NOT prove the measurements came from a TPM.
-Real TPM quote verification (vendor EK certificate chain, AK binding, PCR quote) and TDX/SEV-SNP
-+ NVIDIA report verification are not implemented. Until they are, this module refuses to issue
-verdicts unless ``PRIVACY_SOFTWARE_ATTESTATION`` is on, which the boot guard forbids outside
-development and tests.
+the nonce and measurements, and the machine's signature. With ``PRIVACY_SOFTWARE_ATTESTATION`` on,
+that "quote" is produced in software with a key the host itself holds, so it does NOT prove the
+measurements came from a TPM; the boot guard forbids that flag outside development and tests.
+
+Hardware verifiers exist for TPM 2.0 quotes (Sealed / Sealed Pro) and for Intel TDX / AMD SEV-SNP
+plus NVIDIA GPU reports (Confidential); see ``app.services.hardware_attestation``. They run only
+when ``PRIVACY_HARDWARE_ATTESTATION`` is on, and they have been exercised with synthetic evidence
+only: no recorded evidence from real hardware has been checked yet. When neither the software nor
+the hardware flag is on, this module refuses to issue verdicts at all
+(``hardware_attestation_not_available``).
 """
 
 from __future__ import annotations
@@ -205,8 +209,8 @@ async def verify_machine_evidence(
         if not settings.PRIVACY_HARDWARE_ATTESTATION:
             raise AttestationVerifierError(
                 "hardware_attestation_not_available",
-                "Sealed and Confidential tiers need hardware attestation (TPM / TDX / SEV-SNP + NVIDIA), "
-                "which is not implemented yet; no verdict can be issued.",
+                "Hardware attestation is switched off on this platform, so Sealed, Sealed Pro and "
+                "Confidential verdicts cannot be issued right now.",
             )
         if not hardware_evidence or not hardware_flavor:
             raise AttestationVerifierError("missing_hardware_evidence", "hardware attestation requires hardware_evidence and hardware_flavor")

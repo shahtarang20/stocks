@@ -30,6 +30,7 @@ from app.core.config import settings
 MIN_PART_BYTES = 5 * 1024 * 1024  # S3 minimum for every part but the last
 MAX_PARTS = 10_000  # S3 maximum
 VERIFY_CHUNK_BYTES = 8 * 1024 * 1024
+MAX_RANGE_READ_BYTES = 1024 * 1024  # ceiling for read_range (dedup proof of possession)
 
 
 class DataPlaneStoreError(Exception):
@@ -104,6 +105,12 @@ class DataPlaneStore(ABC):
     @abstractmethod
     def sha256_of(self, key: str) -> str:
         """Stream the object in bounded chunks and return its SHA-256 hex (whole-file proof)."""
+
+    def read_range(self, key: str, start: int, length: int) -> bytes:
+        """``length`` bytes starting at ``start`` (a ranged read; never the whole object). Used only by the
+        cross-account dedup proof of possession. Not abstract so existing stores keep working; a store that does not
+        implement it makes the proof fail closed (the caller then simply uploads the file)."""
+        raise DataPlaneStoreError("range_read_not_supported")
 
     @abstractmethod
     def copy(self, src_key: str, dst_key: str) -> None:
@@ -234,6 +241,16 @@ class S3DataPlaneStore(DataPlaneStore):
         for chunk in body.iter_chunks(VERIFY_CHUNK_BYTES):
             h.update(chunk)
         return h.hexdigest()
+
+    def read_range(self, key, start, length):
+        check_key(key)
+        if start < 0 or length <= 0 or length > MAX_RANGE_READ_BYTES:
+            raise DataPlaneStoreError("invalid_range")
+        r = self._c.get_object(Bucket=self.bucket, Key=key, Range=f"bytes={start}-{start + length - 1}")
+        data = r["Body"].read(length + 1)  # bounded: never more than one byte past what was asked for
+        if len(data) > length:
+            raise DataPlaneStoreError("range_too_large")
+        return data
 
     def copy(self, src_key, dst_key):
         check_key(src_key)

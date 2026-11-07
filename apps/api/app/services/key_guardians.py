@@ -12,8 +12,16 @@ At release time each guardian whose private key is held by this process:
 
 The boot guard requires a production process to hold FEWER guardian keys than the threshold, so
 the platform alone cannot rebuild a Data Key: the remaining shares must come from guardians run
-elsewhere (a partner, or the customer). That external guardian service is not built yet; until it
-is, release fails closed with ``insufficient_guardians_available`` outside development.
+elsewhere (a partner, or the customer). The external guardian service exists (``apps/guardian``);
+it must be deployed and configured as external guardian(s) before private jobs can run in
+production. Until enough guardians are configured, release fails closed with
+``insufficient_guardians_available`` outside development.
+
+Double release: ``prepare_guardian_release`` takes the job row lock itself (SELECT ... FOR UPDATE)
+and re-checks ``job.guardian_releases`` AFTER the lock, so it does not rely on the caller having
+locked the row. The lock lasts until the caller's transaction ends; a concurrent release for the
+same job waits there and then sees the marker / released shares. (SQLite ignores FOR UPDATE; the
+route-level serialisation and the single-writer database cover that case.)
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ import datetime as dt
 import decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import utcnow
@@ -106,6 +114,12 @@ async def prepare_guardian_release(
 
     Returns the release plan. Raises GuardianReleaseError. Releases nothing."""
     ts = now or utcnow()
+    # Lock the job row ourselves and re-read it, so the keys_already_released check below runs on the
+    # state AFTER any concurrent release has finished. Pending changes are flushed first because the
+    # refresh would otherwise discard them. A second lock in the same transaction is harmless.
+    if sa_inspect(job).persistent:
+        await db.flush()
+        await db.refresh(job, with_for_update=True)
     try:
         require_privacy_active()
         private_keys = guardian_private_keys()
@@ -124,7 +138,7 @@ async def prepare_guardian_release(
     if v.get("job_id") != str(job.id):
         # R5: only a verdict attested for this very job (fresh host keys) can release its keys.
         raise GuardianReleaseError("verdict_not_for_this_job", "The verdict is not bound to this job")
-    if job.guardian_releases:
+    if job.guardian_releases:  # evaluated AFTER the row lock above (also covers the "releasing" marker)
         raise GuardianReleaseError("keys_already_released", "This job's keys were already released")
     if machine.is_banned:
         raise GuardianReleaseError("machine_is_banned", "Machine is banned")
@@ -314,6 +328,12 @@ async def release_guardian_shares(
     """Both phases without a commit in between. For callers that commit around it themselves
     (the claim route uses the two phases separately)."""
     plan = await prepare_guardian_release(db, job=job, machine=machine, attestation_verdict=attestation_verdict, now=now)
-    return await execute_guardian_release(
+    released = await execute_guardian_release(
         db, job=job, machine=machine, attestation_verdict=attestation_verdict, plan=plan, http_client_factory=http_client_factory
     )
+    # Record the release in the same transaction that still holds the row lock taken in
+    # prepare_guardian_release, so a concurrent call that was waiting on the lock is refused
+    # (keys_already_released) instead of releasing a second time.
+    job.guardian_releases = released
+    await db.flush()
+    return released

@@ -4,6 +4,8 @@ POST   /v1/data/uploads                              start (Idempotency-Key requ
 GET    /v1/data/uploads/{id}                         resume state (which parts are proven)
 POST   /v1/data/uploads/{id}/parts/{n}/url           presigned PUT for one part (body: sha256, size)
 POST   /v1/data/uploads/{id}/parts/{n}/confirm       check the stored part; 409 {"action":"resend"} if corrupt
+POST   /v1/data/dedup-proof/start                    (cross-account dedup ON only) challenge + 4 byte ranges for a hash
+POST   /v1/data/dedup-proof/verify                   (same) check the client's digest; returns a receipt for POST /uploads
 POST   /v1/data/uploads/{id}/complete                assemble + whole-file proof
 DELETE /v1/data/uploads/{id}                         abort
 GET    /v1/data/files                                the caller's files
@@ -45,6 +47,17 @@ class UploadCreate(BaseModel):
     sha256: str = Field(min_length=64, max_length=64)
     size_bytes: int = Field(gt=0)
     retention_days: int | None = Field(default=None, ge=0, le=36500)
+    dedup_proof: str | None = Field(default=None, max_length=2048)  # receipt from /dedup-proof/verify, else ignored
+
+
+class DedupProofStartIn(BaseModel):
+    sha256: str = Field(min_length=64, max_length=64)
+    size_bytes: int = Field(gt=0)
+
+
+class DedupProofVerifyIn(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+    proof_sha256: str = Field(min_length=64, max_length=64)
 
 
 class PartUrlIn(BaseModel):
@@ -148,10 +161,37 @@ async def create_upload(
         up, file = await svc.create_upload(
             db, owner_id=current.id, idempotency_key=idempotency_key, name=body.name, content_type=body.content_type,
             sha256=body.sha256, size_bytes=body.size_bytes, retention_days=body.retention_days, ip=client_ip(request),
+            dedup_proof=body.dedup_proof,
         )
     except svc.DataPlaneError as exc:
         _raise(exc)
     return _upload_out(up, file, dedup=up.store_upload_id == "dedup")
+
+
+@router.post("/dedup-proof/start")
+async def dedup_proof_start(body: DedupProofStartIn, current: CurrentUser = Depends(require_verified_user), db: AsyncSession = Depends(get_db)):
+    """A challenge and four server-chosen byte ranges. The answer looks the same whether or not the hash is stored."""
+    _limit(current, "dedup_proof", 120)
+    try:
+        return await svc.start_dedup_proof(db, owner_id=current.id, sha256=body.sha256, size_bytes=body.size_bytes)
+    except svc.DataPlaneError as exc:
+        _raise(exc)
+
+
+@router.post("/dedup-proof/verify")
+async def dedup_proof_verify(
+    body: DedupProofVerifyIn, request: Request, current: CurrentUser = Depends(require_verified_user), db: AsyncSession = Depends(get_db)
+):
+    """Verify sha256(challenge || the four ranges). Every failure is the same 403, so it never confirms a hash exists."""
+    _limit(current, "dedup_proof", 120)
+    try:
+        return await svc.verify_dedup_proof(
+            db, owner_id=current.id, token=body.token, proof_sha256=body.proof_sha256, ip=client_ip(request)
+        )
+    except svc.DataPlaneError as exc:
+        if exc.code in svc.PERSIST_ON_ERROR:
+            await db.commit()  # keep the failure's audit entry: the error response would otherwise roll it back
+        _raise(exc)
 
 
 @router.get("/uploads/{upload_id}")

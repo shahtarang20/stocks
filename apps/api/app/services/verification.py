@@ -373,8 +373,10 @@ async def create_shadow_job(
         # of a private job would hand the Data Key to an under-staked machine.
         value_at_risk=primary.value_at_risk,
     )
-    if primary.workload_type == "kit":
-        # U6: a Kit reference run must be the same Kit at the same version with the same plan and spec.
+    if primary.workload_type in ("kit", "byoc"):
+        # U6: a Kit reference run must be the same Kit at the same version with the same plan and spec. A BYOC reference
+        # run likewise carries the primary's spec_v2 (image digest, ``byoc`` block with its isolation runtime, resources)
+        # and v2_plan, so it runs isolated exactly like the primary; kit_id / kit_version are None for BYOC.
         import copy
 
         shadow.spec_v2 = copy.deepcopy(primary.spec_v2 or {})
@@ -421,8 +423,9 @@ async def maybe_create_shadow_job(
     db: AsyncSession, primary: Job, now: dt.datetime | None = None
 ) -> tuple[Job, RedundancyCheck] | None:
     """Sampling entry point for redundant execution of a completed paid job."""
-    if is_unbilled_job(primary) or primary.workload_type == "kit" or is_service_replica_job(primary):
-        return None  # kit jobs have their own sampler: services/kit_verification_run.py (U6)
+    if is_unbilled_job(primary) or primary.workload_type in ("kit", "byoc") or is_service_replica_job(primary):
+        # kit and BYOC jobs have their own sampler: services/kit_verification_run.py (U6; BYOC_VERIFICATION_SAMPLE_RATE)
+        return None
     if not should_shadow():
         return None
     return await create_shadow_job(db, primary, now)
@@ -440,8 +443,8 @@ async def resolve_redundancy(
     """
     if shadow.shadow_of_job_id is None:
         return None
-    if shadow.workload_type == "kit":
-        return None  # kit outputs are files: compared by the worker sweep (kit_verification_run), not here
+    if shadow.workload_type in ("kit", "byoc"):
+        return None  # kit / BYOC outputs are files: compared by the worker sweep (kit_verification_run), not here
 
     check = (
         await db.execute(

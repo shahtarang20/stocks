@@ -4,6 +4,12 @@
   billed Kit job whose manifest has a ``verification`` section and creates an unbilled reference run on a
   different provider via ``verification.create_shadow_job``. Rate: KIT_VERIFICATION_SAMPLE_RATE, which the
   manifest's ``sample_fraction`` can only lower.
+* BYOC jobs have no manifest ``verification`` section, so they use a separate, conservative rule: sampled at
+  BYOC_VERIFICATION_SAMPLE_RATE (default 0.0 = never), compared by the exact-hash plug-in on the DECLARED outputs only
+  (``v2_plan.outputs``). Anything not provable (no declared outputs, a declared file missing or ambiguous on either
+  side, a failed or unfinished reference run) is ``inconclusive``. The reference run is created by the same
+  ``create_shadow_job``: another provider, same isolation runtime, unbilled. Exact hashes only make sense for
+  deterministic images; raising the rate is an owner decision.
 * ``sweep_kit_verifications`` (worker step) judges finished pairs: downloads both jobs' output files from
   the data plane, hash-checks them, and calls ``record_kit_verification``. Absence of evidence (missing file,
   failed reference run, store outage) is ``inconclusive`` or retried, never a failure of the provider.
@@ -33,7 +39,30 @@ from app.services import verification as verification_service
 logger = logging.getLogger("computecoin.kit_verification")
 
 
+# What a BYOC job is judged by: the exact-hash plug-in (a synthetic manifest; BYOC has no Kit manifest).
+BYOC_VERIFICATION_MANIFEST: dict = {"verification": {"method": "exact"}}
+
+
+def byoc_sample_rate() -> float:
+    try:
+        return max(0.0, min(1.0, float(settings.BYOC_VERIFICATION_SAMPLE_RATE)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def byoc_declared_outputs(job: Job) -> list[str]:
+    """Names of the outputs the BYOC spec declared (``v2_plan.outputs``); [] when none or malformed."""
+    plan = (job.data_policy or {}).get("v2_plan") if isinstance(job.data_policy, dict) else None
+    outs = plan.get("outputs") if isinstance(plan, dict) else None
+    if not isinstance(outs, list):
+        return []
+    names = [o.get("name") for o in outs if isinstance(o, dict)]
+    return [n for n in names if isinstance(n, str) and n] if len(names) == len(outs) else []
+
+
 async def _manifest_of(db: Any, job: Job) -> dict | None:
+    if job.workload_type == "byoc":
+        return BYOC_VERIFICATION_MANIFEST
     if not job.kit_id or not job.kit_version:
         return None
     kit = (await db.execute(select(Kit).where(Kit.slug == job.kit_id, Kit.version == job.kit_version))).scalar_one_or_none()
@@ -49,14 +78,29 @@ def sample_rate(manifest: dict) -> float:
 
 
 async def maybe_schedule_kit_reference(db: Any, job: Job) -> Any:
-    if job.workload_type != "kit" or verification_service.is_unbilled_job(job):
+    if job.workload_type not in ("kit", "byoc") or verification_service.is_unbilled_job(job):
         return None
     if verification_service.is_service_replica_job(job):
         return None  # a Service replica has no declared outputs to compare (U11)
+    if job.workload_type == "byoc":
+        return await _maybe_schedule_byoc_reference(db, job)
     manifest = await _manifest_of(db, job)
     if not manifest or not isinstance(manifest.get("verification"), dict):
         return None
     if not verification_service.should_shadow(sample_rate(manifest)):
+        return None
+    return await verification_service.create_shadow_job(db, job)
+
+
+async def _maybe_schedule_byoc_reference(db: Any, job: Job) -> Any:
+    rate = byoc_sample_rate()
+    if rate <= 0:
+        return None  # default: BYOC is never re-run
+    if (job.isolation_tier or "container").lower() in ("sealed", "sealed_pro", "confidential"):
+        return None  # BYOC refuses privacy tiers; never copy a private job into a reference run
+    if not byoc_declared_outputs(job):
+        return None  # nothing declared means nothing that could be compared
+    if not verification_service.should_shadow(rate):
         return None
     return await verification_service.create_shadow_job(db, job)
 
@@ -122,6 +166,18 @@ async def judge_check(db: Any, check: RedundancyCheck) -> str:
         return await _finish(db, check, "inconclusive", {"reason": "service_replica_has_no_outputs"})
     p_files = await _output_files(db, primary.id, primary.customer_id)
     r_files = await _output_files(db, shadow.id, shadow.customer_id)
+    if primary.workload_type == "byoc":
+        # Declared outputs only: undeclared files are ignored, and every declared name must be present exactly once on
+        # BOTH sides, otherwise we cannot judge (inconclusive, never a failure of the provider).
+        declared = byoc_declared_outputs(primary)
+        if not declared:
+            return await _finish(db, check, "inconclusive", {"reason": "no_declared_outputs"})
+        p_files = [x for x in p_files if x[0].name in {f"out/{primary.id}/{n}" for n in declared}]
+        r_files = [x for x in r_files if x[0].name in {f"out/{shadow.id}/{n}" for n in declared}]
+        if sorted(x[0].name.rsplit("/", 1)[-1] for x in p_files) != sorted(declared) or sorted(
+            x[0].name.rsplit("/", 1)[-1] for x in r_files
+        ) != sorted(declared):
+            return await _finish(db, check, "inconclusive", {"reason": "declared_outputs_missing_or_ambiguous"})
     if not p_files or not r_files:
         return await _finish(db, check, "inconclusive", {"reason": "output_files_missing"})
     with tempfile.TemporaryDirectory(prefix="kitverify-") as tmp:
@@ -159,7 +215,7 @@ async def sweep_kit_verifications(sm: Any, limit: int = 20) -> dict[str, int]:
     async with sm() as db:
         ids = (await db.execute(
             select(RedundancyCheck.id).join(Job, Job.id == RedundancyCheck.primary_job_id).where(
-                RedundancyCheck.status.in_(("pending", "running")), Job.workload_type == "kit"
+                RedundancyCheck.status.in_(("pending", "running")), Job.workload_type.in_(("kit", "byoc"))
             ).order_by(RedundancyCheck.created_at).limit(limit)
         )).scalars().all()
     for cid in ids:

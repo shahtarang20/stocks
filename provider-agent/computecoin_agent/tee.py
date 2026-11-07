@@ -82,6 +82,124 @@ def _cached_crls(cache_dir: Optional[str], name: str) -> "list[str]":
     return out
 
 
+# --- CRL fetching (vendor endpoints) -------------------------------------------------------------
+# A CRL is trusted by its issuer signature, never by where it came from (the API verifies it), so the
+# fetch rules below are about not being turned into a network client for an arbitrary host: https only,
+# a fixed per-vendor host allowlist, no redirects (a redirect could leave the allowlist), a timeout and a
+# size cap. A CRL that cannot be fetched is omitted and the API then refuses the evidence
+# (``*_revocation_unknown``): the failure is closed, never silently accepted.
+CRL_FETCH_TIMEOUT = 15.0
+CRL_MAX_BYTES = 4 * 1024 * 1024
+CRL_FETCHED_CACHE = "crl.fetched.pem"  # never the operator's own crl.pem / crls.pem
+
+
+def _check_crl_url(url: str, allowed_hosts: "tuple[str, ...]") -> None:
+    """Refuse anything but ``https://<allowed host>[:443]/...`` without credentials."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError as exc:
+        raise TeeError(f"CRL URL is not valid: {url!r}") from exc
+    if parts.scheme != "https":
+        raise TeeError(f"refusing CRL URL that is not https: {url!r}")
+    if parts.username or parts.password or port not in (None, 443):
+        raise TeeError(f"refusing CRL URL with credentials or a non-standard port: {url!r}")
+    if (parts.hostname or "").lower() not in {h.lower() for h in allowed_hosts}:
+        raise TeeError(f"refusing CRL URL on a host outside the vendor allowlist: {url!r}")
+
+
+def _http_fetch_crl(url: str) -> "tuple[bytes, dict[str, str]]":
+    """Default CRL fetcher: GET without following redirects, with a timeout and a hard size cap."""
+    import httpx
+
+    try:
+        with httpx.stream("GET", url, timeout=CRL_FETCH_TIMEOUT, follow_redirects=False) as res:
+            if res.status_code != 200:  # includes 3xx: a redirect is never followed
+                raise TeeError(f"fetching {url} failed: HTTP {res.status_code}")
+            body = bytearray()
+            for chunk in res.iter_bytes():
+                body += chunk
+                if len(body) > CRL_MAX_BYTES:
+                    raise TeeError(f"fetching {url} failed: response larger than {CRL_MAX_BYTES} bytes")
+            return bytes(body), {k.lower(): v for k, v in res.headers.items()}
+    except httpx.HTTPError as exc:
+        raise TeeError(f"fetching {url} failed: {exc}") from exc
+
+
+def _crl_body_to_pems(body: bytes) -> "list[str]":
+    """PEM or DER CRL bytes -> PEM strings; anything that does not parse is an error."""
+    if len(body) > CRL_MAX_BYTES:
+        raise TeeError("CRL response is too large")
+    try:
+        if body.lstrip().startswith(b"-----BEGIN"):
+            found = CRL_PEM_RE.findall(body)
+            if not found:
+                raise ValueError("no CRL in PEM body")
+            out = []
+            for pem in found:
+                x509.load_pem_x509_crl(pem)
+                out.append(pem.decode())
+            return out
+        return [x509.load_der_x509_crl(body).public_bytes(Encoding.PEM).decode()]
+    except ValueError as exc:
+        raise TeeError("fetched CRL does not parse") from exc
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def fetch_crls(
+    urls: "tuple[str, ...]", allowed_hosts: "tuple[str, ...]", fetcher: Fetcher, cache_dir: Optional[str],
+    cache_name: str = CRL_FETCHED_CACHE,
+) -> "list[str]":
+    """PEM CRLs fetched from vendor ``urls`` (each checked by ``_check_crl_url`` BEFORE the fetcher is
+    called). On success the result is cached atomically in ``cache_dir/cache_name``. If any fetch fails
+    the previously cached copy (if any) is used instead; with neither, [] is returned and the API
+    refuses the evidence as ``*_revocation_unknown``. No URLs configured -> [] without any network."""
+    if not urls:
+        return []
+    cache = Path(cache_dir, cache_name) if cache_dir else None
+    try:
+        pems: "list[str]" = []
+        for url in urls:
+            _check_crl_url(url, allowed_hosts)
+            body, _ = fetcher(url)
+            pems.extend(_crl_body_to_pems(body))
+    except TeeError:
+        if cache is None:
+            return []
+        try:
+            return _cached_crls(cache_dir, cache_name)
+        except (TeeError, OSError):
+            return []
+    if cache is not None and pems:
+        try:
+            _write_atomic(cache, "".join(p if p.endswith("\n") else p + "\n" for p in pems).encode())
+        except OSError:
+            pass  # a cache that cannot be written only costs a refetch
+    return pems
+
+
+def _merge_crls(*groups: "list[str]") -> "list[str]":
+    seen, out = set(), []
+    for group in groups:
+        for pem in group:
+            key = pem.strip()
+            if key not in seen:
+                seen.add(key)
+                out.append(pem)
+    return out
+
+
 def gpu_bound_nonce(nonce: str, gpu_evidence: dict[str, Any]) -> str:
     """The value a Confidential host's CPU TEE report must commit to (via SHA-512 in REPORTDATA):
     the challenge AND the GPU's signed measurement response, so CPU and GPU evidence from two
@@ -208,8 +326,14 @@ def tsm_report(
 class SevSnpCollector:
     """SEV-SNP guest report + VCEK and ASK. Certificates come from ``cache_dir`` (``vcek.pem``,
     ``ask.pem``) when present, otherwise from AMD KDS via ``fetcher``. The CRL(s) for the ASK come from
-    ``cache_dir/crl.pem`` (operator-supplied; fetching from KDS is not implemented because the CRL
-    endpoint is not yet checked against AMD's docs, R7); without one the API refuses the evidence."""
+    ``cache_dir/crl.pem`` (operator-supplied). Fetching the CRL from AMD KDS is wired (hardened fetch,
+    see ``fetch_crls``) but OFF: ``CRL_URL_TEMPLATE`` is None because the KDS CRL URL is not recorded in
+    this file's KDS notes nor in docs/operations/external-interfaces-checked.md (that file lists the
+    AMD CRL format as unverifiable). TODO(verify-docs): record the AMD KDS CRL URL per product (Milan,
+    Genoa and, separately, Turin), then set ``CRL_URL_TEMPLATE`` (a ``{product}`` format string under
+    ``KDS``). Until then the operator-supplied ``crl.pem`` is the ONLY path and without one the API
+    refuses the evidence. Turin keeps the existing refusal in ``_certs`` (its URL layout is not
+    documented here either)."""
 
     flavor = "sev_snp"
     # Checked 2026-11-03: base URL and /vcek/v1/{product}/{chip_id_hex}?blSPL&teeSPL&snpSPL&ucodeSPL and
@@ -217,12 +341,23 @@ class SevSnpCollector:
     # github.com/google/go-sev-guest kds/kds.go. Turin (family 1Ah) uses a different TCB layout plus
     # fmcSPL and its HWID length could not be confirmed, so Turin is refused (see _certs).
     KDS = "https://kdsintf.amd.com"
+    CRL_URL_TEMPLATE: Optional[str] = None  # TODO(verify-docs): see the class docstring; None = no CRL fetch
 
     def __init__(self, *, product: Optional[str] = None, cache_dir: Optional[str] = None, tsm_root: str = TSM_REPORT_ROOT,
                  fetcher: Fetcher = _http_fetch, remover: Callable[[str], None] = os.rmdir,
-                 report_fn: Optional[Callable[[bytes], bytes]] = None):
+                 report_fn: Optional[Callable[[bytes], bytes]] = None, crl_fetcher: Optional[Fetcher] = None):
         self.product, self.cache_dir, self.tsm_root = product, cache_dir, tsm_root
         self._fetch, self._remover, self._report_fn = fetcher, remover, report_fn
+        self._crl_fetch = crl_fetcher or _http_fetch_crl
+
+    def _fetched_crls(self) -> "list[str]":
+        """CRLs from AMD KDS (https, kdsintf.amd.com only, no redirects, size cap, cached atomically).
+        Only Milan and Genoa are fetched, like the certificates; [] while no documented URL is set."""
+        if not self.CRL_URL_TEMPLATE or not self.product or self.product.strip().lower() not in ("milan", "genoa"):
+            return []
+        url = self.KDS + self.CRL_URL_TEMPLATE.format(product=self.product.strip().lower())
+        host = urllib.parse.urlsplit(self.KDS).hostname or ""
+        return fetch_crls((url,), (host,), self._crl_fetch, self.cache_dir)
 
     def collect(self, bound_nonce: str) -> dict[str, Any]:
         report_data = hashlib.sha512(bound_nonce.encode("utf-8")).digest()
@@ -234,7 +369,7 @@ class SevSnpCollector:
             raise TeeError("SEV-SNP report does not carry the requested REPORT_DATA")
         vcek, ask = self._certs(report)
         evidence = {"report": report.hex(), "vcek_cert": vcek, "ask_cert": ask}
-        crls = _cached_crls(self.cache_dir, "crl.pem")
+        crls = _merge_crls(_cached_crls(self.cache_dir, "crl.pem"), self._fetched_crls())
         if crls:
             evidence["crls"] = crls
         return evidence
@@ -321,19 +456,29 @@ def fmspc_from_quote(quote: bytes) -> str:
 class TdxCollector:
     """TDX quote via configfs-tsm plus Intel collateral. Collateral comes from ``cache_dir``
     (``tcb_info.json``, ``qe_identity.json``, ``tcb_signing_chain.pem``) when complete, else Intel PCS.
-    The Root CA and PCK CA CRLs come from ``cache_dir/crls.pem`` (operator-supplied; PCS CRL fetching is
-    not implemented, R7); without them the API refuses the evidence as ``tdx_revocation_unknown``."""
+    The Root CA and PCK CA CRLs come from ``cache_dir/crls.pem`` (operator-supplied). Fetching them from
+    Intel PCS is wired (hardened fetch, ``fetch_crls``; result added to ``collateral["crls"]``, the field
+    ``hardware_attestation/tdx.py`` reads) but OFF: ``CRL_URLS`` is empty. The only CRL path recorded in
+    docs/operations/external-interfaces-checked.md is the SGX ``/sgx/certification/v{3,4}/pckcrl`` on the
+    PCS host, without its query parameters, and no Root CA CRL URL is recorded in this file or that
+    document. TODO(verify-docs): record the exact PCK CRL URL(s) (PCK CA ``processor`` / ``platform``)
+    and the Root CA CRL URL, then list them in ``CRL_URLS``. Until then the operator-supplied
+    ``crls.pem`` is the ONLY path; without CRLs the API refuses the evidence as
+    ``tdx_revocation_unknown``."""
 
     flavor = "tdx"
     # Checked 2026-11-03: GET {PCS}/tcb?fmspc= and GET {PCS}/qe/identity, per Intel's PCCS API spec
     # https://cc-enabling.trustedservices.intel.com/intel-sgx-tdx-pccs/03/api_specification_for_pccs/
     PCS = "https://api.trustedservices.intel.com/tdx/certification/v4"
+    CRL_HOSTS: "tuple[str, ...]" = ("api.trustedservices.intel.com",)  # the PCS host above
+    CRL_URLS: "tuple[str, ...]" = ()  # TODO(verify-docs): see the class docstring; empty = no CRL fetch
 
     def __init__(self, *, cache_dir: Optional[str] = None, tsm_root: str = TSM_REPORT_ROOT,
                  fetcher: Fetcher = _http_fetch, remover: Callable[[str], None] = os.rmdir,
-                 report_fn: Optional[Callable[[bytes], bytes]] = None):
+                 report_fn: Optional[Callable[[bytes], bytes]] = None, crl_fetcher: Optional[Fetcher] = None):
         self.cache_dir, self.tsm_root, self._fetch, self._remover = cache_dir, tsm_root, fetcher, remover
         self._report_fn = report_fn
+        self._crl_fetch = crl_fetcher or _http_fetch_crl
 
     def collect(self, bound_nonce: str) -> dict[str, Any]:
         report_data = hashlib.sha512(bound_nonce.encode("utf-8")).digest()
@@ -346,8 +491,11 @@ class TdxCollector:
         if quote[48 + 520:48 + 584] != report_data:
             raise TeeError("TDX quote does not carry the requested REPORTDATA")
         collateral = self._collateral(quote)
-        crls = _cached_crls(self.cache_dir, "crls.pem")
-        if crls and "crls" not in collateral:
+        crls = _merge_crls(
+            list(collateral.get("crls") or []), _cached_crls(self.cache_dir, "crls.pem"),
+            fetch_crls(tuple(self.CRL_URLS), tuple(self.CRL_HOSTS), self._crl_fetch, self.cache_dir),
+        )
+        if crls:
             collateral["crls"] = crls
         return {"quote": quote.hex(), "collateral": collateral}
 

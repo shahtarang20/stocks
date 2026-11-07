@@ -33,6 +33,42 @@ def _is_ip_literal(host: str) -> bool:
     return all(re.fullmatch(r"(0x[0-9a-f]+|[0-9]+)", lab) for lab in labels)
 
 
+# Addresses that must never be reachable through a customer-supplied endpoint, even though some of them
+# (cloud metadata services) are not caught by every "private" classification.
+_METADATA_ADDRESSES = frozenset({
+    "169.254.169.254",  # AWS / GCP / Azure / OpenStack instance metadata (also inside link-local)
+    "169.254.170.2",  # AWS ECS task metadata
+    "100.100.100.200",  # Alibaba Cloud metadata (inside the shared 100.64.0.0/10 range)
+    "192.0.0.192",  # Oracle Cloud metadata
+    "fd00:ec2::254",  # AWS IPv6 metadata
+})
+
+
+def is_forbidden_address(address: str) -> bool:
+    """True for anything that is not a plain public unicast address: private, loopback, link-local, shared
+    (CGNAT), reserved, multicast, unspecified, a cloud metadata address, an IPv4-mapped IPv6 form of any of
+    those, or a string that does not parse as an IP at all (fail closed)."""
+    try:
+        ip = ipaddress.ip_address(str(address).strip().strip("[]").split("%", 1)[0])
+    except ValueError:
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    if str(ip) in _METADATA_ADDRESSES:
+        return True
+    return bool(
+        not ip.is_global or ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+        or ip.is_multicast or ip.is_unspecified
+    )
+
+
+def is_blocked_hostname(host: str) -> bool:
+    """True for local / internal host names (the same lists ``validate_egress_entry`` uses)."""
+    h = host.lower().rstrip(".")
+    return h in _BLOCKED_NAMES or h.endswith(_BLOCKED_SUFFIXES)
+
+
 def validate_egress_entry(entry: object) -> str:
     if not isinstance(entry, str) or not entry or len(entry) > 270 or entry != entry.strip():
         raise NetworkPolicyError("egress entries must be 'host:port' strings")

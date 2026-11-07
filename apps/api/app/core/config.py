@@ -283,6 +283,10 @@ class Settings(BaseSettings):
     # another provider. 0 disables. The manifest's sample_fraction can only lower it. Owner decision to raise.
     KIT_VERIFICATION_SAMPLE_RATE: float = 0.02
     KIT_VERIFICATION_SWEEP_INTERVAL_SECONDS: int = 60
+    # BYOC jobs have no kit manifest `verification` section. Share of completed, billed BYOC jobs that get an unbilled
+    # reference re-run on another provider, compared by exact SHA-256 on the declared outputs only. 0.0 (default) = off.
+    # Exact hashes are only meaningful for deterministic images, so this is an OWNER DECISION to raise.
+    BYOC_VERIFICATION_SAMPLE_RATE: float = 0.0
     KIT_VERIFICATION_MAX_FILE_BYTES: int = 512 * 1024 * 1024
     # When True, provider earnings for a sampled job stay in the holding account
     # until its verification result is known.
@@ -339,6 +343,10 @@ class Settings(BaseSettings):
     DATA_PLANE_RETENTION_MAX_DAYS: int = 0  # 0 = no maximum
     DATA_PLANE_GC_GRACE_SECONDS: int = 86400  # an unreferenced object is deleted after this
     DATA_PLANE_CROSS_ACCOUNT_DEDUP: bool = False  # off: dedupe only inside one account (no hash oracle)
+    # Only when cross-account dedup is ON: a dedup hit for a hash the caller never uploaded needs a proof of possession
+    # (sha256(challenge || 4 server-chosen byte ranges)). Challenge lifetime and bytes per range:
+    DATA_PLANE_DEDUP_PROOF_TTL_SECONDS: int = 300
+    DATA_PLANE_DEDUP_PROOF_RANGE_BYTES: int = 64 * 1024  # capped at 1 MiB in code
     DATA_PLANE_INLINE_VERIFY_MAX_BYTES: int = 256 * 1024 * 1024  # larger files are verified by the worker
     DATA_PLANE_SWEEP_INTERVAL_SECONDS: int = 300
     DATA_PLANE_SWEEP_BATCH: int = 200

@@ -257,6 +257,7 @@ def _work_poll(base_url, config, n, interval, _emit, private_tier, thermal_guard
         multinode_network=config.multinode_network,
         multinode_network_firewalled=config.multinode_network_firewalled,
         cluster_addr=config.cluster_addr,
+        amd_sealed_enabled=config.amd_sealed_enabled,
         **({"control": control} if control is not None else {}),  # W4: absent unless --control-socket is used
     )
 
@@ -373,6 +374,7 @@ def start(
             multinode_network=config.multinode_network,
             multinode_network_firewalled=config.multinode_network_firewalled,
             cluster_addr=config.cluster_addr,
+            amd_sealed_enabled=config.amd_sealed_enabled,
         )
     except (KeyboardInterrupt, SystemExit):
         typer.echo("\nStopping ComputeCoin agent gracefully...")

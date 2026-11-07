@@ -145,6 +145,10 @@ class AgentConfig(BaseSettings):
     # ---- CPU-only Kits (resource_defaults.gpu_count 0). Operator opt-in: when true the heartbeat health block carries
     # ``cpu_capable: true`` so the platform may place a CPU-only Kit job here. Such a job runs without --gpus.
     cpu_only_kits_enabled: bool = False
+    # ---- AMD GPUs in the Sealed tiers (A6, OWNER DECISION on D5). Second lock: the platform must allow it (server setting
+    # AMD_SEALED_ENABLED and a current verdict naming a Sealed image) AND this host must opt in. Default false: an AMD GPU
+    # job in any tier other than `container` is refused. Confidential, gVisor and microVM stay refused on AMD either way.
+    amd_sealed_enabled: bool = False
     # ---- U13 multi-node (OWNER DECISION, see ADR-0003 addendum). Name of the internal docker network the operator
     # created with scripts/setup-multinode-net.sh. Unset = a multi-node rank is refused on this host (no network).
     multinode_network: Optional[str] = None

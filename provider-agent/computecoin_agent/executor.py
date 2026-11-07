@@ -545,6 +545,7 @@ class DockerExecutor(Executor):
         cluster_addr: Optional[str] = None,  # U13: this host's private cluster address (rank 0 publishes on it ONLY)
         multinode_network_firewalled: bool = False,  # U13: operator attestation (agent config), default refuse
         multinode_firewall_check: Optional[Callable[[str], Optional[str]]] = None,  # runtime self-check, None = ok
+        amd_sealed_enabled: bool = False,  # A6: host opt-in (agent config) to run sealed / sealed_pro on an AMD GPU; default refuse
     ) -> None:
         from .isolation import (
             probe_confidential_computing,
@@ -571,6 +572,7 @@ class DockerExecutor(Executor):
         self._thermal_guard = thermal_guard
         self._thermal_poll_seconds = thermal_poll_seconds
         self._gpu_allocator = gpu_allocator
+        self._amd_sealed_enabled = bool(amd_sealed_enabled)
         self._multinode_network = (multinode_network or "").strip() or None
         self._cluster_addr = (cluster_addr or "").strip() or None
         self._multinode_firewalled = bool(multinode_network_firewalled)
@@ -859,12 +861,22 @@ class DockerExecutor(Executor):
         tier = byoc.tier if byoc is not None else (job_spec.isolation_tier or TIER_CONTAINER).lower()
 
         vendor = self._resolve_gpu() if gpu_count > 0 else (self._gpu_vendor or "nvidia")
-        # D5: AMD GPU jobs support container isolation only in v1
+        # D5 / A6: AMD GPU jobs run in the container tier only, with ONE narrow exception: sealed and sealed_pro, and only
+        # when this host has opted in (amd_sealed_enabled). The platform gates it as well (second lock). Confidential,
+        # gVisor, microVM and bring-your-own-container are always refused on AMD. Never silently downgraded.
         if gpu_count > 0 and vendor == "amd" and tier != TIER_CONTAINER:
-            raise IsolationUnavailableError(
-                f"AMD GPU jobs support container isolation only in v1 (requested {tier!r}). "
-                "Workload cannot be silently downgraded."
-            )
+            sealed_tier = tier in (TIER_SEALED, TIER_SEALED_PRO)
+            if not (sealed_tier and byoc is None and self._amd_sealed_enabled):
+                if sealed_tier and byoc is None:
+                    raise IsolationUnavailableError(
+                        f"AMD GPU jobs support container isolation only on this host (requested {tier!r}); the sealed tiers "
+                        "need amd_sealed_enabled = true in the agent config, set only after the owner approved it and this "
+                        "machine boots the Sealed OS image. Workload cannot be silently downgraded."
+                    )
+                raise IsolationUnavailableError(
+                    f"AMD GPU jobs support container isolation only in v1, plus sealed / sealed_pro when enabled "
+                    f"(requested {tier!r}). Workload cannot be silently downgraded."
+                )
 
         nccl_applied = False
         # GPU only when requested AND the driver/toolkit is present.

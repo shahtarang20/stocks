@@ -942,6 +942,7 @@ def poll_loop(
     multinode_network_firewalled: bool = False,
     cluster_addr: Optional[str] = None,
     control: Any = None,
+    amd_sealed_enabled: bool = False,
 ) -> list[dict[str, Any]]:
     """Run the claim->execute->result loop a bounded number of times.
 
@@ -973,7 +974,10 @@ def poll_loop(
             gpu_allocator = GpuAllocator(len(_gpus))
     except Exception:  # noqa: BLE001 - detection must never stop the claim loop
         gpu_allocator = None
-    if thermal_guard is not None or egress_proxy_image is not None or multinode_network or gpu_allocator is not None:
+    if (
+        thermal_guard is not None or egress_proxy_image is not None or multinode_network or gpu_allocator is not None
+        or amd_sealed_enabled
+    ):
         from .executor import DockerExecutor
 
         def _selector(spec: JobSpec, caps: Any = None) -> Executor:
@@ -983,7 +987,7 @@ def poll_loop(
                 docker_executor_factory=lambda: DockerExecutor(
                     thermal_guard=thermal_guard, egress_proxy_image=egress_proxy_image,
                     multinode_network=multinode_network, multinode_network_firewalled=multinode_network_firewalled,
-                    gpu_allocator=gpu_allocator, cluster_addr=cluster_addr,
+                    gpu_allocator=gpu_allocator, cluster_addr=cluster_addr, amd_sealed_enabled=amd_sealed_enabled,
                 ),
             )
 

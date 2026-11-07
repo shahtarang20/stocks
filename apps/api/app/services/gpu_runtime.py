@@ -133,9 +133,12 @@ def is_gpu_compatible(
         # and multi_gpu for a 2+ GPU job. Legacy agents (no platform object) are unchanged.
         from app.services.capability_flags import gpu_flag_reason
 
-        flag_reason = gpu_flag_reason(machine, machine_rt, req_count)
-        if flag_reason:
-            return False, flag_reason
+        # A simulated job (the approved echo model) never touches the GPU, so it does not need the GPU flag: a real agent on
+        # a machine without an NVIDIA GPU can still serve it, as before W1. Every other capability gate still applies.
+        if getattr(job, "execution_mode", None) != "simulated":
+            flag_reason = gpu_flag_reason(machine, machine_rt, req_count)
+            if flag_reason:
+                return False, flag_reason
 
         # D5: Isolation for AMD GPU jobs is container only in v1.
         if machine_vendor == "amd" or machine_rt == "rocm":

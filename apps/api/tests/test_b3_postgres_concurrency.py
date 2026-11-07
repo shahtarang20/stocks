@@ -43,7 +43,7 @@ async def test_concurrent_ledger_postings_stay_balanced(db_engine):
             await post_transaction(
                 db,
                 kind="test_concurrent",
-                legs=[(holding, "debit", 100 + i), (external, "credit", 100 + i)],
+                legs=[(external, "debit", 100 + i), (holding, "credit", 100 + i)],
                 idempotency_key=f"b3-{uuid.uuid4()}",
             )
             await db.commit()
@@ -76,7 +76,7 @@ async def test_idempotent_posting_under_concurrency_applies_once(db_engine):
             await post_transaction(
                 db,
                 kind="test_concurrent",
-                legs=[(holding, "debit", 500), (external, "credit", 500)],
+                legs=[(external, "debit", 500), (holding, "credit", 500)],
                 idempotency_key=key,
             )
             await db.commit()
@@ -158,16 +158,21 @@ async def test_concurrent_key_release_requests_release_once(db_engine, monkeypat
     sm = get_sessionmaker()
 
     async def release() -> str:
+        from app.services.key_guardians import execute_guardian_release, prepare_guardian_release
+
         async with sm() as db:
-            # The claim route locks the job row first; the second request waits here, then sees the release.
+            # Exactly the /v1/agents/jobs/{id}/keys route: lock the job row, check, mark "releasing", COMMIT (which frees the
+            # lock) and only then release. A second concurrent request waits on the lock and then sees the marker.
             j = (await db.execute(select(Job).where(Job.id == job.id).with_for_update())).scalar_one()
             machine = await db.get(ProviderMachine, m.id)
             try:
-                got = await release_guardian_shares(db, job=j, machine=machine, attestation_verdict=verdict)
+                plan = await prepare_guardian_release(db, job=j, machine=machine, attestation_verdict=verdict)
+                j.guardian_releases = [{"status": "releasing", "verdict_id": verdict["verdict_id"]}]
+                await db.commit()
+                got = await execute_guardian_release(db, job=j, machine=machine, attestation_verdict=verdict, plan=plan)
             except GuardianReleaseError as exc:
                 await db.rollback()
                 return exc.code if hasattr(exc, "code") else str(exc)
-            await db.commit()
             return f"released:{len(got)}"
 
     outcomes = await asyncio.gather(release(), release())

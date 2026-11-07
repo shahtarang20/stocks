@@ -125,6 +125,17 @@ def test_flag_host_without_capabilities_gets_nothing():
     assert is_gpu_compatible(job(), machine({"platform": LINUX_PLATFORM}))[0] is False
 
 
+def test_a_simulated_job_does_not_need_the_gpu_flag_but_a_hardware_job_still_does():
+    """A real agent on a machine without an NVIDIA GPU reports only container_tier. The approved simulated model never
+    touches the GPU, so it must still be placeable there; a hardware job must still be refused."""
+    no_gpu_flag = machine(health(LINUX_PLATFORM, ["container_tier"]))
+    assert is_gpu_compatible(job(execution_mode="simulated"), no_gpu_flag) == (True, None)
+    assert is_gpu_compatible(job(execution_mode="hardware"), no_gpu_flag) == (False, "capability_missing_nvidia_cuda")
+    # the other gates still apply to a simulated job: a Windows host never gets a private-tier job
+    win = machine(health({"os": "windows"}, ["container_tier"]))
+    assert cf.capability_refusal(job(execution_mode="simulated", isolation_tier="sealed"), win) == "windows_host_private_tier"
+
+
 def test_gpu_runtime_flag_and_multi_gpu_are_required_from_a_flag_host():
     cuda_only = machine(health(LINUX_PLATFORM, ["container_tier"]), gpu_count=2)
     assert is_gpu_compatible(job(gpu_count=1), cuda_only) == (False, "capability_missing_nvidia_cuda")

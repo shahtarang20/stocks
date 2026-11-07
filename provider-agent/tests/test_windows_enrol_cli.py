@@ -42,8 +42,10 @@ def _fake_enroll(server, token, report, *, config_path=None):
     """Behaves like enroll_remote: persists the credential into the toml, returns it in the result."""
     cfg = {"api_url": server, "machine_id": "mch_9", "machine_secret": SECRET, "heartbeat_interval_seconds": 30}
     config_path.write_text(tomli_w.dumps(cfg), encoding="utf-8")
-    return types.SimpleNamespace(machine_id="mch_9", machine_secret=SECRET, heartbeat_interval_seconds=30,
-                                 online_window_seconds=90, config_path=config_path)
+    from computecoin_agent.enrollment import RemoteEnrollmentResult  # the real result type is a dataclass
+
+    return RemoteEnrollmentResult(machine_id="mch_9", machine_secret=SECRET, heartbeat_interval_seconds=30,
+                                  online_window_seconds=90, config_path=config_path)
 
 
 def test_enrolment_leaves_no_plain_credential_and_returns_none(tmp_path):

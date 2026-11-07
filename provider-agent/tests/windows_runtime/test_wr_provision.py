@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,8 @@ def test_no_credential_path_is_ever_referenced(env):
     env.prov.provision(env.envelope())
     env.prov.repair(env.envelope())
     blob = json.dumps(env.fake.calls).lower()
+    # pytest's temp folder is named after this test (it contains the word "credential"): drop that prefix first.
+    blob = re.sub(r"/[^\"]*?pytest-of-[^\"/]*/pytest-\d+/[^\"/]*", "", blob)
     for word in ("secret", "agent.toml", "credential", "dpapi", "machine_secret"):
         assert word not in blob
 

@@ -26,6 +26,7 @@ TODO(verify-docs):
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,30 @@ class Layout:
     def state_dir(self) -> Path:
         return self.root / "state"
 
+    @property
+    def helper_dir(self) -> Path:
+        """Per-install session-helper directory (snapshot file and key file); restricted by ``prepare_helper_dir``."""
+        return self.root / "helper"
+
+    @property
+    def update_dir(self) -> Path:
+        """Updater work directory (downloads, rollback cache); the updater checks it is private before use."""
+        return self.root / "update"
+
+    @property
+    def update_state_file(self) -> Path:
+        return self.state_dir / "update-state.json"
+
+    @property
+    def runtime_settings_file(self) -> Path:
+        """Runtime distro settings JSON (same file ``msi_actions.py`` and ``provision.ps1`` use)."""
+        return self.root / "runtime-settings.json"
+
+    @property
+    def runtime_manifest_file(self) -> Path:
+        """The signed ``runtime-manifest.json`` the provisioner verified (same location ``provision.ps1`` documents)."""
+        return self.root / "runtime-manifest.json"
+
     def directories(self) -> tuple[Path, ...]:
         return (self.root, self.secrets_dir, self.logs_dir, self.state_dir)
 
@@ -111,6 +136,31 @@ def restrict_path(path: "str | Path", runner: Optional[Runner] = None) -> None:
     try:
         result = runner(acl_argv(path))
     except Exception as exc:  # noqa: BLE001 - missing icacls, timeout ...
+        raise PathSecurityError(f"could not run icacls: {type(exc).__name__}") from exc
+    if getattr(result, "returncode", 1) != 0:
+        raise PathSecurityError(f"icacls refused to restrict the directory (exit {getattr(result, 'returncode', '?')})")
+
+
+_ACCOUNT_RE = re.compile(r"^[A-Za-z0-9_.@ -]{1,64}(\\[A-Za-z0-9_.@ -]{1,64})?$")
+
+
+def acl_argv_with_user(path: "str | Path", account: str) -> list[str]:
+    """Like :func:`acl_argv` plus MODIFY for one named account (the user the session helper runs as). The account is
+    validated (no shell, but no surprises in an icacls grant either). TODO(verify-docs): ``(M)`` is modify, and the
+    ``DOMAIN\\user`` name form is accepted by ``/grant``."""
+    if not isinstance(account, str) or not _ACCOUNT_RE.match(account.strip()):
+        raise PathSecurityError("not a valid account name")
+    return [*acl_argv(path), f"{account.strip()}:(OI)(CI)M"]
+
+
+def restrict_path_for_user(path: "str | Path", account: str, runner: Optional[Runner] = None) -> None:
+    """Restrict ``path`` to SYSTEM, Administrators and ONE account. Used only for the session-helper directory, whose
+    writer (the helper) runs as the interactive user. Raises :class:`PathSecurityError` on any failure."""
+    runner = runner or subprocess_runner
+    argv = acl_argv_with_user(path, account)
+    try:
+        result = runner(argv)
+    except Exception as exc:  # noqa: BLE001
         raise PathSecurityError(f"could not run icacls: {type(exc).__name__}") from exc
     if getattr(result, "returncode", 1) != 0:
         raise PathSecurityError(f"icacls refused to restrict the directory (exit {getattr(result, 'returncode', '?')})")

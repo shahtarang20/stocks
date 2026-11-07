@@ -4,10 +4,14 @@ Status: PARTIAL AND UNTESTED ON WINDOWS. Nothing here has been run on a Windows 
 
 * Implemented (pure Python): ``Paths`` (``%ProgramData%`` / ``%LOCALAPPDATA%``), ``HardwareProbe`` memory and CPU via
   ``psutil``, ``OwnerIdentity`` (admin check), ``SignalsShutdown`` (console control events through ``signal``).
+* DELEGATING to the packages that implement them, through lazy imports (so this module still imports on Linux, and a
+  missing pywin32 or a non-Windows host surfaces as :class:`PlatformUnsupported`, never as an ImportError at import):
+  ``Paths.restrict_*`` -> ``windows/paths.py`` (icacls ACLs), ``Secrets`` -> ``windows/secrets_dpapi.py`` (DPAPI),
+  ``ServiceControl`` -> ``windows/service.py``, ``PowerState`` / ``ActivityProbe`` -> ``windows/governance/probes.py``,
+  ``RuntimeBackend`` -> ``windows/runtime/*`` (``wsl.exe`` argv builders, the managed distro), ``Updater`` ->
+  ``updater/pal.py`` (attached by the supervisor).
 * Stubs that raise :class:`PlatformUnsupported` with the owning work package named, so a caller fails closed:
-  ``Secrets`` (W2: DPAPI / Credential Manager, X7), ``ServiceControl`` (W2), ``FifoOrPipe`` (the runner is in Linux),
-  ``RamWorkdir`` (no private tier on Windows, X5), ``GpuControl`` (W7), ``PowerState`` / ``ActivityProbe`` (W5),
-  ``RuntimeBackend`` (W3/W4: ``wsl_engine``), ``Updater`` (W6).
+  ``FifoOrPipe`` (the runner is in Linux), ``RamWorkdir`` (no private tier on Windows, X5), ``GpuControl`` (W7).
 
 A Windows host reports only container-tier capability flags (X5); the probes that would advertise a privacy tier
 (TPM, confidential devices, gVisor, microVM) deliberately answer False here.
@@ -18,14 +22,22 @@ APIs, DPAPI (https://learn.microsoft.com/windows/win32/api/dpapi/), NVML on Wind
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import os
 import platform as _stdlib_platform
+import re
+import secrets as _secrets
 import signal
+import sys
+import tomllib
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from . import (
     ActivityProbe,
+    ActivitySnapshot,
     FifoOrPipe,
     GpuControl,
     HardwareProbe,
@@ -33,6 +45,7 @@ from . import (
     Paths,
     Platform,
     PlatformUnsupported,
+    PowerSnapshot,
     PowerState,
     RamWorkdir,
     RuntimeBackend,
@@ -44,6 +57,12 @@ from . import (
 )
 
 _VENDOR = "ComputeCoin"
+
+
+def _on_windows() -> bool:
+    """True when the Win32-backed delegates can work. Everywhere else they fail closed with PlatformUnsupported (an icacls
+    call or a DPAPI blob made on a non-Windows machine would be meaningless). A function, so tests can patch it."""
+    return sys.platform == "win32"
 
 
 class WindowsPaths(Paths):
@@ -74,44 +93,155 @@ class WindowsPaths(Paths):
         return self._program_data() / _VENDOR
 
     def restrict_dir(self, path: "str | os.PathLike[str]") -> None:
-        raise self._no("Paths.restrict_dir", "Windows needs an ACL, not a Unix mode (W2)")
+        """ACL the directory to SYSTEM and Administrators (``windows/paths.py: restrict_path``, icacls). Unlike the Linux
+        chmod this is NOT best effort: a directory that cannot be locked down raises ``PathSecurityError`` so nothing
+        sensitive is written into it."""
+        if not _on_windows():
+            raise self._no("Paths.restrict_dir", "icacls is only available on Windows")
+        from ..windows.paths import restrict_path
+
+        restrict_path(path)
 
     def restrict_file(self, path: "str | os.PathLike[str]") -> None:
-        raise self._no("Paths.restrict_file", "Windows needs an ACL, not a Unix mode (W2)")
+        """Same ACL, applied to the file itself (it does not rely on the parent's inheritance)."""
+        if not _on_windows():
+            raise self._no("Paths.restrict_file", "icacls is only available on Windows")
+        from ..windows.paths import restrict_path
+
+        restrict_path(path)
 
 
 class WindowsSecrets(Secrets):
+    """DPAPI (with a Credential Manager fallback) through ``windows/secrets_dpapi.py``.
+
+    * An agent config (``*.toml``, what ``AgentConfig.save`` writes): the secret keys (``machine_secret``,
+      ``signing_secret``, ``enrollment_token``) go to the DPAPI store in ``<dir>\\secrets`` and the file at ``path`` is
+      written WITHOUT them (atomically, inside the ACL-restricted directory), which closes the window in which the
+      credential would sit in a plain file. If the store fails the full file is kept (the only copy of a single-use
+      credential must not be destroyed): ``windows/enrol.py`` then reports it and ``service migrate`` finishes the job.
+    * Any other file: a base64-wrapped DPAPI blob ``<name>.dpapi`` next to ``path``; never a plain file.
+    """
+
     platform_name = PLATFORM_WINDOWS
-    backend = "dpapi"  # target backend; not implemented yet
+    backend = "dpapi"
+
+    @staticmethod
+    def _secret_name(path: "str | os.PathLike[str]") -> str:
+        """A store-legal name (``[a-z][a-z0-9_]*``) that is stable for one file name and distinct across file names."""
+        filename = Path(path).name
+        slug = re.sub(r"[^a-z0-9_]", "_", filename.lower())[:40]
+        return "f_" + slug + "_" + hashlib.sha256(filename.encode("utf-8")).hexdigest()[:12]
+
+    def _store(self, directory: "str | os.PathLike[str]") -> Any:
+        if not _on_windows():
+            raise self._no("Secrets", "DPAPI is only available on Windows")
+        try:
+            from ..windows.paths import restrict_path
+            from ..windows.secrets_dpapi import DpapiSecretStore
+        except ImportError as exc:  # tomli_w missing, etc.
+            raise self._no("Secrets", f"the DPAPI store could not be loaded ({type(exc).__name__})") from None
+        return DpapiSecretStore(directory, prepare_directory=restrict_path)
+
+    @staticmethod
+    def _atomic_write(path: Path, payload: bytes) -> None:
+        tmp = path.with_name(path.name + "." + _secrets.token_hex(4) + ".tmp")
+        try:
+            tmp.write_bytes(payload)
+            os.replace(tmp, path)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _is_config(path: Path) -> bool:
+        return path.suffix.lower() == ".toml"
 
     def write_file(self, path: "str | os.PathLike[str]", data: bytes) -> None:
-        raise self._no("Secrets.write_file", "DPAPI / Credential Manager storage is work package W2 (X7); never a plain file")
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            raise ValueError("secret data must be non-empty bytes")
+        target = Path(path)
+        if not self._is_config(target):
+            self._store(target.parent).store(self._secret_name(target), base64.b64encode(bytes(data)).decode("ascii"))
+            return
+        import tomli_w
+
+        from ..windows.secrets_dpapi import SECRET_CONFIG_KEYS, SecretStoreError
+
+        store = self._store(target.parent / "secrets")  # fails closed (PlatformUnsupported) before anything is written
+        try:
+            values = tomllib.loads(bytes(data).decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+            raise ValueError("the config is not valid TOML") from None
+        secret_values = {k: values[k] for k in SECRET_CONFIG_KEYS if isinstance(values.get(k), str) and values[k]}
+        payload = bytes(data)
+        if secret_values:
+            try:
+                for key, value in secret_values.items():
+                    store.store(key, value)
+                    back = store.load(key)
+                    if back is None or not hmac.compare_digest(back.encode("utf-8"), value.encode("utf-8")):
+                        raise SecretStoreError(f"{key} did not round-trip through the secret store")
+                payload = tomli_w.dumps({k: v for k, v in values.items() if k not in SECRET_CONFIG_KEYS}).encode("utf-8")
+            except SecretStoreError:
+                payload = bytes(data)  # keep the only copy inside the restricted directory (see the class docstring)
+        self._atomic_write(target, payload)
 
     def read_file(self, path: "str | os.PathLike[str]") -> bytes:
-        raise self._no("Secrets.read_file", "DPAPI / Credential Manager storage is work package W2 (X7)")
+        target = Path(path)
+        if not self._is_config(target):
+            value = self._store(target.parent).load(self._secret_name(target))
+            if value is None:
+                raise FileNotFoundError(str(target))
+            return base64.b64decode(value.encode("ascii"), validate=True)
+        import tomli_w
+
+        from ..windows.secrets_dpapi import SECRET_CONFIG_KEYS
+
+        store = self._store(target.parent / "secrets")
+        values = tomllib.loads(target.read_bytes().decode("utf-8"))  # FileNotFoundError when there is no config
+        for key in SECRET_CONFIG_KEYS:
+            if key not in values:
+                found = store.load(key)
+                if found:
+                    values[key] = found
+        return tomli_w.dumps(values).encode("utf-8")
 
 
 class WindowsServiceControl(ServiceControl):
+    """The Windows service control manager, through ``windows/service.py`` (pywin32). It manages ONE service, the
+    ComputeCoin supervisor: ``name`` must be that service's name, and ``argv`` is ignored because the service class
+    (``computecoin_agent.windows.service``) defines its own entry point."""
+
     platform_name = PLATFORM_WINDOWS
     manager = "windows_scm"
 
-    def _w2(self, op: str) -> PlatformUnsupported:
-        return self._no(f"ServiceControl.{op}", "the Windows Service is work package W2")
+    def _manager(self, name: str) -> Any:
+        from ..windows.service import SERVICE_NAME, ServiceManagerError, load_service_manager
+
+        if name != SERVICE_NAME:
+            raise self._no("ServiceControl", f"only the {SERVICE_NAME!r} service is managed here")
+        try:
+            return load_service_manager()
+        except ServiceManagerError as exc:  # pywin32 is not installed
+            raise self._no("ServiceControl", str(exc)) from None
 
     def install(self, name: str, argv: list[str], *, description: str = "") -> None:
-        raise self._w2("install")
+        self._manager(name).install()
 
     def uninstall(self, name: str) -> None:
-        raise self._w2("uninstall")
+        self._manager(name).remove()
 
     def start(self, name: str) -> None:
-        raise self._w2("start")
+        self._manager(name).start()
 
     def stop(self, name: str) -> None:
-        raise self._w2("stop")
+        self._manager(name).stop()
 
     def status(self, name: str) -> str:
-        raise self._w2("status")
+        """``running`` | ``stopped`` | ``not_installed`` | ``unknown`` (plus the transitional states the manager reports)."""
+        return self._manager(name).status()
 
 
 class WindowsSignals(SignalsShutdown):
@@ -210,25 +340,111 @@ class WindowsGpuControl(GpuControl):
 
 
 class WindowsPower(PowerState):
+    """Battery, reboot-pending and the suspend latch from ``windows/governance/probes.py: WindowsPowerState`` (works from
+    a service). Where the Win32 API is unavailable (not Windows) every field is unknown (None), which the governance
+    policy treats as "block"."""
+
     platform_name = PLATFORM_WINDOWS
-    # TODO(W5): sleep / hibernate / reboot-pending / battery. Until then every field is unknown (None).
+
+    def __init__(self, delegate: Any = None) -> None:
+        self._delegate = delegate
+
+    def snapshot(self) -> PowerSnapshot:
+        if self._delegate is None:
+            from ..windows.governance import probes
+            from ..windows.governance.policy import ProbeUnsupported
+
+            try:
+                self._delegate = probes.WindowsPowerState()
+            except ProbeUnsupported:
+                return PowerSnapshot()
+        return self._delegate.snapshot()
 
 
 class WindowsActivity(ActivityProbe):
+    """Idle time and full-screen state from ``windows/governance/probes.py: WindowsActivityProbe``. These calls describe the
+    INTERACTIVE session: from the service (session 0) use ``governance/snapshot.py: SnapshotProbe`` fed by the session
+    helper instead (the supervisor does). TODO(verify-docs): behaviour of each call when run in session 0."""
+
     platform_name = PLATFORM_WINDOWS
-    # TODO(W5): foreground app, last input, full-screen detection. Until then unknown (None).
+
+    def __init__(self, delegate: Any = None) -> None:
+        self._delegate = delegate
+
+    def snapshot(self) -> ActivitySnapshot:
+        if self._delegate is None:
+            from ..windows.governance import probes
+            from ..windows.governance.policy import ProbeUnsupported
+
+            try:
+                self._delegate = probes.WindowsActivityProbe()
+            except ProbeUnsupported:
+                return ActivitySnapshot()
+        return self._delegate.snapshot()
 
 
 class WindowsWslEngine(RuntimeBackend):
+    """The managed WSL2 distro (``windows/runtime/*``): Docker is reached with ``wsl.exe --distribution computecoin
+    --user ccrunner --exec docker`` (argv list, no shell)."""
+
     platform_name = PLATFORM_WINDOWS
     name = "wsl_engine"
 
     def docker_command(self) -> list[str]:
-        raise self._no("RuntimeBackend.docker_command", "the managed WSL2 distro is work package W3 (X2)")
+        from ..windows.runtime import distro_paths as P
+        from ..windows.runtime.wsl import argv_exec
+
+        return argv_exec(P.DISTRO_NAME, ["docker"], user=P.RUNNER_USER)
+
+    def engine_available(self) -> bool:
+        """True only when the managed distro is registered as WSL2 AND its Docker engine answers. Never raises."""
+        try:
+            from ..windows.runtime import distro_paths as P
+            from ..windows.runtime.wsl import WslCli, subprocess_runner
+
+            cli = WslCli(subprocess_runner, P.DISTRO_NAME)
+            info = cli.distro_info()
+            if info is None or info.version != 2:
+                return False
+            return cli.exec(["docker", "version", "--format", "{{.Server.Version}}"], user=P.RUNNER_USER, timeout=30).ok
+        except Exception:
+            return False
 
 
 class WindowsUpdater(Updater):
-    platform_name = PLATFORM_WINDOWS  # TODO(W6): signed updater with rollback.
+    """Delegates to ``updater/pal.py: AgentPalUpdater`` once the supervisor has attached its ``AgentUpdater``
+    (``attach``); before that ``check`` / ``apply`` raise PlatformUnsupported (no updater is running in this process)."""
+
+    platform_name = PLATFORM_WINDOWS
+
+    def __init__(self) -> None:
+        self._delegate: Any = None
+
+    @property  # type: ignore[override]
+    def can_self_update(self) -> bool:
+        return self._delegate is not None
+
+    def attach(self, agent_updater: Any) -> None:
+        from ..updater.pal import AgentPalUpdater
+
+        self._delegate = AgentPalUpdater(agent_updater)
+
+    def current_version(self) -> str:
+        if self._delegate is not None:
+            return self._delegate.current_version()
+        from .. import __version__
+
+        return __version__
+
+    def check(self) -> Optional[str]:
+        if self._delegate is None:
+            raise self._no("Updater.check", "the supervisor's updater is not attached to this process")
+        return self._delegate.check()
+
+    def apply(self, version: str) -> None:
+        if self._delegate is None:
+            raise self._no("Updater.apply", "the supervisor's updater is not attached to this process")
+        self._delegate.apply(version)
 
 
 def build_windows_platform(env: Optional[Mapping[str, str]] = None) -> Platform:

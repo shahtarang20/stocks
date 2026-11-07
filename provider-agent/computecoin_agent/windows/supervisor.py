@@ -16,6 +16,17 @@ non-online state as ``throttled`` and carries the real state in the additive hea
 (same mapping as ``windows/governance/policy.py``). A host is reported ``online`` only when the runner is connected,
 started and nothing else blocks claims: it never advertises capacity it cannot serve (X4, L1).
 
+Wiring added on top (all optional, injected by ``build_supervisor``; tests build a bare Supervisor without them):
+
+* GOVERNANCE (W5, X13): ``availability_source`` is ``governance.wiring.SupervisorGovernance.source``; the control channel's
+  job messages call ``on_job_event`` so sleep prevention follows the job; the engine's ``stop_job`` calls
+  :meth:`Supervisor.abort_running_job`. Any failure of the engine reports ``yielding`` (fail closed).
+* UPDATES (W6): ``update_gate`` (a ``supervisor_wiring.SupervisorUpdateGate``) closes claims below the forced-update floor or
+  while an update installs; ``update_runner`` is the scheduler's thread body (never installs while a job runs, drains
+  through the control channel first: :meth:`begin_update_drain` / :meth:`end_update_drain`).
+* HEALTH: ``health_extras`` providers add the additive ``runtime`` and ``update`` keys to the heartbeat health block, next to
+  ``availability_detail`` = ``{state, code, reason}``.
+
 Nothing here touches money code. Every Windows / wsl.exe interface is TODO(verify-docs); see the modules it uses.
 """
 
@@ -68,6 +79,10 @@ class SupervisorSettings:
     restart_window_seconds: float = 300.0
     restart_backoff_seconds: tuple[float, ...] = (2.0, 5.0, 15.0, 30.0, 60.0)
     telemetry_max_age_seconds: float = 15.0
+    # Governance: True (default) reads the owner's activity from the signed snapshot file written by the user-session
+    # helper (the service is in session 0); False reads the Win32 probes directly (supervisor run in the owner's session).
+    use_session_helper: bool = True
+    snapshot_max_age_seconds: float = 30.0  # an older snapshot is stale, and stale blocks claims
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "SupervisorSettings":
@@ -92,7 +107,7 @@ class SupervisorSettings:
     def validate(self) -> None:
         if not 1 <= int(self.control_port) <= 65535:
             raise ValueError("control_port must be 1..65535")
-        for name in ("tick_seconds", "drain_grace_seconds", "stop_grace_seconds", "kill_wait_seconds"):
+        for name in ("tick_seconds", "drain_grace_seconds", "stop_grace_seconds", "kill_wait_seconds", "snapshot_max_age_seconds"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be > 0")
         if self.max_restarts < 0 or not self.restart_backoff_seconds:
@@ -239,6 +254,11 @@ class Supervisor:
         sleeper: Optional[Callable[[float], None]] = None,
         token_provisioner: Optional[Callable[[str], None]] = None,
         transport: Any = None,
+        on_job_event: Optional[Callable[[], None]] = None,
+        health_extras: Sequence[Callable[[], dict[str, Any]]] = (),
+        update_gate: Any = None,
+        update_runner: Optional[Callable[[threading.Event], None]] = None,
+        on_shutdown: Sequence[Callable[[], None]] = (),
     ) -> None:
         self._base_url, self._machine_id, self._secret = base_url, machine_id, machine_secret
         self._token = token
@@ -257,6 +277,11 @@ class Supervisor:
         self._sleeper = sleeper
         self._provision = token_provisioner  # writes the control token into the distro before each runner launch
         self._transport = transport
+        self._on_job_event = on_job_event  # governance re-evaluation on job_started / job_finished / usage
+        self._health_extras = tuple(health_extras)
+        self._update_gate = update_gate
+        self._update_runner = update_runner
+        self._on_shutdown = tuple(on_shutdown)
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -271,6 +296,8 @@ class Supervisor:
         self._next_launch_at = 0.0
         self._runner_gave_up = False
         self._drain_requested = False
+        self._update_drain = False
+        self._hb_ok_at: Optional[float] = None
         self._shutting_down = False
         self._samples: list[Any] = []
         self._samples_at: Optional[float] = None
@@ -287,7 +314,11 @@ class Supervisor:
     def start(self) -> None:
         self._apply_power_limit()
         self.tick()
-        for target, name in ((self._main_loop, "supervisor-main"), (self._heartbeat_loop, "supervisor-heartbeat")):
+        loops: list[tuple[Callable[[], None], str]] = [(self._main_loop, "supervisor-main"),
+                                                       (self._heartbeat_loop, "supervisor-heartbeat")]
+        if self._update_runner is not None:
+            loops.append((self._update_loop, "supervisor-update"))
+        for target, name in loops:
             t = threading.Thread(target=target, name=name, daemon=True)
             t.start()
             self._threads.append(t)
@@ -305,6 +336,44 @@ class Supervisor:
         with self._lock:
             self._drain_requested = False
             self._started_sent = False  # a fresh `start` clears the runner's sticky drain
+
+    def begin_update_drain(self) -> None:
+        """The updater wants to install: finish what runs and claim nothing new (separate from the operator's drain)."""
+        with self._lock:
+            self._update_drain = True
+        self._send_quiet("drain", {"reason": "update"})
+
+    def end_update_drain(self) -> None:
+        with self._lock:
+            self._update_drain = False
+            if not self._drain_requested:
+                self._started_sent = False  # a fresh `start` clears the runner's sticky drain
+
+    def drain_complete(self) -> bool:
+        """No job is running and the runner has acknowledged the drain (or there is no connected runner)."""
+        with self._lock:
+            return self._runner_active_jobs == 0 and (self._runner_draining or not self._runner_ready)
+
+    def active_jobs(self) -> int:
+        return self._active_jobs()
+
+    def update_health_ok(self) -> bool:
+        """The updater's health check for a freshly installed version: the runner is connected and started and a heartbeat
+        was accepted recently. (It does not need ``online``: the host may be draining for the update.)"""
+        with self._lock:
+            ok_at = self._hb_ok_at
+            runner_ok = self._runner_ready and self._started_sent and not self._runner_gave_up
+        window = max(90.0, 3.0 * float(self._hb_interval))
+        return bool(runner_ok and ok_at is not None and self._clock() - ok_at < window)
+
+    def abort_running_job(self, reason: str) -> None:
+        """Governance said stop the running job now (an explicit "stop now", or a full-screen app with the owner's
+        preempt option on). The runner has no safe cancel, so the runner process is terminated and the server-side lease
+        expires and re-queues the job; the supervisor then restarts the runner, which claims nothing while the engine says no."""
+        if self._active_jobs() <= 0:
+            return
+        logger.warning("stopping the running job on governance request (%s)", reason)
+        self._terminate_process()
 
     def shutdown(self, timeout: float = 25.0, *, progress: Optional[Callable[[], None]] = None) -> ShutdownResult:
         """Drain, then stop, then terminate the runner, all within ``timeout`` seconds (best effort).
@@ -334,6 +403,11 @@ class Supervisor:
             self._terminate_process()
         self._stop.set()
         self._close_client()
+        for closer in self._on_shutdown:  # e.g. release the sleep-prevention request
+            try:
+                closer()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shutdown hook failed: %s", type(exc).__name__)
         for t in self._threads:
             if t is not threading.current_thread():
                 t.join(timeout=2.0)
@@ -357,8 +431,8 @@ class Supervisor:
         """Pick the highest-precedence applicable state. Online needs a connected, started runner."""
         causes: dict[str, str] = {}
         with self._lock:
-            if self._shutting_down or self._drain_requested:
-                causes["draining"] = "service_stop" if self._shutting_down else "requested"
+            if self._shutting_down or self._drain_requested or self._update_drain:
+                causes["draining"] = "service_stop" if self._shutting_down else ("requested" if self._drain_requested else "update")
             runner_ok = self._runner_ready and self._started_sent and not self._runner_gave_up
         if self._source is not None:
             try:
@@ -371,6 +445,12 @@ class Supervisor:
         thermal = self._thermal_check()
         if thermal in ("throttled", "hard_stop"):
             causes["throttled"] = "gpu_" + thermal
+        if self._update_gate is not None:
+            try:
+                if not self._update_gate.may_claim():  # below the forced-update floor, updating, or a failed rollback
+                    causes.setdefault("throttled", "below_update_floor" if self._update_gate.below_floor else "update_gate_closed")
+            except Exception:  # noqa: BLE001 - an unreadable gate must block
+                causes.setdefault("throttled", "update_gate_error")
         if not runner_ok:
             causes.setdefault("maintenance" if self._runner_gave_up else "throttled",
                               "runner_failed" if self._runner_gave_up else "runner_not_ready")
@@ -557,6 +637,11 @@ class Supervisor:
                 code = str(msg.data.get("code", "unknown"))
                 self.last_error_codes = (self.last_error_codes + [code])[-20:]
                 logger.warning("runner reported error %s", code)
+        if msg.type in ("job_started", "job_finished", "usage") and self._on_job_event is not None:
+            try:  # outside the lock: the governance probes must not run while it is held
+                self._on_job_event()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("job event hook failed: %s", type(exc).__name__)
 
     def _active_jobs(self) -> int:
         with self._lock:
@@ -595,8 +680,18 @@ class Supervisor:
 
             base = default_health(self._report)
         base.update(health_from_samples(self._fresh_samples()))
+        for provider in self._health_extras:  # additive keys: health.runtime, health.update
+            try:
+                extra = provider()
+            except Exception as exc:  # noqa: BLE001 - a failing provider drops its keys, never the heartbeat
+                logger.debug("health provider failed: %s", type(exc).__name__)
+                continue
+            if isinstance(extra, dict):
+                base.update(extra)
         snap = self.snapshot()
-        base["availability_detail"] = {"state": snap["availability"], "code": snap["detail"].get("code", "")}
+        code = str(snap["detail"].get("code", ""))
+        # ``reason`` is the stable cause code, never free text: the human line can name the owner's foreground app.
+        base["availability_detail"] = {"state": snap["availability"], "code": code, "reason": code}
         return base
 
     def heartbeat_once(self, *, override_detail: Optional[str] = None) -> Any:
@@ -606,12 +701,15 @@ class Supervisor:
         self._recompute()
         health = self.heartbeat_health()
         if override_detail:
-            health["availability_detail"] = {"state": "draining", "code": override_detail}
+            health["availability_detail"] = {"state": "draining", "code": override_detail, "reason": override_detail}
         availability = "throttled" if override_detail else self.heartbeat_availability()
-        return send(
+        response = send(
             self._base_url, self._machine_id, self._secret,
             report=self._report, availability=availability, health=health, transport=self._transport,
         )
+        with self._lock:
+            self._hb_ok_at = self._clock()  # an exception above means the heartbeat was NOT accepted
+        return response
 
     def _heartbeat_quiet(self, detail: Optional[str] = None) -> None:
         try:
@@ -627,6 +725,15 @@ class Supervisor:
             except Exception as exc:  # noqa: BLE001 - the loop must survive any single failure
                 logger.error("supervisor tick failed: %s", type(exc).__name__)
             self._stop.wait(self._s.tick_seconds)
+
+    def _update_loop(self) -> None:
+        runner = self._update_runner
+        if runner is None:
+            return
+        try:
+            runner(self._stop)
+        except Exception as exc:  # noqa: BLE001 - the updater must never take the supervisor down
+            logger.error("update scheduler stopped: %s", type(exc).__name__)
 
     def _heartbeat_loop(self) -> None:
         from ..heartbeat import HeartbeatAuthError, HeartbeatStaleError
@@ -673,14 +780,30 @@ def ensure_control_token(store: Any) -> str:
     return token
 
 
-def build_supervisor(layout: Any = None, *, store: Any = None, launcher_factory: Optional[Callable[..., Any]] = None) -> Supervisor:
-    """Assemble a production Supervisor from the ProgramData layout and the secret store. Raises when not enrolled."""
+def build_supervisor(
+    layout: Any = None,
+    *,
+    store: Any = None,
+    launcher_factory: Optional[Callable[..., Any]] = None,
+    governance_factory: Optional[Callable[..., Any]] = None,
+    updater_factory: Optional[Callable[..., Any]] = None,
+    runtime_measure: Optional[Callable[..., Any]] = None,
+) -> Supervisor:
+    """Assemble a production Supervisor from the ProgramData layout and the secret store. Raises when not enrolled.
+
+    The factories exist for tests. ``governance_factory`` defaults to ``governance.wiring.build_governance`` and, like it,
+    raises on a policy or probe that cannot be built (the service then does not start: fail closed); an UPDATER that cannot
+    be built only disables updates, it never stops the host from being supervised."""
     from ..config import AgentConfig
     from ..hardware import build_capability_report
     from ..thermal import ThermalGuard
     from .enrol import load_protected_config
+    from .governance.wiring import build_governance
     from .paths import Layout, install_acl_platform
     from .secrets_dpapi import DpapiSecretStore
+    from .supervisor_wiring import (
+        RuntimeHealthCache, SupervisorUpdateGate, UpdateScheduler, build_updater, make_runtime_measure, static_update_health,
+    )
 
     layout = layout or Layout.default()
     plat = install_acl_platform(layout)
@@ -702,12 +825,75 @@ def build_supervisor(layout: Any = None, *, store: Any = None, launcher_factory:
         def launcher_factory(st: SupervisorSettings) -> Any:  # noqa: E306
             return WslRunnerLauncher(st, run=subprocess_runner)
     launcher = launcher_factory(settings)
+
+    holder: dict[str, Any] = {}  # filled once the Supervisor exists; the collaborators below call back into it
+
+    def active_jobs() -> int:
+        sup_ = holder.get("sup")
+        return sup_.active_jobs() if sup_ is not None else 0
+
+    def stop_job(decision: Any) -> None:
+        sup_ = holder.get("sup")
+        if sup_ is not None:
+            sup_.abort_running_job(str(getattr(decision, "code", "governance")))
+
+    # GOVERNANCE (W5): the engine's decision is the availability source. None only when the owner switched it off.
+    governance = (governance_factory or build_governance)(
+        config, settings, layout, store, active_jobs=active_jobs, on_stop_job=stop_job,
+    )
+
+    # RUNTIME HEALTH (health.runtime), measured in the background at most every 5 minutes.
+    runtime_cache = RuntimeHealthCache(
+        runtime_measure or make_runtime_measure(layout), smoke_allowed=lambda: active_jobs() == 0,
+    )
+    health_extras: list[Callable[[], dict[str, Any]]] = [runtime_cache.provider()]
+
+    # UPDATES (W6): scheduled by the supervisor, never while a job runs, drained through the control channel first.
+    update_gate: Any = None
+    update_runner: Optional[Callable[[threading.Event], None]] = None
+    updater: Any = None
+    scheduler: Any = None
+    if config.update_enabled:
+        try:
+            update_gate = SupervisorUpdateGate(__version__, active_jobs)
+            updater = (updater_factory or build_updater)(
+                config, layout, update_gate,
+                health_check=lambda _version: bool(holder.get("sup") is not None and holder["sup"].update_health_ok()),
+                version=__version__,
+            )
+            scheduler = UpdateScheduler(
+                updater, update_gate,
+                interval_seconds=float(config.update_check_interval_seconds),
+                begin_drain=lambda: holder["sup"].begin_update_drain(),
+                end_drain=lambda: holder["sup"].end_update_drain(),
+                active_jobs=active_jobs,
+                drain_complete=lambda: holder["sup"].drain_complete(),
+            )
+            if scheduler.enabled:
+                update_runner = scheduler.run
+            health_extras.append(scheduler.provider())
+        except Exception as exc:  # noqa: BLE001 - no updates is safe; a half-built updater is not
+            logger.error("updates are disabled: the updater could not be built (%s)", type(exc).__name__)
+            update_gate, updater, scheduler, update_runner = None, None, None, None
+    if scheduler is None:
+        health_extras.append(static_update_health(__version__))
+    attach = getattr(plat.updater, "attach", None)
+    if updater is not None and callable(attach):
+        attach(updater)  # the PAL Updater (platform/windows.py) delegates to updater/pal.py
+
     sup = Supervisor(
         base_url=config.api_url, machine_id=config.machine_id, machine_secret=config.machine_secret, token=token,
         settings=settings, launcher=launcher, report=build_capability_report(config_gpu_vendor=config.gpu_vendor),
         heartbeat_interval=float(config.heartbeat_interval_seconds),
         gpu_limits={"gpu_power_limit_w": config.gpu_power_limit_w},
         token_provisioner=getattr(launcher, "provision_token", None),
+        availability_source=governance.source if governance is not None else None,
+        on_job_event=governance.on_job_event if governance is not None else None,
+        health_extras=health_extras,
+        update_gate=update_gate,
+        update_runner=update_runner,
+        on_shutdown=[governance.close] if governance is not None else [],
     )
+    holder["sup"] = sup
     sup.set_thermal_guard(ThermalGuard.from_config(config, sampler=sup.thermal_sampler))
     return sup

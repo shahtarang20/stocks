@@ -39,6 +39,27 @@ def load_protected_config(layout: Layout, store: Any) -> Any:
     return cfg
 
 
+def default_runtime_gate(layout: Layout, *, provisioner_factory: Optional[Callable[[Any], Any]] = None) -> Any:
+    """The enrolment gate (W3): the managed runtime must be healthy and pass the GPU smoke test BEFORE the server is
+    contacted. Reads ``runtime-settings.json`` and the signed ``runtime-manifest.json`` from the ProgramData layout and
+    calls ``RuntimeProvisioner.assert_ready_for_enrolment``. Raises ``RuntimeNotReady`` (with the reasons) when the
+    runtime is not ready, or when it was never provisioned; returns the ``GateResult`` otherwise."""
+    from .runtime.provision import RuntimeNotReady, RuntimeProvisioner, RuntimeSettings
+
+    settings_file, manifest_file = layout.runtime_settings_file, layout.runtime_manifest_file
+    if not settings_file.is_file() or not manifest_file.is_file():
+        raise RuntimeNotReady(
+            f"the managed runtime is not set up: {settings_file.name} and {manifest_file.name} were not found in "
+            f"{layout.root}. Run the runtime provisioner (provision.ps1 -Action provision) first, then enrol"
+        )
+    try:
+        settings = RuntimeSettings.from_file(str(settings_file))
+    except (OSError, ValueError, TypeError) as exc:
+        raise RuntimeNotReady(f"the runtime settings could not be read: {type(exc).__name__}") from None
+    prov = provisioner_factory(settings) if provisioner_factory else RuntimeProvisioner(settings)
+    return prov.assert_ready_for_enrolment(manifest_file.read_bytes())
+
+
 def enroll_protected(
     server: str,
     token: str,
@@ -48,16 +69,23 @@ def enroll_protected(
     store: Any = None,
     enroll_fn: Optional[Callable[..., Any]] = None,
     acl_runner: Any = None,
+    runtime_gate: Optional[Callable[[Layout], Any]] = None,
 ) -> Any:
     """Enrol against the backend and keep the credential only in the secret store.
 
     Returns the enrolment result with ``machine_secret`` blanked. Raises ``EnrollmentError`` exactly as
     ``enroll_remote`` does (nothing is stored on a rejected token), or :class:`SecretStoreError` if the credential
     cannot be protected (the credential then remains in the ACL-restricted ``agent.toml`` until migrated).
+
+    BEFORE anything is written or the server is contacted, ``runtime_gate(layout)`` must pass (default:
+    :func:`default_runtime_gate`, i.e. ``RuntimeProvisioner.assert_ready_for_enrolment``); otherwise
+    ``RuntimeNotReady`` is raised and the single-use enrolment token is not spent. Tests inject their own gate.
+    This is the Windows path only: the Linux enrolment (``enrollment.enroll_remote``) is unchanged.
     """
     from ..enrollment import enroll_remote
 
     layout = layout or Layout.default()
+    (runtime_gate or default_runtime_gate)(layout)
     store = store or _default_store(layout)
     ensure_layout(layout, acl_runner)
     install_acl_platform(layout, acl_runner)  # AgentConfig.save -> Paths.restrict_dir applies the ACL

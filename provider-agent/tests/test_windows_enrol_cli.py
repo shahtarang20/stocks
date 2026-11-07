@@ -51,7 +51,7 @@ def _fake_enroll(server, token, report, *, config_path=None):
 def test_enrolment_leaves_no_plain_credential_and_returns_none(tmp_path):
     layout = wpaths.Layout.from_root(tmp_path / "ComputeCoin")
     store = _store(layout)
-    result = wenrol.enroll_protected("https://api.example", "enr_x", object(), layout=layout, store=store,
+    result = wenrol.enroll_protected("https://api.example", "enr_x", object(), layout=layout, store=store, runtime_gate=lambda layout: None,
                                      enroll_fn=_fake_enroll, acl_runner=_ok_acl)
     assert result.machine_id == "mch_9" and result.machine_secret == ""
     text = layout.config_file.read_text()
@@ -72,7 +72,7 @@ def test_a_rejected_token_stores_nothing(tmp_path):
         raise EnrollmentError("401")
 
     with pytest.raises(EnrollmentError):
-        wenrol.enroll_protected("https://api.example", "enr_bad", object(), layout=layout, store=store,
+        wenrol.enroll_protected("https://api.example", "enr_bad", object(), layout=layout, store=store, runtime_gate=lambda layout: None,
                                 enroll_fn=reject, acl_runner=_ok_acl)
     assert store.load("machine_secret") is None and not layout.config_file.exists()
 
@@ -83,7 +83,7 @@ def test_when_the_store_fails_after_enrolment_the_credential_is_not_destroyed(tm
     crypt.fail = cred.fail = True
     store = sd.DpapiSecretStore(layout.secrets_dir, win32crypt=crypt, win32cred=cred)
     with pytest.raises(sd.SecretStoreError, match="migrate"):
-        wenrol.enroll_protected("https://api.example", "enr_x", object(), layout=layout, store=store,
+        wenrol.enroll_protected("https://api.example", "enr_x", object(), layout=layout, store=store, runtime_gate=lambda layout: None,
                                 enroll_fn=_fake_enroll, acl_runner=_ok_acl)
     assert SECRET in layout.config_file.read_text()      # single-use token: do not lose the only copy
 

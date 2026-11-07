@@ -6,8 +6,10 @@ with a fake runner. WRITTEN, NEVER RUN ON WINDOWS: every Windows command line be
 
 Commands
 --------
-``install``   idempotent: make sure the Windows Service is registered; start it ONLY when this PC already has an enrolled
-              credential (an upgrade of a working host). A fresh install is never started or enrolled by the installer.
+``install``   idempotent: make sure the Windows Service is registered; seed the updater's ``known_good`` from this very MSI
+              (``--msi-path`` and ``--version``) so the first update can roll back; start the service ONLY when this PC
+              already has an enrolled credential (an upgrade of a working host). A fresh install is never started or
+              enrolled by the installer.
 ``cleanup``   full uninstall (X14): stop and remove the service, unregister the runtime distro, delete the firewall rules,
               delete stored credentials, delete the data directory. Best effort: it never aborts the uninstall, it records
               every step and exits 0 when everything is gone, 1 when something was left behind (listed in the output).
@@ -32,6 +34,11 @@ from typing import Callable, Optional, Sequence
 SERVICE_NAME = "ComputeCoinAgent"
 DISTRO_NAME = "computecoin"
 FIREWALL_RULE_NAMES = ("ComputeCoin Agent (outbound)",)
+HELPER_TASK_NAME = "ComputeCoin Session Helper"  # the per-user logon task registered by `service helper install`
+# Updater state layout, the same as windows/paths.py Layout.update_state_file and update_dir (kept as plain names here so
+# this file stays standard-library only).
+UPDATE_STATE_PARTS = ("state", "update-state.json")
+UPDATE_CACHE_PARTS = ("update", "cache")
 CREDENTIAL_TARGET_PREFIX = "ComputeCoin"  # Credential Manager targets created by the supervisor (X7)  TODO(verify-docs)
 
 Runner = Callable[[Sequence[str]], "RunResult"]
@@ -88,7 +95,26 @@ def _has_enrolled_credential(data_dir: Path) -> bool:
         return False
 
 
-def do_install(python: str, install_dir: str, data_dir: Path, run: Runner) -> int:
+def seed_known_good(data_dir: Path, msi_path: str, version: str) -> dict:
+    """Record THIS installer as the updater's known-good rollback source (``updater/state.py: seed_known_good``).
+
+    Best effort and never fatal: without a seed only the first update loses its rollback source (the updater then blocks
+    claims instead of guessing), which is better than failing the install. Returns ``{"seeded": bool, "reason": str}``."""
+    if not msi_path or not version:
+        return {"seeded": False, "reason": "no installer path or version was given"}
+    try:
+        from computecoin_agent.updater.state import UpdateState, seed_known_good as _seed
+    except ImportError:
+        return {"seeded": False, "reason": "the agent package is not importable"}
+    try:
+        state = UpdateState(data_dir.joinpath(*UPDATE_STATE_PARTS))
+        done = _seed(state, version=version, artifact=Path(msi_path), cache_dir=data_dir.joinpath(*UPDATE_CACHE_PARTS))
+    except (OSError, ValueError) as exc:
+        return {"seeded": False, "reason": type(exc).__name__}
+    return {"seeded": done, "reason": "" if done else "a known-good installer is already recorded"}
+
+
+def do_install(python: str, install_dir: str, data_dir: Path, run: Runner, *, msi_path: str = "", version: str = "") -> int:
     program = python  # the firewall rule is scoped to the bundled interpreter that hosts the supervisor
     status = run(agent_cli_argv(python, "status"))
     if "not_installed" in (status.stdout or "") or status.returncode != 0:
@@ -102,10 +128,12 @@ def do_install(python: str, install_dir: str, data_dir: Path, run: Runner) -> in
         if res.returncode != 0:
             print(json.dumps({"ok": False, "step": "firewall", "code": res.returncode}))
             return 1
+    seed = seed_known_good(data_dir, msi_path, version)
     started = False
     if _has_enrolled_credential(data_dir):
         started = run(agent_cli_argv(python, "start")).returncode == 0
-    print(json.dumps({"ok": True, "service_started": started}))
+    print(json.dumps({"ok": True, "service_started": started, "known_good_seeded": seed["seeded"],
+                      "known_good_note": seed["reason"]}))
     return 0
 
 
@@ -119,6 +147,7 @@ def do_cleanup(python: str, data_dir: Path, run: Runner, *, keep_data: bool = Fa
 
     step("service stop", agent_cli_argv(python, "stop"), ok_codes=(0, 1))  # already stopped / not installed is fine
     step("service remove", agent_cli_argv(python, "remove"), ok_codes=(0, 1))
+    step("session helper task", ["schtasks.exe", "/Delete", "/TN", HELPER_TASK_NAME, "/F"], ok_codes=(0, 1))  # TODO(verify-docs): no such task is non-zero
     settings = data_dir / "runtime-settings.json"
     if settings.is_file():
         step("runtime distro remove", provision_remove_argv(python, str(settings)))
@@ -164,10 +193,12 @@ def main(argv: Optional[Sequence[str]] = None, run: Runner = subprocess_runner) 
     ap.add_argument("--install-dir", default="")
     ap.add_argument("--data-dir", required=True)
     ap.add_argument("--keep-data", action="store_true")
+    ap.add_argument("--msi-path", default="", help="the MSI being installed (becomes the updater's known-good rollback source)")
+    ap.add_argument("--version", default="", help="the ProductVersion of that MSI")
     args = ap.parse_args(argv)
     data_dir = Path(args.data_dir)
     if args.command == "install":
-        return do_install(args.python, args.install_dir, data_dir, run)
+        return do_install(args.python, args.install_dir, data_dir, run, msi_path=args.msi_path, version=args.version)
     return do_cleanup(args.python, data_dir, run, keep_data=args.keep_data)
 
 

@@ -1,4 +1,5 @@
-"""``computecoin-agent service ...`` (Windows only): install | start | stop | remove | status | run | enroll | migrate.
+"""``computecoin-agent service ...`` (Windows only): install | start | stop | remove | status | run | enroll | migrate |
+helper install | helper run | helper remove.
 
 ``register(app)`` is called from ``cli.py`` ONLY when ``sys.platform == "win32"``, so on Linux these commands do not
 exist. Each command builds its collaborators lazily so ``--help`` works without pywin32.
@@ -24,17 +25,24 @@ def _need_admin(what: str) -> None:
         raise typer.Exit(code=1)
 
 
-def enroll_windows(server: str, token: str, report: Any, *, layout: Any = None, store: Any = None) -> None:
-    """Shared by ``computecoin-agent enroll --server`` (on Windows) and ``service enroll``: DPAPI, no plain file."""
+def enroll_windows(server: str, token: str, report: Any, *, layout: Any = None, store: Any = None, runtime_gate: Any = None) -> None:
+    """Shared by ``computecoin-agent enroll --server`` (on Windows) and ``service enroll``: DPAPI, no plain file.
+
+    The managed runtime must pass its health and GPU smoke test first (``RuntimeProvisioner.assert_ready_for_enrolment``,
+    see ``enrol.default_runtime_gate``); ``runtime_gate`` replaces that check in tests."""
     from ..enrollment import EnrollmentError
     from .enrol import enroll_protected
     from .paths import Layout, PathSecurityError, restrict_path
+    from .runtime.provision import RuntimeNotReady
     from .secrets_dpapi import DpapiSecretStore, SecretStoreError
 
     layout = layout or Layout.default()
     store = store or DpapiSecretStore(layout.secrets_dir, prepare_directory=restrict_path)
     try:
-        result = enroll_protected(server, token, report, layout=layout, store=store)
+        result = enroll_protected(server, token, report, layout=layout, store=store, runtime_gate=runtime_gate)
+    except RuntimeNotReady as exc:
+        typer.echo(f"Enrollment stopped: the managed runtime is not ready, so this machine was not enrolled and your token was not used. {exc}")
+        raise typer.Exit(code=1)
     except EnrollmentError as exc:
         typer.echo(f"Enrollment failed: {exc}")
         raise typer.Exit(code=1)
@@ -45,8 +53,12 @@ def enroll_windows(server: str, token: str, report: Any, *, layout: Any = None, 
     typer.echo(f"Credential stored with DPAPI under {layout.secrets_dir}; no plain-text copy was kept.")
 
 
-def build_service_app(*, service_manager_factory: Any = None, store_factory: Any = None, layout_factory: Any = None) -> typer.Typer:
-    """The Typer sub-app. The factories exist so tests can inject fakes."""
+def build_service_app(
+    *, service_manager_factory: Any = None, store_factory: Any = None, layout_factory: Any = None,
+    runtime_gate: Any = None, helper_runner: Any = None,
+) -> typer.Typer:
+    """The Typer sub-app. The factories exist so tests can inject fakes (``runtime_gate``: the enrolment gate;
+    ``helper_runner``: the argv runner used to register the session-helper task)."""
     svc = typer.Typer(add_completion=False, help="Manage the ComputeCoin Windows Service (Windows only).")
 
     def _layout():
@@ -82,12 +94,31 @@ def build_service_app(*, service_manager_factory: Any = None, store_factory: Any
             typer.echo(str(exc))
             raise typer.Exit(code=1)
 
+    def _seed_known_good(layout, msi: Optional[str], version: Optional[str]) -> None:
+        """Best effort, never fatal (see ``updater.state.seed_known_good``): without a seed the first update cannot roll back."""
+        from .. import __version__
+        from ..updater.state import UpdateState, seed_known_good
+
+        if not msi:
+            typer.echo("Note: no --seed-msi given, so the first update will have no installer to roll back to.")
+            return
+        try:
+            done = seed_known_good(UpdateState(layout.update_state_file), version=version or __version__,
+                                   artifact=msi, cache_dir=layout.update_dir / "cache")
+        except (OSError, ValueError) as exc:
+            typer.echo(f"Warning: could not record the known-good installer ({type(exc).__name__}); the first update cannot roll back.")
+            return
+        typer.echo("Recorded the installer as the known-good rollback source." if done
+                   else "A known-good installer is already recorded; left as is.")
+
     @svc.command("install")
     def install(
         startup: str = typer.Option("auto", "--startup", help="auto (start on boot), delayed, manual or disabled."),
         username: Optional[str] = typer.Option(None, "--username", help="Run as this account instead of LocalSystem."),
+        seed_msi: Optional[str] = typer.Option(None, "--seed-msi", help="The installer being installed: recorded as the updater's known-good rollback source."),
+        seed_version: Optional[str] = typer.Option(None, "--seed-version", help="Version of --seed-msi (default: this agent's version)."),
     ) -> None:
-        """Create the data directory (ACL: SYSTEM + Administrators), the control token, then install the service."""
+        """Create the data directory (ACL: SYSTEM + Administrators), the control token, seed the updater's known-good, then install the service."""
         _need_admin("Installing the service")
         layout = _layout()
         from .paths import ensure_layout
@@ -95,6 +126,7 @@ def build_service_app(*, service_manager_factory: Any = None, store_factory: Any
 
         ensure_layout(layout)
         ensure_control_token(_store(layout))
+        _seed_known_good(layout, seed_msi, seed_version)
         _guard(lambda: _manager().install(start_type=startup, username=username))
         typer.echo(f"Service installed (start: {startup}). Enrol with `computecoin-agent service enroll`, then `service start`.")
 
@@ -151,7 +183,7 @@ def build_service_app(*, service_manager_factory: Any = None, store_factory: Any
         from ..hardware import build_capability_report
 
         layout = _layout()
-        enroll_windows(server, token, build_capability_report(), layout=layout, store=_store(layout))
+        enroll_windows(server, token, build_capability_report(), layout=layout, store=_store(layout), runtime_gate=runtime_gate)
 
     @svc.command("migrate")
     def migrate(
@@ -174,6 +206,61 @@ def build_service_app(*, service_manager_factory: Any = None, store_factory: Any
             return
         typer.echo(f"Migrated {', '.join(res.names)} into the secret store. Old file removed: {res.old_file_removed}.")
         typer.echo("If that file may have been copied or backed up, re-enrol to rotate the credential.")
+
+    helper = typer.Typer(add_completion=False, help="The user-session helper that tells the service whether the owner is using the PC.")
+    svc.add_typer(helper, name="helper")
+
+    @helper.command("install")
+    def helper_install(
+        account: Optional[str] = typer.Option(None, "--account", help="The owner's Windows account (default: the account running this command)."),
+        no_start: bool = typer.Option(False, "--no-start", help="Register the logon task but do not start it now."),
+    ) -> None:
+        """Create the snapshot key, the restricted helper directory and the per-user logon task."""
+        _need_admin("Installing the session helper")
+        import sys
+
+        from .governance.helper import HelperError, install_helper
+        from .paths import PathSecurityError
+        from .secrets_dpapi import SecretStoreError
+
+        layout = _layout()
+        from .paths import ensure_layout
+
+        try:
+            ensure_layout(layout)
+            res = install_helper(layout, _store(layout), python=sys.executable, account=account, runner=helper_runner,
+                                 start_now=not no_start)
+        except (HelperError, PathSecurityError, SecretStoreError) as exc:
+            typer.echo(f"Session helper not installed: {exc}")
+            raise typer.Exit(code=1)
+        typer.echo(f"Session helper registered for {res['account']} (task {res['task']!r}); started now: {res['started']}.")
+        typer.echo("Until it reports, the service treats the owner as present and takes no work.")
+
+    @helper.command("run")
+    def helper_run(
+        interval: float = typer.Option(5.0, "--interval", help="Seconds between snapshots (minimum 1)."),
+        once: bool = typer.Option(False, "--once", help="Write one snapshot and exit."),
+    ) -> None:
+        """Run in the owner's session: sample idle time, full-screen and GPU use, write the signed snapshot file."""
+        from .governance.helper import run_helper
+        from .governance.snapshot import SnapshotError
+        from .governance.policy import ProbeUnsupported
+
+        try:
+            code = run_helper(_layout(), interval=interval, once=once)
+        except (SnapshotError, ProbeUnsupported) as exc:
+            typer.echo(f"Session helper cannot run: {exc}")
+            raise typer.Exit(code=1)
+        raise typer.Exit(code=code)
+
+    @helper.command("remove")
+    def helper_remove() -> None:
+        """Delete the logon task and the helper directory's files."""
+        _need_admin("Removing the session helper")
+        from .governance.helper import remove_helper
+
+        res = remove_helper(_layout(), runner=helper_runner)
+        typer.echo(f"Task removed: {res['task_removed']}. Files removed: {', '.join(res['files_removed']) or 'none'}.")
 
     return svc
 

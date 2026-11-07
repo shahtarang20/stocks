@@ -157,7 +157,7 @@ def test_external_states_override_online_and_map_to_throttled_in_the_heartbeat(e
     sup.heartbeat_once()
     body = sup.sent[-1]
     assert body["availability"] == "throttled"
-    assert body["health"]["availability_detail"] == {"state": expected, "code": "owner_active"}
+    assert body["health"]["availability_detail"] == {"state": expected, "code": "owner_active", "reason": "owner_active"}
     state["v"] = "online"
     sup.tick()
     assert sup.availability() == "online"

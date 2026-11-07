@@ -83,9 +83,12 @@
     <CustomAction Id="RequirementsCheck" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="check"
                   ExeCommand="&quot;[INSTALLFOLDER]python\python.exe&quot; -I -m computecoin_agent.windows.runtime.requirements_check --json --install-dir &quot;[CommonAppDataFolder]ComputeCoin&quot;" />
 
+    <!-- The MSI path and version are passed so msi_actions.py can seed the updater's known-good rollback source from THIS very
+         installer (updater/state.py seed_known_good). [OriginalDatabase] and [ProductVersion] are standard Windows Installer
+         properties, resolved like [INSTALLFOLDER] above. TODO(verify-docs): their resolution in a deferred action's ExeCommand. -->
     <!-- 2. Register the service and the outbound-only firewall rule; start only an already-enrolled host (upgrade). -->
     <CustomAction Id="RegisterAgent" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="check"
-                  ExeCommand="&quot;[INSTALLFOLDER]python\python.exe&quot; -I &quot;[INSTALLFOLDER]msi_actions.py&quot; install --python &quot;[INSTALLFOLDER]python\python.exe&quot; --data-dir &quot;[CommonAppDataFolder]ComputeCoin&quot;" />
+                  ExeCommand="&quot;[INSTALLFOLDER]python\python.exe&quot; -I &quot;[INSTALLFOLDER]msi_actions.py&quot; install --python &quot;[INSTALLFOLDER]python\python.exe&quot; --data-dir &quot;[CommonAppDataFolder]ComputeCoin&quot; --msi-path &quot;[OriginalDatabase]&quot; --version &quot;[ProductVersion]&quot;" />
 
     <!-- 3. Full uninstall (X14): service, runtime distro, firewall rule, credentials, data folder. NEVER on an upgrade
             (UPGRADINGPRODUCTCODE is set while the old version is removed by MajorUpgrade). Return="ignore": a leftover must

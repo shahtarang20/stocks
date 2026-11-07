@@ -98,8 +98,8 @@ def test_windows_stubs_raise_platform_unsupported(tmp_path):
         plat.ram.candidates()
     with pytest.raises(PlatformUnsupported):
         plat.service.install("computecoin", ["x"])
-    with pytest.raises(PlatformUnsupported):
-        plat.runtime.docker_command()
+    # (the WSL engine now delegates to windows/runtime, so docker_command() returns a command instead of raising)
+    assert isinstance(plat.runtime.docker_command(), list)
     with pytest.raises(PlatformUnsupported):
         plat.paths.restrict_file(tmp_path / "s")
     with pytest.raises(PlatformUnsupported):

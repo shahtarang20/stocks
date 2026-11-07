@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import re
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -151,6 +152,12 @@ class HeartbeatCapabilitySummary(BaseModel):
     vram_mb: int = Field(default=0, ge=0, le=_INT32_MAX)
 
 
+# Windows supervisor health keys (see HeartbeatHealth.runtime / update / availability_detail): short ASCII only.
+_HEALTH_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}")
+_HEALTH_CODE_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+_AVAILABILITY_DETAIL_STATES = frozenset({"online", "throttled", "yielding", "maintenance", "draining"})
+
+
 class HeartbeatHealth(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -172,6 +179,47 @@ class HeartbeatHealth(BaseModel):
     # (known keys / known flags only, short ASCII, size-capped); placement uses them in app.services.capability_flags.
     platform: dict | None = None
     capabilities: list[str] | None = None
+    # Windows supervisor (W2/W3/W6) additive health keys. Self-reported and sanitised here; app.services.observability
+    # reads ``runtime.distro_ok``, ``runtime.gpu_smoke_ok``, ``update.rolled_back`` and ``availability_detail.state``.
+    runtime: dict | None = None
+    update: dict | None = None
+    availability_detail: dict | None = None
+
+    @field_validator("runtime", mode="before")
+    @classmethod
+    def _sanitize_runtime(cls, v):
+        # Booleans only: a missing or odd value is "not reported", never truthy-coerced. Unknown keys are dropped.
+        if v is None or not isinstance(v, dict):
+            return None
+        return {k: v[k] for k in ("distro_ok", "gpu_smoke_ok") if isinstance(v.get(k), bool)}
+
+    @field_validator("update", mode="before")
+    @classmethod
+    def _sanitize_update(cls, v):
+        if v is None or not isinstance(v, dict):
+            return None
+        out: dict = {}
+        if isinstance(v.get("rolled_back"), bool):
+            out["rolled_back"] = v["rolled_back"]
+        version = v.get("version")
+        if isinstance(version, str) and _HEALTH_VERSION_RE.fullmatch(version):
+            out["version"] = version
+        return out
+
+    @field_validator("availability_detail", mode="before")
+    @classmethod
+    def _sanitize_availability_detail(cls, v):
+        if v is None or not isinstance(v, dict):
+            return None
+        out: dict = {}
+        state = v.get("state")
+        if isinstance(state, str) and state in _AVAILABILITY_DETAIL_STATES:
+            out["state"] = state
+        for key in ("code", "reason"):
+            raw = v.get(key)
+            if isinstance(raw, str) and _HEALTH_CODE_RE.fullmatch(raw):
+                out[key] = raw
+        return out
 
     @field_validator("platform", mode="before")
     @classmethod

@@ -204,6 +204,25 @@ def build_service_class(
 
         SvcShutdown = SvcStop  # TODO(verify-docs): whether the framework calls SvcShutdown at system shutdown
 
+        def GetAcceptedControls(self) -> int:  # noqa: N802
+            """Also accept power events, so the yield engine learns about suspend and resume.
+            TODO(verify-docs): pywin32 ServiceFramework.GetAcceptedControls and SERVICE_ACCEPT_POWEREVENT (0x40)."""
+            accepted = super().GetAcceptedControls()
+            return accepted | getattr(win32service, "SERVICE_ACCEPT_POWEREVENT", 0x40)
+
+        def SvcOtherEx(self, control: int, event_type: int, data: Any) -> int:  # noqa: N802
+            """Forward SERVICE_CONTROL_POWEREVENT (0x0D) to the shared latch. Never raises and never blocks: Windows allows
+            only about two seconds after a suspend notice. Returns NO_ERROR (0) = no objection.
+            TODO(verify-docs): pywin32 SvcOtherEx(control, event_type, data) and the PBT_* codes in event_type."""
+            if control == getattr(win32service, "SERVICE_CONTROL_POWEREVENT", 0x0D):
+                try:
+                    from .governance.probes import shared_power_latch
+
+                    shared_power_latch().handle_power_event(int(event_type))
+                except Exception as exc:  # noqa: BLE001 - a bad event must not take the service down
+                    logger.warning("power event %r was not recorded (%s)", event_type, type(exc).__name__)
+            return 0
+
         def SvcDoRun(self) -> None:  # noqa: N802
             self._app = make_app(self)
             if self._pending_stop:

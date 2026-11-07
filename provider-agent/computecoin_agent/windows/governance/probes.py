@@ -39,6 +39,7 @@ import logging
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 from ...platform import ActivityProbe, ActivitySnapshot, PowerSnapshot, PowerState
@@ -372,6 +373,15 @@ class PowerEventLatch:
             return self._pending
 
 
+# One latch per process: the Windows Service control handler (service.py) writes to it and the yield engine reads it
+# through WindowsPowerState, which uses it unless a test injects its own.
+_SHARED_POWER_LATCH = PowerEventLatch()
+
+
+def shared_power_latch() -> PowerEventLatch:
+    return _SHARED_POWER_LATCH
+
+
 class WindowsPowerState(PowerState):
     """PAL ``PowerState``: battery, reboot-pending (registry), and the suspend latch."""
 
@@ -387,7 +397,7 @@ class WindowsPowerState(PowerState):
     ) -> None:
         self._api = api if api is not None else Win32Api()
         self._registry = registry if registry is not None else WinregReader()
-        self.latch = latch if latch is not None else PowerEventLatch()
+        self.latch = latch if latch is not None else shared_power_latch()
         self._include_rename = include_pending_file_rename
 
     def on_battery(self) -> Optional[bool]:
@@ -519,22 +529,72 @@ def take_snapshot(activity: WindowsActivityProbe, owner_gpu: WindowsOwnerGpuProb
     )
 
 
+def read_key_file(path: "str | Path") -> bytes:
+    """The helper's copy of the per-install snapshot key (64 hex characters). Strict: a missing or odd file is an error,
+    never "no key"."""
+    from .snapshot import SnapshotError, key_bytes
+
+    try:
+        with open(path, "r", encoding="ascii") as fh:
+            return key_bytes(fh.read(256))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SnapshotError(f"cannot read the snapshot key file ({type(exc).__name__})") from None
+
+
+def run_snapshot_loop(
+    activity: Any,
+    owner_gpu: Any,
+    *,
+    out_path: "Optional[str | Path]" = None,
+    key: Optional[bytes] = None,
+    interval: float = 5.0,
+    once: bool = False,
+    clock: Callable[[], float] = time.time,
+    sleeper: Callable[[float], None] = time.sleep,
+    emit: Callable[[str], None] = lambda line: print(line, flush=True),
+) -> int:
+    """The helper's loop. With ``out_path`` and ``key`` each snapshot is written as an HMAC-signed file (the supervisor
+    verifies it, ``snapshot.SignedSnapshotSource``); without them the plain line goes to ``emit`` (stdout), which is
+    only meant for a person debugging. A write failure is logged and retried: the supervisor treats a stale file as
+    "block", so a failing helper never opens the gate."""
+    from .snapshot import write_signed_snapshot
+
+    if (out_path is None) != (key is None):
+        raise ValueError("out_path and key go together")
+    while True:
+        line = take_snapshot(activity, owner_gpu, clock=clock)
+        if out_path is not None and key is not None:
+            try:
+                write_signed_snapshot(out_path, key, line)
+            except OSError as exc:
+                logger.warning("could not write the snapshot file: %s", type(exc).__name__)
+        else:
+            emit(line)
+        if once:
+            return 0
+        sleeper(max(1.0, interval))
+
+
 def main(argv: Optional[list] = None) -> int:
-    """``python -m computecoin_agent.windows.governance.probes --snapshot-json [--interval 5]``: print one JSON snapshot per
-    interval on stdout (the supervisor reads it). Reads only; changes nothing on the machine."""
+    """``python -m computecoin_agent.windows.governance.probes --snapshot-json [--interval 5] [--out FILE --key-file FILE]``.
+
+    Without ``--out`` it prints one JSON snapshot per interval on stdout (debugging). With ``--out`` and ``--key-file``
+    (what ``service helper run`` uses) it writes the signed snapshot file the supervisor verifies. Reads only; changes
+    nothing on the machine apart from that one file."""
     parser = argparse.ArgumentParser(prog="computecoin-governance-probe")
     parser.add_argument("--snapshot-json", action="store_true", required=True)
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--out", help="write the HMAC-signed snapshot file here (needs --key-file)")
+    parser.add_argument("--key-file", help="file holding the per-install snapshot key (64 hex characters)")
     args = parser.parse_args(argv)
+    if bool(args.out) != bool(args.key_file):
+        parser.error("--out and --key-file must be given together")
+    key = read_key_file(args.key_file) if args.key_file else None
     api = Win32Api()
     activity = WindowsActivityProbe(api)
     owner_gpu = WindowsOwnerGpuProbe(activity)
-    while True:
-        print(take_snapshot(activity, owner_gpu), flush=True)
-        if args.once:
-            return 0
-        time.sleep(max(1.0, args.interval))
+    return run_snapshot_loop(activity, owner_gpu, out_path=args.out, key=key, interval=args.interval, once=args.once)
 
 
 if __name__ == "__main__":  # pragma: no cover

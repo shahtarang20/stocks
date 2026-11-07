@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -71,3 +72,59 @@ class UpdateState:
         if current is None or compare(floor, current) > 0:
             self.data["floor"] = floor
             self.save()
+
+
+def seed_known_good(
+    state: UpdateState,
+    *,
+    version: str,
+    artifact: "str | os.PathLike[str]",
+    cache_dir: "str | os.PathLike[str]",
+    force: bool = False,
+) -> bool:
+    """Record the installer that is being installed NOW as the rollback source, so the very first update can roll back.
+
+    Called at install time (the MSI custom action and ``service install``). The artifact is copied into ``cache_dir`` (the
+    updater's own ``<work>/cache``, same ``<version>-<sha16>.pkg`` naming as ``core.AgentUpdater._cache``), hashed, and
+    written as ``known_good``. An existing known-good whose file is still there is NEVER replaced by a seed (it was proven by
+    a health check; a seed was not) unless ``force``. Returns True when the state changed. Raises ``ValueError`` on bad
+    input (invalid version, missing or oversized file) and ``OSError`` on copy errors; the callers treat both as "not
+    seeded" and carry on, because a missing seed only means the first update cannot roll back (the updater then blocks
+    claims rather than guess).
+    """
+    from .manifest import MAX_ARTIFACT_BYTES, sha256_file
+    from .version import is_valid_version
+
+    if not is_valid_version(version):
+        raise ValueError("invalid version for the known-good seed")
+    src = Path(artifact)
+    if not src.is_file():
+        raise ValueError("installer artifact not found")
+    size = src.stat().st_size
+    if size <= 0 or size > MAX_ARTIFACT_BYTES:
+        raise ValueError("installer artifact has an unusable size")
+    existing = state.known_good
+    if existing and not force and existing.get("path") and Path(str(existing["path"])).is_file():
+        return False
+    digest = sha256_file(src)
+    cache = Path(cache_dir)
+    cache.mkdir(parents=True, exist_ok=True)
+    dest = cache / f"{version}-{digest[:16]}.pkg"
+    tmp = dest.with_name(dest.name + ".tmp")
+    try:
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dest)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    if sha256_file(dest) != digest:  # the cached copy is what a rollback would install: it must be what was seeded
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        raise ValueError("the cached copy does not match the installer")
+    state.data["known_good"] = {"version": version, "sha256": digest, "path": str(dest)}
+    state.save()
+    return True

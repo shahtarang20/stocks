@@ -29,6 +29,8 @@ import dataclasses
 import hashlib
 import json
 import re
+from pathlib import Path
+import sys
 from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
@@ -44,6 +46,36 @@ MAX_REVOKED = 64
 # Ed25519 public keys (64 hex chars each) the agent accepts. EMPTY until the owner's signing key ceremony: with no
 # pinned key every manifest is refused (fail closed, L1). Two entries during a key rotation.
 PINNED_PUBLIC_KEYS: tuple = ()
+
+KEY_FILE_NAME = "update-public-keys.txt"
+MAX_KEY_FILE_KEYS = 4
+
+
+def load_pinned_public_keys(key_file: "str | Path | None" = None) -> tuple:
+    """The Ed25519 public keys the agent accepts: ``PINNED_PUBLIC_KEYS`` plus the keys in ``update-public-keys.txt`` next to
+    the bundled Python (the install folder, writable only by Administrators), one 64-hex key per line, ``#`` comments.
+
+    This lets the owner pin the signing key at build time without editing source. Fail closed: a file with ANY malformed
+    line, more than four keys, or a size over 4 KiB is ignored as a whole (a half-read key list must never be trusted), and
+    with no valid key every manifest is refused. The private key never exists on a host."""
+    keys = list(PINNED_PUBLIC_KEYS)
+    path = Path(key_file) if key_file is not None else Path(sys.base_prefix).parent / KEY_FILE_NAME
+    try:
+        if path.is_file() and path.stat().st_size <= 4096:
+            found: list = []
+            for line in path.read_text(encoding="ascii").splitlines():
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if not _KEY_RE.match(line):
+                    return tuple(dict.fromkeys(k.lower() for k in keys))
+                found.append(line.lower())
+            if 0 < len(found) <= MAX_KEY_FILE_KEYS:
+                keys.extend(found)
+    except (OSError, UnicodeDecodeError):
+        pass
+    return tuple(dict.fromkeys(k.lower() for k in keys))
+
 
 _REQUIRED = {"schema", "product", "version", "platform", "artifact_url", "sha256", "size_bytes", "min_supported", "ring", "issued_at"}
 _OPTIONAL = {"expires_at", "revoked_versions"}

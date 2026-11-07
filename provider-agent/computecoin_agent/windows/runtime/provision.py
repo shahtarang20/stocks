@@ -735,6 +735,30 @@ def _exit_for(result: ProvisionResult) -> int:
     return EXIT_FAILED
 
 
+def persist_runtime_files(settings_path: "str | Path", envelope: bytes, layout: Any = None, acl_runner: Any = None) -> list[str]:
+    """Copy ``runtime-settings.json`` and the signed ``runtime-manifest.json`` into the ProgramData layout directory, where
+    the enrolment gate and the supervisor's health checks read them (windows/paths.py ``Layout``).
+
+    Call ONLY after the provisioner accepted ``envelope`` (its signature was verified). The settings file carries the pinned
+    manifest public key, so integrity matters: the directory is created and restricted to SYSTEM and Administrators BEFORE
+    anything is written (``ensure_layout``), and a failure to restrict it raises instead of writing into an open folder.
+    Files are replaced atomically and an identical file is left alone. Returns the names written."""
+    from ..paths import Layout, ensure_layout
+
+    lay = layout if layout is not None else Layout.default()
+    ensure_layout(lay, acl_runner)  # raises if the directory could not be restricted (fail closed)
+    written: list[str] = []
+    for name, data in (("runtime-settings.json", Path(settings_path).read_bytes()), ("runtime-manifest.json", envelope)):
+        dest = Path(lay.root) / name
+        if dest.exists() and dest.read_bytes() == data:
+            continue
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, dest)
+        written.append(name)
+    return written
+
+
 def main(argv: Optional[list[str]] = None) -> int:  # pragma: no cover - thin wrapper over the tested class
     ap = argparse.ArgumentParser(prog="python -m computecoin_agent.windows.runtime.provision",
                                  description="Provision and manage the ComputeCoin runtime distro (Windows hosts).")
@@ -774,7 +798,14 @@ def main(argv: Optional[list[str]] = None) -> int:  # pragma: no cover - thin wr
         gate = prov.enrolment_gate(envelope or b"")
         print(json.dumps(gate.to_dict()))
         return EXIT_OK if gate.allowed else EXIT_FAILED
-    print(json.dumps(res.to_dict()))
+    out = res.to_dict()
+    if res.ok and sys.platform == "win32" and args.command in ("provision", "repair", "reset") and envelope:
+        try:
+            out["runtime_files_saved"] = persist_runtime_files(args.settings, envelope)
+        except Exception as exc:  # noqa: BLE001 - say it plainly: enrolment will refuse until the files are in place
+            out["runtime_files_saved"] = []
+            out["runtime_files_error"] = f"{type(exc).__name__}: could not store the runtime files in the ProgramData folder"
+    print(json.dumps(out))
     return _exit_for(res)
 
 

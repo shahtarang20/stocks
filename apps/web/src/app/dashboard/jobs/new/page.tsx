@@ -642,7 +642,7 @@ export default function NewJobPage() {
                 <p className="text-xs text-muted-foreground">
                   A dedicated computer is a server that only runs ComputeCoin jobs. A shared PC (a laptop or gaming computer) is
                   also used by its owner, so your job may run slower or be moved. Fewer computers qualify, so your job may wait longer.
-                  The computer's owner declares this.
+                  The computer&apos;s owner declares this.
                 </p>
               </div>
             </div>

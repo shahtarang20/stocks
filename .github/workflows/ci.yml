@@ -132,7 +132,7 @@ jobs:
         working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -168,7 +168,7 @@ jobs:
         working-directory: contracts
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -186,7 +186,7 @@ jobs:
         working-directory: sdk/typescript
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -209,7 +209,7 @@ jobs:
           python -m pip install -U pip pip-audit
           pip install -e ".[dev]" || pip install -e .
           pip-audit || true   # report advisories; non-blocking until triaged
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: npm audit (apps/web)
@@ -268,7 +268,7 @@ jobs:
             provider-agent/pyproject.toml
             sdk/python/pyproject.toml
             apps/api/pyproject.toml
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.suite == 'sdk-typescript'
         with:
           node-version: "22"

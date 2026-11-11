@@ -57,6 +57,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -199,6 +200,9 @@ class JobSpec:
     on_output_dir: Optional[Callable[[str], None]] = None
     # U13: set by the job monitor when the API reports the job cancelled; the executor then stops the container.
     cancel_event: Optional[threading.Event] = None
+    # Set by DockerExecutor when IT created the output dir (no ``output_dir`` given). The dir holds the customer's input.json
+    # and the container's outputs, so whoever passed ``on_output_dir`` (a monitor still tailing it) removes it afterwards.
+    owned_output_dir: Optional[str] = None
 
     @classmethod
     def from_claim(cls, data: dict[str, Any]) -> "JobSpec":
@@ -755,6 +759,9 @@ class DockerExecutor(Executor):
         timeout_s = int(
             limits.get("max_runtime_seconds", self.DEFAULT_TIMEOUT_SECONDS)
         )
+        if timeout_s <= 0:
+            # `timeout 0` means "no limit": a zero or negative claim value must never switch the wall-clock cap off.
+            timeout_s = self.DEFAULT_TIMEOUT_SECONDS
 
         egress = self._egress_list(job_spec)
         if egress and (job_spec.isolation_tier or "container").lower() in ("sealed", "sealed_pro", "confidential"):
@@ -1013,6 +1020,18 @@ class DockerExecutor(Executor):
         if output_dir is None:
             output_dir = tempfile.mkdtemp(prefix="ccoin-job-")
             created_tmp = True
+            job_spec.owned_output_dir = output_dir
+        try:
+            return self._run_in_dir(job_spec, output_dir, start, created_tmp)
+        finally:
+            if created_tmp and job_spec.on_output_dir is None:
+                # Nobody is tailing this dir: the result is already in memory, so do not leave the customer's input and
+                # output behind on the provider's disk. (With a monitor, the caller removes ``owned_output_dir`` once it
+                # has stopped.)
+                shutil.rmtree(output_dir, ignore_errors=True)
+                job_spec.owned_output_dir = None
+
+    def _run_in_dir(self, job_spec: JobSpec, output_dir: str, start: float, created_tmp: bool) -> ExecutionResult:
         os.makedirs(output_dir, exist_ok=True)
         try:
             get_platform().paths.set_mode(output_dir, 0o777)

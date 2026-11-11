@@ -85,6 +85,7 @@ class LinuxSecrets(Secrets):
         # Create with restrictive perms, then write; re-assert the mode in case a umask interfered.
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
+            os.fchmod(fd, 0o600)  # a pre-existing looser file must be tightened BEFORE the secret is written into it
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
         finally:
@@ -199,7 +200,9 @@ class LinuxRamWorkdir(RamWorkdir):
                         continue
                     mp = parts[1].replace("\\040", " ")
                     if real == mp or real.startswith(mp.rstrip("/") + "/") or mp == "/":
-                        if best is None or len(mp) > best[0]:
+                        # ``>=``: when mounts are stacked on one mount point the LAST entry in /proc/mounts is the visible
+                        # one (a disk bind mounted over a tmpfs must not pass the RAM-only check)
+                        if best is None or len(mp) >= best[0]:
                             best = (len(mp), parts[2])
         except OSError:
             return None

@@ -17,7 +17,7 @@ import time
 
 import typer
 
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from . import security
 from .config import AgentConfig
@@ -326,9 +326,10 @@ def start(
     thermal_guard = ThermalGuard.from_config(config)
     apply_power_limit(config.gpu_power_limit_w)  # best effort; never fails startup
 
+    auth_failed = threading.Event()
     hb_thread = threading.Thread(
-        target=heartbeat_loop,
-        args=(base_url, config.machine_id, config.machine_secret),
+        target=_heartbeat_until_auth_failure,
+        args=(auth_failed, base_url, config.machine_id, config.machine_secret),
         kwargs={
             "availability_fn": thermal_guard.availability,
             "report": report,
@@ -378,6 +379,35 @@ def start(
         )
     except (KeyboardInterrupt, SystemExit):
         typer.echo("\nStopping ComputeCoin agent gracefully...")
+    if auth_failed.is_set():
+        raise typer.Exit(code=1)
+
+
+def _heartbeat_until_auth_failure(
+    auth_failed: "threading.Event", *args: Any, interrupt: Optional[Callable[[], None]] = None, **kwargs: Any
+) -> None:
+    """Thread body for ``start``: run the heartbeat loop, and stop the whole agent if the credential is rejected.
+
+    ``heartbeat_loop`` raises :class:`HeartbeatAuthError` when the backend answers 401 (the machine must re-enrol). In a
+    plain thread that exception just ended the thread, so the machine silently went offline while the worker kept polling
+    and claiming with a dead credential. Now it says so, flags the failure and interrupts the main thread, whose existing
+    handler stops the agent; ``start`` then exits non-zero.
+    """
+    try:
+        heartbeat_loop(*args, **kwargs)
+    except HeartbeatAuthError as exc:
+        auth_failed.set()
+        typer.echo(
+            f"[heartbeat] {exc}\nThe backend no longer accepts this machine's credential. Stopping the agent: "
+            "run `computecoin-agent enroll --token enr_... --server <url>` to enrol it again."
+        )
+        (interrupt or _interrupt_main)()
+
+
+def _interrupt_main() -> None:
+    import _thread
+
+    _thread.interrupt_main()
 
 
 def _attestation_manager(base_url: str, config: "AgentConfig", tier: Optional[str]):

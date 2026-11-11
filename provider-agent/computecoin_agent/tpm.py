@@ -64,7 +64,10 @@ class Tpm2:
 
     # ------------------------------------------------------------------ plumbing
     def _run(self, *args: str, cwd: Optional[str] = None, check: bool = True) -> bytes:
-        proc = self._run_proc(list(args), cwd=cwd, env=self.env, capture_output=True, timeout=60)
+        try:
+            proc = self._run_proc(list(args), cwd=cwd, env=self.env, capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:  # tool missing / hung: callers (cli, attestation) expect TpmError
+            raise TpmError(f"{args[0]} could not run: {type(exc).__name__}") from exc
         if check and proc.returncode != 0:
             err = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
             raise TpmError(f"{args[0]} failed: {err[-1] if err else proc.returncode}")

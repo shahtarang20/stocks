@@ -10,6 +10,7 @@ with 0700. See the trust model in ``computecoin_agent.security``.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,6 +24,11 @@ from pydantic_settings import (
 )
 
 from .platform import get_platform
+
+
+# ``load`` points the class-level TOML source at the file for the duration of one construction; concurrent loads (the
+# supervisor, the executor and the heartbeat thread all call it) must not see each other's setting.
+_LOAD_LOCK = threading.RLock()
 
 
 def default_config_dir() -> Path:
@@ -159,6 +165,13 @@ class AgentConfig(BaseSettings):
     netbench_enabled: bool = False
     # This host's private cluster address (literal IP). The benchmark responder binds ONLY here.
     cluster_addr: Optional[str] = None
+    # ---- What kind of machine this is, shown to customers and usable as a placement filter. "dedicated" = it does nothing
+    # but run ComputeCoin jobs (a server); "shared" = a person also uses it (a laptop, a gaming PC), so a job may slow down
+    # or be moved if the owner needs the GPU. Unset = not declared (customers see "unspecified", and a customer who asks
+    # for a dedicated host will not be placed here). A Windows host always reports "shared", whatever is set here.
+    # This is SELF-DECLARED: say "dedicated" only if it is true.
+    host_kind: Optional[str] = None
+
     # ---- W5 resource governance (X13: the host yields to its owner). Defaults are the CONSERVATIVE ones.
     # None = on for Windows hosts, off elsewhere (a Linux desktop opts in with true). See windows/governance/policy.py.
     governance_enabled: Optional[bool] = None
@@ -178,6 +191,16 @@ class AgentConfig(BaseSettings):
     update_enabled: bool = True
     update_ring: str = "general"  # the ring this host ASKS for; the server decides what it may have (never a wider ring)
     update_check_interval_seconds: int = 6 * 3600
+
+    @field_validator("host_kind")
+    @classmethod
+    def _check_host_kind(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        kind = str(value).strip().lower()
+        if kind not in ("dedicated", "shared"):
+            raise ValueError("host_kind must be 'dedicated' or 'shared'")
+        return kind
 
     @field_validator("governance_schedule")
     @classmethod
@@ -248,12 +271,13 @@ class AgentConfig(BaseSettings):
         ``settings_customise_sources``).
         """
         path = path or default_config_path()
-        # Point the TOML source at the requested file for this construction.
-        cls.model_config["toml_file"] = str(path) if path.exists() else None
-        try:
-            return cls()
-        finally:
-            cls.model_config["toml_file"] = None
+        with _LOAD_LOCK:
+            # Point the TOML source at the requested file for this construction.
+            cls.model_config["toml_file"] = str(path) if path.exists() else None
+            try:
+                return cls()
+            finally:
+                cls.model_config["toml_file"] = None
 
     def save(self, path: Optional[Path] = None) -> Path:
         """Write config to toml with 0600 perms (0700 on the parent dir)."""

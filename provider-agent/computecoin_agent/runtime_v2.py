@@ -313,10 +313,17 @@ class V2Api:
     def post(self, path: str, body: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
         from .jobrunner import _signed_post  # late import: jobrunner imports this module
 
-        resp = _signed_post(
-            f"{self.base_url}/v1/agents/v2{path}", self.machine_id, self.machine_secret, body or {},
-            transport=self.transport, timeout=self.timeout,
-        )
+        import httpx
+
+        try:
+            resp = _signed_post(
+                f"{self.base_url}/v1/agents/v2{path}", self.machine_id, self.machine_secret, body or {},
+                transport=self.transport, timeout=self.timeout,
+            )
+        except (httpx.TransportError, OSError) as exc:
+            # Callers (stage, upload, checkpoint) handle V2Error and report a failed job promptly; a raw httpx error would
+            # escape run_v2 and leave the claimed job unreported until its lease expires.
+            raise V2Error("api_unreachable", f"{path}: {type(exc).__name__}") from exc
         try:
             data = resp.json() if resp.content else {}
         except ValueError:

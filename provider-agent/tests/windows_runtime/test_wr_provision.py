@@ -144,12 +144,12 @@ def test_second_provision_is_idempotent(env):
     assert first.ok
     installs = env.fake.count("apt-get", "install")
     imports = len(env.fake.host_calls("--import"))
-    wrote_conf = sum(1 for p in env.fake.programs() if p[:2] == ["tee", "/etc/wsl.conf.cc-tmp"])
+    wrote_conf = sum(1 for p in env.fake.programs() if p[:2] == ["dd", "of=/etc/wsl.conf.cc-tmp"])
     second = env.prov.provision(env.envelope())
     assert second.ok and second.enrolment_allowed
     assert env.fake.count("apt-get", "install") == installs
     assert len(env.fake.host_calls("--import")) == imports
-    assert sum(1 for p in env.fake.programs() if p[:2] == ["tee", "/etc/wsl.conf.cc-tmp"]) == wrote_conf
+    assert sum(1 for p in env.fake.programs() if p[:2] == ["dd", "of=/etc/wsl.conf.cc-tmp"]) == wrote_conf
     statuses = {s.name: s.status for s in second.steps}
     for name in ("runner_user", "wsl_conf", "limits", "disable_ssh", "docker_engine", "nvidia_toolkit", "docker_config",
                  "runner_install", "egress_proxy", "smoke_image", "import_distro"):

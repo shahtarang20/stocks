@@ -33,6 +33,7 @@ Nothing here touches money code. Every Windows / wsl.exe interface is TODO(verif
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import threading
 import time
@@ -185,6 +186,29 @@ class WslRunnerLauncher:
             result = self._run(argv, stdin=stdin) if stdin is not None else self._run(argv)
             if getattr(result, "returncode", 1) != 0:
                 raise ControlChannelError("could not provision the control token in the runtime distro")
+
+    def stop_job_containers(self) -> None:
+        """Best effort: remove every job container (and egress proxy) still running in the distro.
+
+        Terminating the runner kills ``wsl.exe`` and the agent inside, but a customer's container is a separate process
+        tree under Docker: it would keep running (and keep the owner's GPU busy) after the server re-queued the job.
+        Never raises: a failure here must not stop the runner from being restarted.
+        """
+        if self._run is None:
+            return
+        from .runtime.wsl import argv_exec
+
+        try:
+            listed = self._run(argv_exec(
+                self._s.distro,
+                ["docker", "ps", "-aq", "--filter", "name=ccoin-job-", "--filter", "name=ccoin-proxy-"],
+                user="root",
+            ))
+            ids = [w for w in str(getattr(listed, "stdout", "") or "").split() if re.fullmatch(r"[0-9a-f]{12,64}", w)]
+            if ids:
+                self._run(argv_exec(self._s.distro, ["docker", "rm", "-f", *ids], user="root"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("could not remove the job containers: %s", type(exc).__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -661,6 +685,13 @@ class Supervisor:
                 p.kill()
             except Exception:  # noqa: BLE001
                 pass
+        # Killing the runner does not stop the customer's container (see WslRunnerLauncher.stop_job_containers).
+        stopper = getattr(self._launcher, "stop_job_containers", None)
+        if callable(stopper):
+            try:
+                stopper()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("job container cleanup failed: %s", type(exc).__name__)
 
     def _apply_power_limit(self) -> None:
         limit = self._gpu_limits.get("gpu_power_limit_w")

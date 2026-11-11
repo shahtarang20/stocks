@@ -124,3 +124,139 @@ def test_session_container_never_binds_the_shared_work_dir(tmp_path):
     assert os.listdir(source) == []
     agent.stop_container(claim)
     assert not os.path.exists(source)
+
+
+# --- relay socket / heartbeat resilience (audit) -------------------------------------------------------------- #
+class _FakeWs:
+    """Async context manager + async iterator standing in for a websockets connection."""
+
+    def __init__(self, *, raise_on_iter=None):
+        import asyncio
+
+        self._closed = asyncio.Event()
+        self._raise = raise_on_iter
+        self.sent = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def __aiter__(self):
+        return self._iter()
+
+    async def _iter(self):
+        if self._raise is not None:
+            raise self._raise
+        await self._closed.wait()
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+    async def send(self, data):
+        self.sent.append(data)
+
+    async def close(self):
+        self._closed.set()
+
+
+def _agent_with(api, ws_factory):
+    agent = sa.SessionAgent(api, _ex(), ws_connect=ws_factory)
+    agent.start_container = lambda claim: None
+    agent.stop_container = lambda claim: None
+    return agent
+
+
+def test_heartbeat_survives_a_transient_network_error(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(sa, "HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(sa, "HEARTBEAT_RETRY_SECONDS", 0.01)
+    beats = []
+
+    class Api:
+        def relay_url(self, sid, token):
+            return "wss://x"
+
+        def post(self, path, body=None):
+            if path.endswith("/heartbeat"):
+                beats.append(path)
+                if len(beats) == 1:
+                    raise ConnectionError("blip")
+                return 200, {"stop": len(beats) >= 3}
+            return 200, {}
+
+    ws = _FakeWs()
+    agent = _agent_with(Api(), lambda url: ws)
+
+    async def go():
+        return await asyncio.wait_for(agent._serve_socket({"id": "s1"}, X25519PrivateKey.generate(), "t", 1e12), 5)
+
+    assert asyncio.run(go()) == "stop"
+    assert len(beats) >= 3  # the first failure did not kill the heartbeat task
+
+
+def test_serve_reconnects_after_a_dropped_relay_socket(monkeypatch):
+    import asyncio
+
+    from websockets.exceptions import ConnectionClosedError
+
+    monkeypatch.setattr(sa, "HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(sa.asyncio, "sleep", _fast_sleep(asyncio.sleep))
+    sockets = []
+
+    def connect(url):
+        ws = _FakeWs(raise_on_iter=ConnectionClosedError(None, None)) if not sockets else _FakeWs()
+        sockets.append(ws)
+        return ws
+
+    class Api:
+        def relay_url(self, sid, token):
+            return "wss://x"
+
+        def post(self, path, body=None):
+            if path.endswith("/token"):
+                return 200, {"host_token": "t2"}
+            if path.endswith("/heartbeat"):
+                return 200, {"stop": len(sockets) >= 2}
+            return 200, {}
+
+    agent = _agent_with(Api(), connect)
+    claim = {"id": "s1", "host_token": "t1", "max_duration_seconds": 3600}
+
+    async def go():
+        return await asyncio.wait_for(agent.serve(claim, X25519PrivateKey.generate()), 5)
+
+    assert asyncio.run(go()) == "stop"
+    assert len(sockets) == 2  # reconnected instead of failing the session
+
+
+def _fast_sleep(real):
+    async def _s(delay, *a, **k):
+        return await real(min(delay, 0.01), *a, **k)
+
+    return _s
+
+
+def test_session_loop_survives_a_transient_claim_error():
+    calls = []
+
+    class Api:
+        def post(self, path, body=None):
+            calls.append(path)
+            if len(calls) == 1:
+                raise ConnectionError("blip")  # used to end `computecoin-agent sessions` with a traceback
+            raise KeyboardInterrupt  # stop the endless loop for the test
+
+    with pytest.raises(KeyboardInterrupt):
+        sa.run_forever(Api(), _ex(), poll_seconds=0, sleeper=lambda s: None)
+    assert len(calls) == 2
+
+
+def test_session_loop_once_still_raises():
+    class Api:
+        def post(self, path, body=None):
+            raise ConnectionError("blip")
+
+    with pytest.raises(ConnectionError):
+        sa.run_forever(Api(), _ex(), once=True, sleeper=lambda s: None)

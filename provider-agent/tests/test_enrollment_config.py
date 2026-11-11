@@ -1,6 +1,7 @@
 """Enrollment + config persistence tests."""
 
 import stat
+import sys
 
 import pytest
 
@@ -48,3 +49,32 @@ def test_env_override(monkeypatch, tmp_config_path):
     monkeypatch.setenv("COMPUTECOIN_API_URL", "https://override.example")
     cfg = AgentConfig.load(tmp_config_path)
     assert cfg.api_url == "https://override.example"
+
+
+def test_concurrent_loads_of_different_files_do_not_see_each_others_toml(tmp_path):
+    """AgentConfig.load sets a class-level toml_file for one construction; without a lock another thread's load could
+    reset it to None mid-way and silently get the DEFAULT config (no machine credential)."""
+    import threading
+
+    from computecoin_agent.config import AgentConfig
+
+    paths = []
+    for i in range(4):
+        p = tmp_path / f"agent{i}.toml"
+        p.write_text(f'api_url = "https://api{i}.example"\nmachine_id = "mch_{i}"\n')
+        paths.append(p)
+    bad = []
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)  # make a thread switch inside load() likely
+
+    def work(i):
+        for _ in range(150):
+            cfg = AgentConfig.load(paths[i])
+            if cfg.machine_id != f"mch_{i}" or cfg.api_url != f"https://api{i}.example":
+                bad.append((i, cfg.machine_id))
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    sys.setswitchinterval(old_interval)
+    assert not bad

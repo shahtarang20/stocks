@@ -53,6 +53,10 @@ class FakeLauncher:
     def __init__(self):
         self.procs: list[FakeProc] = []
         self.fail = False
+        self.container_cleanups = 0
+
+    def stop_job_containers(self):
+        self.container_cleanups += 1
 
     def launch(self):
         if self.fail:
@@ -457,3 +461,43 @@ def test_control_token_is_created_once_and_reused():
     store = MemStore()
     t1 = sv.ensure_control_token(store)
     assert len(t1) >= cc.MIN_TOKEN_CHARS and sv.ensure_control_token(store) == t1
+
+
+def test_terminating_the_runner_also_removes_the_job_containers():
+    sup = make()
+    sup._proc = FakeProc()
+    sup._terminate_process()
+    assert sup.launcher.container_cleanups == 1
+    assert sup._proc.terminated
+
+
+def test_a_failing_container_cleanup_does_not_break_termination():
+    sup = make()
+    sup._proc = FakeProc()
+
+    def boom():
+        raise RuntimeError("docker unreachable")
+
+    sup.launcher.stop_job_containers = boom
+    sup._terminate_process()  # must not raise
+    assert sup._proc.terminated
+
+
+def test_launcher_removes_only_matching_containers_through_argv_without_a_shell():
+    calls = []
+
+    def run(argv, stdin=None):
+        calls.append(list(argv))
+        if "ps" in argv:
+            return types.SimpleNamespace(returncode=0, stdout="0123456789ab\nnot-an-id; rm -rf /\nfedcba987654\n", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    sv.WslRunnerLauncher(sv.SupervisorSettings(), run=run).stop_job_containers()
+    listing, removal = calls
+    assert "name=ccoin-job-" in listing and "name=ccoin-proxy-" in listing
+    assert removal[-3:] == ["-f", "0123456789ab", "fedcba987654"]  # the junk line was dropped, never executed
+    assert all(isinstance(a, list) for a in calls)
+
+
+def test_launcher_without_a_runner_does_nothing():
+    sv.WslRunnerLauncher(sv.SupervisorSettings()).stop_job_containers()  # run=None: no error

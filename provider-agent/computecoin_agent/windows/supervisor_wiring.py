@@ -271,6 +271,7 @@ class UpdateScheduler:
         if self._active_jobs() > 0:
             if not forced and now - self._drain_started > self._drain_timeout:
                 self._phase = "idle"
+                self._gate.cancel_drain()  # run_once() set the gate's drain flag when it deferred; nothing else clears it here
                 self._end_drain()
                 result = UpdateResult(DEFERRED_JOB, "drain_timeout", self._u.current_version)
                 self._finish(result)
@@ -285,6 +286,7 @@ class UpdateScheduler:
         finally:
             self._gate.allow_install(False)
             self._phase = "idle"
+            self._gate.cancel_drain()  # run_once() returns before its own cancel_drain when it never reaches an install
             self._end_drain()
         self._finish(result)
         return result
@@ -310,6 +312,7 @@ class UpdateScheduler:
                 logger.error("update step failed: %s", type(exc).__name__)
                 self._phase = "idle"
                 self._gate.allow_install(False)
+                self._gate.cancel_drain()
                 self._end_drain()
                 self._next_check_at = self._clock() + self._error_retry
 

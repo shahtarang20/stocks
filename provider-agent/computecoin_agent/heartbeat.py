@@ -164,6 +164,25 @@ def _cpu_capable_flag() -> Optional[bool]:
         return None
 
 
+def _host_kind_flag() -> Optional[str]:
+    """``"dedicated"`` / ``"shared"`` as declared in the config (``host_kind``); None (field omitted) when undeclared.
+
+    A Windows host is always ``"shared"``: it is a PC its owner also uses, and the server enforces the same rule."""
+    try:
+        from .platform import PLATFORM_WINDOWS, get_platform
+
+        if get_platform().name == PLATFORM_WINDOWS:
+            return "shared"
+    except Exception:
+        pass
+    try:
+        from .config import AgentConfig
+
+        return AgentConfig.load().host_kind
+    except Exception:
+        return None
+
+
 def default_health(report: Optional[CapabilityReport] = None) -> dict[str, Any]:
     """Minimal health block matching the contract's ``health`` shape."""
     health: dict[str, Any] = {
@@ -179,6 +198,9 @@ def default_health(report: Optional[CapabilityReport] = None) -> dict[str, Any]:
     cpu_capable = _cpu_capable_flag()
     if cpu_capable is not None:
         health["cpu_capable"] = cpu_capable
+    host_kind = _host_kind_flag()
+    if host_kind is not None:
+        health["host_kind"] = host_kind
     _add_platform_and_capabilities(health, report)
     return health
 

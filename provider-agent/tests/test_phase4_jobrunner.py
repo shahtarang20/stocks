@@ -227,3 +227,107 @@ def test_run_one_sends_logs_and_heartbeat():
     assert captured.get("logs")               # log chunk was streamed
     assert captured.get("heartbeat") is not None  # lease extended
     assert captured["heartbeat"]["progress"] == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Audit: a finished job's receipt survives a transient failure (the result endpoint is idempotent)
+# --------------------------------------------------------------------------- #
+def _post(handler, sleeps):
+    from computecoin_agent.jobrunner import post_result
+
+    return post_result(BASE, MACHINE_ID, MACHINE_SECRET, "job-1", {"status": "success"},
+                       transport=httpx.MockTransport(handler), sleeper=sleeps.append)
+
+
+def test_post_result_retries_a_5xx_and_a_network_error_then_succeeds():
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.ConnectError("blip", request=request)
+        if len(calls) == 2:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"status": "completed"})
+
+    resp = _post(handler, sleeps)
+    assert resp.status_code == 200 and len(calls) == 3 and len(sleeps) == 2
+    assert len({c.content for c in calls}) == 1  # the same receipt body every time
+
+
+def test_post_result_gives_up_after_the_bounded_retries():
+    from computecoin_agent.jobrunner import JobRunnerError, RESULT_RETRY_DELAYS
+
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(502)
+
+    with pytest.raises(JobRunnerError, match="502"):
+        _post(handler, sleeps)
+    assert len(calls) == len(RESULT_RETRY_DELAYS) + 1 and len(sleeps) == len(RESULT_RETRY_DELAYS)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_post_result_does_not_retry_a_4xx(status):
+    from computecoin_agent.jobrunner import JobRunnerError
+
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(status)
+
+    with pytest.raises(JobRunnerError):
+        _post(handler, sleeps)
+    assert len(calls) == 1 and not sleeps
+
+
+def test_post_result_409_is_final_and_not_retried():
+    calls, sleeps = [], []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(409)
+
+    assert _post(handler, sleeps).status_code == 409
+    assert len(calls) == 1 and not sleeps
+
+
+def test_private_workload_output_dir_is_a_child_of_the_0700_ram_dir(tmp_path, monkeypatch):
+    """The executor makes its output dir 0777 (the container runs as nobody). On a private job that dir held the decrypted
+    input directly under the shared /dev/shm: it must be a child of the 0700 RAM dir instead."""
+    import os
+    import stat
+    import types
+
+    import computecoin_agent.jobrunner as jr
+    import computecoin_agent.private_kit as pk
+    from computecoin_agent.executor import ExecutionResult, Executor, JobSpec
+
+    ram = tmp_path / "ram"
+    ram.mkdir()
+    os.chmod(ram, 0o700)
+    monkeypatch.setattr(pk, "ram_workdir", lambda prefix, base=None, **k: str(ram))
+    seen = {}
+
+    class Ex(Executor):
+        def run(self, spec):
+            seen["out"] = spec.output_dir
+            os.chmod(spec.output_dir, 0o777)  # what DockerExecutor does
+            seen["ram_mode"] = stat.S_IMODE(os.stat(ram).st_mode)
+            return ExecutionResult(status="success", output={"items": [], "count": 0}, metrics={})
+
+    def fake_sealed(**kw):
+        kw["workload_runner_fn"]({"items": []})
+        return types.SimpleNamespace(encrypted_output={"c": 1}, output_commitment="x", wipe_receipt={"w": 1})
+
+    monkeypatch.setattr(jr, "execute_sealed_job", fake_sealed)
+    spec = JobSpec(job_id="job-private-1", workload_type="batch-inference", model="m", input={}, execution_mode="hardware",
+                   image_digest="img@sha256:" + "a" * 64, isolation_tier="sealed")
+    session = types.SimpleNamespace(ephemeral_private_key="e", receipt_signing_private_key="r")
+    res = jr._run_private(spec, session, MACHINE_ID, None, lambda s, c: Ex())
+    assert res.status == "success"
+    assert seen["out"] == str(ram / "out") and seen["ram_mode"] == 0o700
+    assert not ram.exists()  # wiped with everything under it

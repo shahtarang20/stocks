@@ -401,3 +401,78 @@ def test_sealed_tier_still_refuses_staging_mounts_and_other_env():
         _argv_for(_sealed_spec(extra_env={"LD_PRELOAD": "/x"}))
     with pytest.raises(ExecutorError):
         _argv_for(_sealed_spec(mounts=[{"source": "/data", "target": "/in", "readonly": True}]))
+
+
+# --------------------------------------------------------------------------- #
+# Audit: the executor-created output dir (customer input.json + outputs) must not be left on the provider's disk
+# --------------------------------------------------------------------------- #
+def _ok_runner(seen):
+    def fake_runner(argv, output_dir):
+        if argv[0] == "timeout":
+            seen.append(output_dir)
+            with open(f"{output_dir}/output.json", "w", encoding="utf-8") as fh:
+                json.dump({"text": "ok"}, fh)
+        return DockerRunResult(returncode=0, stdout="", stderr="")
+
+    return fake_runner
+
+
+def test_executor_created_output_dir_is_removed_when_nobody_tails_it():
+    import os
+
+    seen = []
+    ex = DockerExecutor(runner=_ok_runner(seen), docker_available=lambda: True, nvidia_available=lambda: False)
+    r = ex.run(_hw_spec(job_id="job-leak"))
+    assert r.status == "success" and r.output == {"text": "ok"} and r.artifacts[0].data
+    assert seen and not os.path.exists(seen[0])  # input.json / output.json are gone
+
+
+def test_executor_created_output_dir_is_removed_on_failed_run():
+    import os
+
+    seen = []
+
+    def fake_runner(argv, output_dir):
+        if argv[0] == "timeout":
+            seen.append(output_dir)
+            return DockerRunResult(returncode=1, stdout="", stderr="boom")
+        return DockerRunResult(returncode=0)
+
+    ex = DockerExecutor(runner=fake_runner, docker_available=lambda: True, nvidia_available=lambda: False)
+    assert ex.run(_hw_spec(job_id="job-leak2")).status == "failed"
+    assert seen and not os.path.exists(seen[0])
+
+
+def test_run_open_removes_the_executor_created_dir_after_the_monitor_stopped():
+    import os
+
+    from computecoin_agent.jobrunner import _run_open
+
+    seen, events = [], []
+
+    class Mon:
+        env = {}
+
+        def set_output_dir(self, path):
+            events.append(("dir_exists_at_set", os.path.isdir(path)))
+
+        def start(self):
+            pass
+
+        def stop(self):
+            events.append(("dir_exists_at_stop", os.path.isdir(seen[0])))  # the monitor's last tick still reads it
+
+    ex = DockerExecutor(runner=_ok_runner(seen), docker_available=lambda: True, nvidia_available=lambda: False)
+    spec = _hw_spec(job_id="job-leak3")
+    result = _run_open(spec, None, lambda s, c: ex, Mon())
+    assert result.status == "success"
+    assert ("dir_exists_at_stop", True) in events
+    assert not os.path.exists(seen[0]) and spec.owned_output_dir is None
+
+
+@pytest.mark.parametrize("bad", [0, -5])
+def test_non_positive_max_runtime_never_disables_the_wall_clock_timeout(bad):
+    spec = _hw_spec()
+    spec.limits["max_runtime_seconds"] = bad
+    argv = DockerExecutor(docker_available=lambda: True, nvidia_available=lambda: False).build_argv(spec, "/tmp/out")
+    assert argv[:3] == ["timeout", "--signal=KILL", str(DockerExecutor.DEFAULT_TIMEOUT_SECONDS)]

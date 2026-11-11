@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import shutil
 import struct
@@ -48,12 +49,23 @@ MAX_KIT_ARGS = 32
 DIR_B2A, DIR_A2B = b"\x00", b"\x01"
 MAX_PLAINTEXT = 128 * 1024
 HEARTBEAT_SECONDS = 20.0
+HEARTBEAT_RETRY_SECONDS = 5.0  # delay before retrying a heartbeat that failed on the network
+HEARTBEAT_MAX_FAILURES = 3  # consecutive network failures before the session is treated as lost
 _RAW = serialization.Encoding.Raw
 _RAW_PUB = serialization.PublicFormat.Raw
 
 
 class SessionAgentError(RuntimeError):
     pass
+
+
+def _relay_errors() -> tuple[type[BaseException], ...]:
+    """Errors that mean the relay connection dropped (not that the session is over): the caller reconnects."""
+    try:
+        from websockets.exceptions import WebSocketException
+    except Exception:  # websockets is only installed on session hosts
+        return ()
+    return (WebSocketException,)
 
 
 def _pub_hex(key: X25519PrivateKey) -> str:
@@ -334,7 +346,9 @@ class SessionAgent:
             while self._clock() < deadline:
                 try:
                     reason = await self._serve_socket(claim, static_key, token, deadline)
-                except (OSError, SessionAgentError):
+                except (OSError, SessionAgentError, asyncio.TimeoutError, *_relay_errors()):
+                    # A dropped relay socket (websockets raises ConnectionClosedError, which is not an OSError) is a
+                    # reconnect with a fresh token, not the end of the session.
                     reason = "reconnect"
                 if reason in ("stop", "ended"):
                     break
@@ -366,8 +380,20 @@ class SessionAgent:
                     await ws.send(cr.seal(kind, payload))
 
             async def heartbeat() -> None:
+                failures = 0
                 while not stop.is_set():
-                    st, data = await asyncio.to_thread(self.api.post, f"/{sid}/heartbeat")
+                    try:
+                        st, data = await asyncio.to_thread(self.api.post, f"/{sid}/heartbeat")
+                    except Exception:
+                        # A network blip must not silently end the heartbeats (the control plane would then reap a live
+                        # session): retry a few times, then treat the session as lost.
+                        failures += 1
+                        if failures < HEARTBEAT_MAX_FAILURES and self._clock() < deadline:
+                            await asyncio.sleep(HEARTBEAT_RETRY_SECONDS)
+                            continue
+                        st, data = 0, {}
+                    else:
+                        failures = 0
                     if st != 200 or data.get("stop") or self._clock() >= deadline:
                         stop.set()
                         with contextlib.suppress(Exception):
@@ -442,13 +468,20 @@ def new_static_key() -> X25519PrivateKey:
     return X25519PrivateKey.generate()
 
 
-def run_forever(api: SessionApi, executor: DockerExecutor, *, poll_seconds: float = 5.0, once: bool = False) -> None:  # pragma: no cover
+def run_forever(api: SessionApi, executor: DockerExecutor, *, poll_seconds: float = 5.0, once: bool = False,
+                sleeper: Callable[[float], None] = time.sleep) -> None:  # pragma: no cover
     agent = SessionAgent(api, executor)
     while True:
         key = new_static_key()
-        claim = agent.claim(key)
-        if claim:
-            asyncio.run(agent.serve(claim, key))
+        try:
+            claim = agent.claim(key)
+            if claim:
+                asyncio.run(agent.serve(claim, key))
+        except Exception as exc:
+            # One network blip on the claim, or one failed session, must not end the host's session loop.
+            if once:
+                raise
+            logging.getLogger(__name__).warning("session loop: %s", type(exc).__name__)
         if once:
             return
-        time.sleep(poll_seconds)
+        sleeper(poll_seconds)

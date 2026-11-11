@@ -33,6 +33,8 @@ The httpx transport is injectable, so the whole loop runs offline in tests.
 from __future__ import annotations
 
 import dataclasses
+import os
+import shutil
 import time
 from typing import Any, Callable, Optional
 
@@ -301,6 +303,11 @@ def upload_artifact(
     return descriptor
 
 
+# Pauses between attempts to submit a receipt (so at most len + 1 tries): the work is already done, and the endpoint is
+# idempotent, so a transport error or a 5xx must not throw the finished job's result away.
+RESULT_RETRY_DELAYS = (1.0, 3.0, 10.0)
+
+
 def post_result(
     base_url: str,
     machine_id: str,
@@ -311,25 +318,42 @@ def post_result(
     transport: Any = None,
     timestamp: Optional[int] = None,
     timeout: float = 30.0,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> Any:
-    """Submit the idempotent job receipt (signed)."""
+    """Submit the idempotent job receipt (signed).
+
+    A network error, a 429 or a 5xx is retried a few times with a growing pause (the same body is re-signed with a fresh
+    timestamp; the server treats a repeated result as the same receipt). Any other status is final."""
+    import httpx
+
     url = base_url.rstrip("/") + f"/v1/agents/jobs/{job_id}/result"
-    resp = _signed_post(
-        url,
-        machine_id,
-        machine_secret,
-        body,
-        transport=transport,
-        timeout=timeout,
-        timestamp=timestamp,
-    )
-    if resp.status_code == 409:
-        # job_not_running: the platform cancelled/ended this job (customer cancel, a failed sibling rank, a replica start
-        # timeout). Final: never retried, nothing more is sent, and the API did not touch billing.
-        return resp
-    if resp.status_code != 200:
-        raise JobRunnerError(f"result submission failed: HTTP {resp.status_code}")
-    return resp
+    failure = "result submission failed"
+    for attempt in range(len(RESULT_RETRY_DELAYS) + 1):
+        try:
+            resp = _signed_post(
+                url,
+                machine_id,
+                machine_secret,
+                body,
+                transport=transport,
+                timeout=timeout,
+                timestamp=timestamp,
+            )
+        except (httpx.TransportError, OSError) as exc:
+            failure = f"result submission failed: {type(exc).__name__}"
+        else:
+            if resp.status_code == 409:
+                # job_not_running: the platform cancelled/ended this job (customer cancel, a failed sibling rank, a replica
+                # start timeout). Final: never retried, nothing more is sent, and the API did not touch billing.
+                return resp
+            if resp.status_code == 200:
+                return resp
+            failure = f"result submission failed: HTTP {resp.status_code}"
+            if resp.status_code != 429 and resp.status_code < 500:
+                break  # a 4xx is the server's final answer
+        if attempt < len(RESULT_RETRY_DELAYS):
+            sleeper(RESULT_RETRY_DELAYS[attempt])
+    raise JobRunnerError(failure)
 
 
 # --------------------------------------------------------------------------- #
@@ -481,7 +505,12 @@ def _run_private(
             isolation_tier=spec.isolation_tier,
         )
         if ram is not None:
-            sub_spec.output_dir = ram
+            # The executor opens the output dir to uid 65534 (0777) and writes input.json 0666 into it. ``ram`` itself is the
+            # 0700 dir from ram_workdir under a shared /dev/shm: the world-accessible dir must be a child of it, or any local
+            # account could read the decrypted private input while the job runs.
+            out = os.path.join(ram, "out")
+            os.mkdir(out)
+            sub_spec.output_dir = out
         sub_executor = executor_selector(sub_spec, capabilities)
         monitor = stream_monitor if ram is not None else None  # no RAM dir: no stream, rather than a plaintext file
         if monitor is not None:  # U18: sealed streaming; the monitor seals every chunk before it leaves
@@ -691,7 +720,11 @@ def _run_open(
             result = executor.run(spec)
         finally:
             if monitor is not None:
-                monitor.stop()
+                monitor.stop()  # its last tick still reads the stream file, so the dir is removed only after this
+            owned = spec.owned_output_dir  # created by the executor: holds the customer's input.json and the outputs
+            if owned:
+                shutil.rmtree(owned, ignore_errors=True)
+                spec.owned_output_dir = None
     except HardwareUnavailableError as exc:
         result = ExecutionResult(
             status="failed",

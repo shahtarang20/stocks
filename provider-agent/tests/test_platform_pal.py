@@ -386,3 +386,29 @@ def test_linux_amd_render_node_by_minor_then_by_bdf(tmp_path):
     assert probe.amd_render_node(None, "0000:03:00.0", sys_root=str(tmp_path / "pci"), dev_root=str(dev)) == str(dev / "renderD129")
     (sysd / "renderD130").mkdir()  # two render nodes: ambiguous, so None
     assert probe.amd_render_node(None, "0000:03:00.0", sys_root=str(tmp_path / "pci"), dev_root=str(dev)) is None
+
+
+def test_linux_mount_type_last_stacked_mount_wins(tmp_path):
+    """A disk-backed mount stacked over a tmpfs on the SAME mount point is the visible one (last in /proc/mounts)."""
+    base = os.path.realpath(tmp_path)
+    mounts = tmp_path / "mounts"
+    mounts.write_text(f"rootfs / ext4 rw 0 0\ntmpfs {base}/ram tmpfs rw 0 0\n/dev/sda1 {base}/ram ext4 rw 0 0\n")
+    assert build_linux_platform().ram.mount_type(f"{base}/ram/x", str(mounts)) == "ext4"
+
+
+def test_linux_secrets_write_tightens_an_existing_loose_file_before_writing(tmp_path, monkeypatch):
+    import computecoin_agent.platform.linux as linux_mod
+
+    target = tmp_path / "agent.toml"
+    target.write_text("old")
+    os.chmod(target, 0o644)
+    modes_at_write = []
+    real_fdopen = os.fdopen
+
+    def spying_fdopen(fd, *a, **k):
+        modes_at_write.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return real_fdopen(fd, *a, **k)
+
+    monkeypatch.setattr(linux_mod.os, "fdopen", spying_fdopen)
+    build_linux_platform().secrets.write_file(target, b"machine_secret = 'x'")
+    assert modes_at_write == [0o600]  # never a 0644 file holding the secret

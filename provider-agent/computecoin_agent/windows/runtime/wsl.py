@@ -216,12 +216,19 @@ class WslCli:
         return res.stdout if res.ok else None
 
     def write_file(self, path: str, data: bytes, *, mode: str = "0644", owner: str = "root:root") -> None:
-        """Write ``data`` through stdin: ``mkdir -p`` the directory, ``tee`` a temp file, ``chmod``, ``chown``, ``mv``."""
+        """Write ``data`` through stdin: ``mkdir -p`` the directory, ``dd`` into a temp file, ``chmod``, ``chown``, ``mv``.
+
+        ``dd of=`` and not ``tee``: ``tee`` copies everything it reads back to its stdout, and ``exec`` captures stdout, so
+        a large payload (the agent wheel, up to 512 MiB) was held in memory a second time and sent back through the pipe.
+        ``dd`` prints nothing with ``status=none``; ``bs=1M iflag=fullblock`` keeps it fast on a pipe.
+        """
         directory, _, _name = path.rpartition("/")
         tmp = f"{path}.cc-tmp"
         if directory:
             self.exec_ok(["mkdir", "-p", directory], what=f"create {directory}", timeout=30)
-        self.exec_ok(["tee", tmp], what=f"write {path}", stdin=data, timeout=120)
+        self.exec_ok(
+            ["dd", f"of={tmp}", "bs=1M", "iflag=fullblock", "status=none"], what=f"write {path}", stdin=data, timeout=120
+        )
         self.exec_ok(["chmod", mode, tmp], what=f"chmod {path}", timeout=30)
         self.exec_ok(["chown", owner, tmp], what=f"chown {path}", timeout=30)
         self.exec_ok(["mv", "-f", tmp, path], what=f"install {path}", timeout=30)

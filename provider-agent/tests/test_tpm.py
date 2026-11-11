@@ -135,3 +135,22 @@ def test_ek_certificate_from_nv_is_trimmed_to_its_der_length():
 def test_tpm_requires_a_tcti():
     with pytest.raises(TpmError):
         Tpm2("")
+
+
+def test_a_missing_or_hung_tpm_tool_is_a_tpm_error_not_a_raw_oserror():
+    """cli ``attest`` / ``tpm-enrol`` only catch TpmError: a missing tpm2-tools binary or a timeout must not be a traceback."""
+    import subprocess
+
+    import pytest
+
+    from computecoin_agent.tpm import Tpm2, TpmError
+
+    def missing(args, **kw):
+        raise FileNotFoundError(args[0])
+
+    def hung(args, **kw):
+        raise subprocess.TimeoutExpired(args, 60)
+
+    for runner in (missing, hung):
+        with pytest.raises(TpmError):
+            Tpm2("swtpm:host=x,port=1", runner=runner).ak_public()

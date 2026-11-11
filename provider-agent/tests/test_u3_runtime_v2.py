@@ -287,3 +287,23 @@ def test_asset_and_input_with_the_same_name_do_not_overwrite_each_other(tmp_path
     mounts = rv.stage_items(ctx, "j1", plan, str(jobdir), [], [])
     by_target = {m["target"]: open(m["source"], "rb").read() for m in mounts}
     assert by_target == {"/cache/model.bin": blobs["asset"], "/in/model.bin": blobs["input"]}
+
+
+def test_api_network_error_while_staging_is_a_failed_job_not_an_escaping_exception(tmp_path):
+    """A transport error talking to the API used to propagate out of run_v2 (only V2Error was handled), so the claimed job
+    was never reported and sat RUNNING until its lease expired."""
+    import httpx
+
+    def boom(request):
+        raise httpx.ConnectError("down", request=request)
+
+    api = rv.V2Api("https://api.test", "mch", "msk_" + "c" * 32, transport=httpx.MockTransport(boom))
+    with pytest.raises(rv.V2Error) as err:
+        api.post("/jobs/j1/download-url", {"kind": "input", "name": "x"})
+    assert err.value.code == "api_unreachable"
+
+    ctx = rv.V2Context(api=api, cache=rv.ContentCache(str(tmp_path / "cache"), 0), work_dir=str(tmp_path / "work"))
+    v2 = {"kit": {"slug": "k"}, "inputs": [{"name": "x", "sha256": "a" * 64, "size_bytes": 1}]}
+    res, descriptors = rv.run_v2(_spec(v2=v2), ctx, lambda s: pytest.fail("must not run"))
+    assert res.status == "failed" and res.error["code"] == "api_unreachable" and descriptors == []
+    assert not any((tmp_path / "work").iterdir())  # the job dir was removed

@@ -174,6 +174,12 @@ class FakeWsl:
         if prog == "tee":
             files[args[0]] = stdin or b""
             return RunResult(0, (stdin or b"").decode(errors="replace"))
+        if prog == "dd":
+            out = next((a[3:] for a in args if a.startswith("of=")), None)
+            if out is None:
+                return RunResult(1, "", "dd: no of=")
+            files[out] = stdin or b""
+            return RunResult(0)  # like the real dd with status=none: nothing is echoed back
         if prog in ("mkdir", "chmod", "chown", "passwd", "usermod", "apt-mark", "install", "systemctl", "gpg-agent"):
             if prog == "systemctl":
                 return self._systemctl(args)

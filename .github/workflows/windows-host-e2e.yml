@@ -66,7 +66,7 @@ jobs:
       CC_KIT_IMAGE: ${{ inputs.kit_image }}
       CC_LINUX_KIT_JOB_CMD: ${{ vars.E2E_LINUX_KIT_JOB_CMD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -113,7 +113,7 @@ jobs:
     steps:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           clean: true
       - uses: actions/setup-python@v5
@@ -202,7 +202,7 @@ jobs:
       CC_SOAK_SLEEP_CMD: ${{ vars.E2E_SOAK_SLEEP_CMD }}
       CC_SOAK_REBOOT_CMD: ${{ vars.E2E_SOAK_REBOOT_CMD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

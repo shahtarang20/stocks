@@ -905,3 +905,22 @@ def test_structured_error_bodies_give_readable_message_and_string_code():
     with pytest.raises(ConflictError) as e409:
         client._request("GET", "/x", params={"s": 409})
     assert e409.value.code == "budget_exceeded"
+
+
+def test_get_usage_maps_the_api_actual_seconds_to_a_duration():
+    """UsageRecordOut names the duration ``actual_seconds``; the SDK used to look for ``duration_seconds`` only,
+    so every record's duration came back as None."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/usage"
+        return httpx.Response(200, json={
+            "currency": "USDC_CREDITS", "total_estimated": "1.00", "total_actual": "0.50",
+            "records": [{
+                "job_id": "j1", "estimated_minutes": 10, "actual_seconds": 125,
+                "estimated_cost": "1.00", "actual_cost": "0.50", "currency": "USDC_CREDITS",
+                "created_at": "2026-01-01T00:00:00Z",
+            }],
+        })
+
+    usage = make_client(handler).get_usage()
+    rec = usage.records[0]
+    assert rec.actual_seconds == 125 and rec.duration_seconds == 125 and rec.estimated_minutes == 10

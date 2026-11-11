@@ -165,7 +165,7 @@ async function main() {
   console.log(`🔗 Connected to Chain ID: ${chainId} via ${rpcUrl}`);
 
   // Guard against accidental mainnet deployment
-  const MAINNET_CHAIN_IDS = new Set([1, 56, 137, 8453, 42161, 10]);
+  const MAINNET_CHAIN_IDS = new Set([1, 56, 137, 8453, 42161, 10, 100, 204, 250, 324, 1101, 5000, 42220, 43114, 59144, 81457, 534352, 7777777]);
   if (MAINNET_CHAIN_IDS.has(chainId) && process.env.I_UNDERSTAND_MAINNET !== "yes") {
     console.error("\n🛑 SAFETY CHECK FAILED: Refusing to deploy to mainnet without explicit confirmation!");
     console.error("Workstream D is strictly scoped for public testnet (Sepolia).");

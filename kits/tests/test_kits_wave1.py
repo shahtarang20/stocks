@@ -126,6 +126,22 @@ def test_upscale_tiles_and_zip_safety(tmp_path):
             ep.safe_zip_members(z)
 
 
+def test_upscale_zip_refuses_two_images_with_the_same_stem(tmp_path):
+    ep = _load("upscale")
+    z_path = tmp_path / "dup.zip"
+    with zipfile.ZipFile(z_path, "w") as z:
+        z.writestr("photo.png", b"x")
+        z.writestr("photo.jpg", b"y")  # both would become photo_x4.png
+    with zipfile.ZipFile(z_path) as z, pytest.raises(kitrt.KitError):
+        ep.safe_zip_members(z)
+    ok = tmp_path / "ok.zip"
+    with zipfile.ZipFile(ok, "w") as z:
+        z.writestr("photo.png", b"x")
+        z.writestr("photo2.jpg", b"y")
+    with zipfile.ZipFile(ok) as z:
+        assert [i.filename for i in ep.safe_zip_members(z)] == ["photo.png", "photo2.jpg"]
+
+
 def test_commit_marker_roundtrip_and_tamper(tmp_path, monkeypatch):
     f = tmp_path / "frames" / "f1.png"
     f.parent.mkdir()

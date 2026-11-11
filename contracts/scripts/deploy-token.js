@@ -138,6 +138,13 @@ async function main() {
 
   // 3. Connect to network
   const provider = new ethers.JsonRpcProvider(rpcUrl);
+  // Guard against accidental mainnet deployment (an *_RPC_URL override can point anywhere).
+  const liveChainId = Number((await provider.getNetwork()).chainId);
+  const MAINNET_CHAIN_IDS = new Set([1, 56, 137, 8453, 42161, 10, 100, 204, 250, 324, 1101, 5000, 42220, 43114, 59144, 81457, 534352, 7777777]);
+  if (MAINNET_CHAIN_IDS.has(liveChainId) && process.env.I_UNDERSTAND_MAINNET !== "yes") {
+    console.error(`\n🛑 SAFETY CHECK FAILED: chain ${liveChainId} is a mainnet; this script is for testnets. Use scripts/launch.mjs for a launch.`);
+    process.exit(1);
+  }
   const deployer = new ethers.Wallet(privateKey, provider);
   console.log(`👛 Deployer Address: ${deployer.address}`);
 

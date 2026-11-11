@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ethers } from "ethers";
 import { parseAmount, validatePoolConfig, planPool, assertMainnetConfirmation, resolveDex, isMainnet, PoolError, DEX_PRESETS } from "./pool.mjs";
-import { validatePlan, PlanError } from "./launch.mjs";
+import { validatePlan, PlanError, MAINNET_CHAIN_IDS } from "./launch.mjs";
 
 const json = (p) => JSON.parse(readFileSync(new URL(p, import.meta.url), "utf8"));
 const E = ethers.parseEther;
@@ -54,6 +54,10 @@ test("mainnet needs the flag and both amounts typed again", () => {
     assert.throws(() => assertMainnetConfirmation({ tokenAmountText: "100", nativeAmountText: "2", env: { ...ok, [drop]: undefined } }), PoolError, drop);
   }
   assert.throws(() => assertMainnetConfirmation({ tokenAmountText: "100", nativeAmountText: "2", env: { ...ok, CONFIRM_NATIVE_AMOUNT: "20" } }), /CONFIRM_NATIVE_AMOUNT/);
+  // Fail closed: the caller forgetting to pass the typed-in amounts must not equal "env var not set".
+  const noEnv = { I_UNDERSTAND_MAINNET: "yes" };
+  assert.throws(() => assertMainnetConfirmation({ tokenAmountText: undefined, nativeAmountText: undefined, env: noEnv }), PoolError);
+  assert.throws(() => assertMainnetConfirmation({ env: noEnv }), PoolError);
 });
 
 test("mainnet is decided by the preset OR the chain id, so a fork cannot dodge the rules", () => {
@@ -82,4 +86,9 @@ test("the shipped plans are valid, and a mainnet plan needs APPROVED", () => {
 test("the shipped pool configs are valid", () => {
   assert.doesNotThrow(() => validatePoolConfig(json("../../launch/pool.testnet.json")));
   assert.doesNotThrow(() => validatePoolConfig(json("../../launch/pool.example.json")));
+});
+
+test("the mainnet gate covers the major EVM mainnets, not just six", () => {
+  for (const id of [1n, 56n, 137n, 8453n, 42161n, 10n, 43114n, 59144n, 324n, 534352n, 81457n]) assert.ok(MAINNET_CHAIN_IDS.has(id), String(id));
+  for (const id of [97n, 11155111n, 84532n, 31337n]) assert.ok(!MAINNET_CHAIN_IDS.has(id), String(id));
 });

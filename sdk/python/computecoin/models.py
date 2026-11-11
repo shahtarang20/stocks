@@ -277,11 +277,21 @@ class UsageRecord(BaseModel):
     """Per-job usage: duration + estimated vs actual cost (kept separate)."""
 
     job_id: str
+    # The API (UsageRecordOut) names the duration ``actual_seconds`` and also returns ``estimated_minutes``;
+    # ``duration_seconds`` is kept (filled from ``actual_seconds``) so existing callers still get a value.
     duration_seconds: Optional[int] = None
+    actual_seconds: Optional[int] = None
+    estimated_minutes: Optional[int] = None
     estimated_cost: Optional[str] = None  # money -> string
     actual_cost: Optional[str] = None  # money -> string
     currency: str = "USDC_CREDITS"
     created_at: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _sync_duration(self) -> "UsageRecord":
+        if self.duration_seconds is None and self.actual_seconds is not None:
+            self.duration_seconds = self.actual_seconds
+        return self
 
 
 class Usage(BaseModel):

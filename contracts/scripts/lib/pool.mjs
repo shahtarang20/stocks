@@ -177,8 +177,9 @@ export function assertPairUntouched(info) {
 export function assertMainnetConfirmation({ tokenAmountText, nativeAmountText, env = process.env }) {
   const problems = [];
   if (env.I_UNDERSTAND_MAINNET !== "yes") problems.push("I_UNDERSTAND_MAINNET=yes is not set");
-  if (env.CONFIRM_TOKEN_AMOUNT !== tokenAmountText) problems.push(`CONFIRM_TOKEN_AMOUNT must equal "${tokenAmountText}"`);
-  if (env.CONFIRM_NATIVE_AMOUNT !== nativeAmountText) problems.push(`CONFIRM_NATIVE_AMOUNT must equal "${nativeAmountText}"`);
+  // A missing expected text must never "match" a missing env var (undefined === undefined).
+  if (typeof tokenAmountText !== "string" || tokenAmountText === "" || env.CONFIRM_TOKEN_AMOUNT !== tokenAmountText) problems.push(`CONFIRM_TOKEN_AMOUNT must equal "${tokenAmountText}"`);
+  if (typeof nativeAmountText !== "string" || nativeAmountText === "" || env.CONFIRM_NATIVE_AMOUNT !== nativeAmountText) problems.push(`CONFIRM_NATIVE_AMOUNT must equal "${nativeAmountText}"`);
   if (problems.length) throw new PoolError(`mainnet pool creation refused: ${problems.join("; ")}`);
 }
 

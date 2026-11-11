@@ -52,6 +52,8 @@ export interface ClientOptions {
   guardianPin?: string;
   /** Also refuse private jobs when no `guardianPin` is set. */
   requireGuardianPin?: boolean;
+  /** Per-request timeout in milliseconds (default 30000, as in the Python SDK); 0 disables it. Not applied to streams. */
+  timeoutMs?: number;
 }
 
 export interface PrivacyVerifierKey {
@@ -358,7 +360,11 @@ export interface LedgerEntry {
 /** Per-job usage: duration + estimated vs actual cost (kept separate). */
 export interface UsageRecord {
   job_id: string;
+  /** Legacy name; the API returns the duration as `actual_seconds`. */
   duration_seconds?: number | null;
+  /** Billable duration in seconds, as the API names it. */
+  actual_seconds?: number | null;
+  estimated_minutes?: number | null;
   /** money (decimal string) */
   estimated_cost?: string | null;
   /** money (decimal string) */

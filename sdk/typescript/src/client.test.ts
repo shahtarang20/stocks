@@ -760,4 +760,20 @@ describe("ComputeCoinClient billing (Phase 5)", () => {
     expect(e422.code).toBeUndefined();
     expect(String(e422.message)).toContain("too short");
   });
+  it("sends the ledger page parameters and a per-request timeout signal", async () => {
+    let seenUrl = "";
+    let seenSignal: AbortSignal | null | undefined;
+    const fetchImpl = mockFetch((url, init) => {
+      seenUrl = url;
+      seenSignal = init.signal;
+      return { status: 200, body: { items: [], page: 2, page_size: 10, total: 0 } };
+    });
+    const client = new ComputeCoinClient("https://api.test", { fetch: fetchImpl, accessToken: "t" });
+    await client.getLedger({ page: 2, page_size: 10 });
+    expect(seenUrl).toBe("https://api.test/v1/billing/ledger?page=2&page_size=10");
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    const noTimeout = new ComputeCoinClient("https://api.test", { fetch: fetchImpl, accessToken: "t", timeoutMs: 0 });
+    await noTimeout.getLedger();
+    expect(seenSignal).toBeUndefined();
+  });
 });

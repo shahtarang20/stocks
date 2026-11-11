@@ -102,6 +102,7 @@ export class ComputeCoinClient {
   private readonly fetchImpl: typeof fetch;
   private readonly guardianPin: string | undefined;
   private readonly requireGuardianPin: boolean;
+  private readonly timeoutMs: number;
 
   constructor(baseUrl: string = DEFAULT_BASE_URL, options: ClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -110,6 +111,7 @@ export class ComputeCoinClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.guardianPin = options.guardianPin;
     this.requireGuardianPin = options.requireGuardianPin ?? false;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
     if (typeof this.fetchImpl !== "function") {
       throw new Error("No fetch implementation available; pass options.fetch.");
     }
@@ -146,6 +148,10 @@ export class ComputeCoinClient {
       headers,
     };
     if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+    // Without a timeout a stalled connection hangs the caller forever (the Python SDK defaults to 30 s).
+    if (this.timeoutMs > 0 && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+      init.signal = AbortSignal.timeout(this.timeoutMs);
+    }
 
     let url = `${this.baseUrl}${path}`;
     if (opts.query) {
@@ -439,9 +445,14 @@ export class ComputeCoinClient {
     });
   }
 
-  /** The customer's own double-entry ledger entries (append-only). */
-  async getLedger(): Promise<LedgerEntry[]> {
-    const data = await this.request<LedgerEntry[] | { items?: LedgerEntry[] }>("GET", "/v1/billing/ledger");
+  /**
+   * The customer's own double-entry ledger entries (append-only), newest first. The API paginates
+   * (50 per page by default); this returns the entries of the requested page.
+   */
+  async getLedger(params: { page?: number; page_size?: number } = {}): Promise<LedgerEntry[]> {
+    const data = await this.request<LedgerEntry[] | { items?: LedgerEntry[] }>("GET", "/v1/billing/ledger", {
+      query: params as Record<string, unknown>,
+    });
     return Array.isArray(data) ? data : data.items ?? [];
   }
 

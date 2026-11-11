@@ -36,10 +36,17 @@ def safe_zip_members(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     if sum(i.file_size for i in members) > MAX_ZIP_BYTES:
         raise kitrt.KitError("invalid_input", "zip too large when unpacked")
     names = set()
+    stems = set()
     for i in members:
         if not NAME_RE.match(i.filename) or "/" in i.filename or "\\" in i.filename or i.filename in names:
             raise kitrt.KitError("invalid_input", "unsafe or duplicate name in zip")
         names.add(i.filename)
+        # The output is <stem>_x<scale>.png: "a.png" and "a.jpg" would write the same file (and the same checkpoint key),
+        # silently dropping one image while reporting two results.
+        stem = os.path.splitext(i.filename)[0].lower()
+        if stem in stems:
+            raise kitrt.KitError("invalid_input", "two images share the same name before the extension")
+        stems.add(stem)
     return sorted(members, key=lambda i: i.filename)
 
 

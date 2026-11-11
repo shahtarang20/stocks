@@ -52,7 +52,7 @@ async function main() {
   const deployer = await wallet.getAddress();
 
   // Guard: don't accidentally run against Ethereum/BSC/Polygon mainnet.
-  const MAINNET_CHAIN_IDS = new Set([1n, 56n, 137n, 8453n, 42161n, 10n]);
+  const MAINNET_CHAIN_IDS = new Set([1n, 56n, 137n, 8453n, 42161n, 10n, 100n, 204n, 250n, 324n, 1101n, 5000n, 42220n, 43114n, 59144n, 81457n, 534352n, 7777777n]);
   if (MAINNET_CHAIN_IDS.has(net.chainId) && process.env.I_UNDERSTAND_MAINNET !== "yes") {
     throw new Error(
       `Refusing to deploy to mainnet chainId ${net.chainId}. This script is for TESTNET. ` +

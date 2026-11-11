@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-export const MAINNET_CHAIN_IDS = new Set([1n, 56n, 137n, 8453n, 42161n, 10n]);
+export const MAINNET_CHAIN_IDS = new Set([1n, 56n, 137n, 8453n, 42161n, 10n, 100n, 204n, 250n, 324n, 1101n, 5000n, 42220n, 43114n, 59144n, 81457n, 534352n, 7777777n]);
 const MONTH_SECONDS = 30n * 24n * 3600n;
 const TOTAL_BPS = 10_000;
 

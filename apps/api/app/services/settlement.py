@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.chain_reconciler import ChainClientError, build_default_client
 from app.db.base import ensure_aware, utcnow
 from app.models.billing import LedgerTransaction
 from app.models.jobs import Job
@@ -189,6 +190,10 @@ logger = logging.getLogger("computecoin.settlement")
 # or when governance calls invalidateVouchers().
 SETTLEMENT_VOUCHER_NONCE = 0
 
+# ComputeSettlement.MAX_FEE_BPS / BPS_DENOMINATOR (contracts/src/ComputeSettlement.sol).
+CONTRACT_MAX_FEE_BPS = 3000
+_BPS_DENOMINATOR = 10_000
+
 
 async def resolve_voucher_nonce(escrow: OnChainEscrow) -> tuple[int, str]:
     """Return ``(nonce, source)`` to sign this escrow's voucher at.
@@ -243,11 +248,15 @@ async def issue_settlement_voucher(
     returned by ``GET /v1/settlement/escrows/{job_id}`` and ``nonce`` is readable on-chain via
     ``escrowNonce(customer, jobId)``.
     """
+    # FOR UPDATE: two administrators issuing at once must not both pass the "no live voucher yet" check below and
+    # sign two different payouts at the same nonce.
     escrow = await db.scalar(
-        select(OnChainEscrow).where(
+        select(OnChainEscrow)
+        .where(
             OnChainEscrow.job_id == request.job_id,
             OnChainEscrow.status == EscrowStatus.LOCKED.value,
         )
+        .with_for_update()
     )
     if not escrow:
         raise HTTPException(
@@ -290,6 +299,15 @@ async def issue_settlement_voucher(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Platform fee {request.platform_fee_units} exceeds final cost {request.final_cost_units}",
+        )
+
+    # ComputeSettlement.settleJob reverts with "Fee above cap" when platformFee * 10000 > finalCost * MAX_FEE_BPS. A
+    # voucher over that cap can never be consumed, yet issuing it would be recorded here, and the "one live voucher per
+    # escrow" rule above would then refuse a corrected re-issue: the escrow would be stranded until its deadline.
+    if platform_fee_int * _BPS_DENOMINATOR > final_cost_int * CONTRACT_MAX_FEE_BPS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Platform fee {request.platform_fee_units} exceeds the contract's {CONTRACT_MAX_FEE_BPS} bps cap",
         )
 
     # Create EVM-compatible packed hash keyed by (customer, jobId) matching ComputeSettlement.sol
@@ -427,19 +445,80 @@ async def issue_refund_voucher(
     )
 
 
+async def _require_chain_agreement(escrow: OnChainEscrow, expected_status: str) -> None:
+    """Refuse to record a settlement/refund the contract does not show.
+
+    The transaction hash and block number come from an administrator's request, so they prove nothing by themselves: a
+    mistyped or invented hash would mark an escrow paid out (and ``reconciled``) while the funds never moved. Where an RPC
+    endpoint is configured the escrow is read from the contract and must already be in ``expected_status``; an RPC
+    failure is a 503, never agreement. With no RPC configured the legacy bookkeeping-only behaviour is kept for
+    development and tests, but a production environment refuses rather than record an unverified payout.
+    """
+    if not settings.CHAIN_RPC_URL.strip():
+        if settings.ENVIRONMENT.lower() in {"development", "dev", "test", "testing", "local"}:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="chain_verification_unavailable: CHAIN_RPC_URL is not configured, so this cannot be confirmed on-chain",
+        )
+    try:
+        state = await build_default_client().fetch_escrow(
+            contract_address=escrow.contract_address,
+            job_bytes32=escrow.job_bytes32,
+            customer_address=escrow.customer_address,
+        )
+    except ChainClientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"chain_verification_unavailable: {exc}",
+        )
+    if state is None or state.status != expected_status:
+        seen = "no such escrow" if state is None else state.status
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The contract does not show this escrow as {expected_status} (on-chain: {seen}); nothing was recorded",
+        )
+
+
+async def _escrow_for_confirmation(db: AsyncSession, job_id: uuid.UUID) -> OnChainEscrow | None:
+    """The escrow a confirmation applies to.
+
+    A job can own more than one escrow row over time (a refunded lock may be followed by a new one), and an unordered
+    ``scalar()`` returned an arbitrary one. Prefer the still-LOCKED row (the only one a confirmation can legitimately
+    change), then the newest.
+    """
+    rows = (
+        await db.scalars(
+            select(OnChainEscrow)
+            .where(OnChainEscrow.job_id == job_id)
+            .order_by(OnChainEscrow.created_at.desc())
+        )
+    ).all()
+    for row in rows:
+        if row.status == EscrowStatus.LOCKED.value:
+            return row
+    return rows[0] if rows else None
+
+
 async def confirm_settlement_tx(
     db: AsyncSession,
     request: ConfirmSettlementTxRequest,
     current_user: User,
 ) -> OnChainEscrow:
     """Mark an escrow settled once on-chain transaction succeeds."""
-    escrow = await db.scalar(
-        select(OnChainEscrow).where(OnChainEscrow.job_id == request.job_id)
-    )
+    escrow = await _escrow_for_confirmation(db, request.job_id)
     if not escrow:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Escrow for job {request.job_id} not found",
+        )
+
+    # A REFUNDED escrow has returned the whole lock to the customer: it must never also be recorded as settled.
+    # confirm_refund_tx already refuses the mirror case; without this the two states could be flipped back and forth.
+    if escrow.status == EscrowStatus.REFUNDED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot settle an already-refunded escrow",
         )
 
     # Verify claimed amount against escrow record if supplied
@@ -453,6 +532,7 @@ async def confirm_settlement_tx(
     if escrow.status == EscrowStatus.SETTLED.value:
         return escrow
 
+    await _require_chain_agreement(escrow, EscrowStatus.SETTLED.value)
     escrow.status = EscrowStatus.SETTLED.value
     escrow.settle_tx_hash = request.settle_tx_hash
     escrow.settled_at = utcnow()
@@ -511,9 +591,7 @@ async def confirm_refund_tx(
     current_user: User,
 ) -> OnChainEscrow:
     """Mark an escrow refunded upon contract refund event."""
-    escrow = await db.scalar(
-        select(OnChainEscrow).where(OnChainEscrow.job_id == request.job_id)
-    )
+    escrow = await _escrow_for_confirmation(db, request.job_id)
     if not escrow:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -539,6 +617,7 @@ async def confirm_refund_tx(
             detail="Cannot refund an already-settled escrow",
         )
 
+    await _require_chain_agreement(escrow, EscrowStatus.REFUNDED.value)
     escrow.status = EscrowStatus.REFUNDED.value
     escrow.refund_tx_hash = request.refund_tx_hash
     escrow.reconciled = True

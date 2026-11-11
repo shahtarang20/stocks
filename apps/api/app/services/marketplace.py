@@ -44,6 +44,7 @@ from app.schemas.marketplace import (
     ReliabilityOut,
     money_str,
 )
+from app.services.capability_flags import machine_host_kind
 from app.services.provider import derive_status
 
 # Per-machine in-process locks (see module docstring on SQLite vs Postgres).
@@ -105,6 +106,8 @@ def _listable(machine: ProviderMachine, now: dt.datetime) -> bool:
     """A machine is listable iff online+available+priced+not-deregistered."""
     if machine.status == "deregistered":
         return False
+    if getattr(machine, "is_banned", False):
+        return False  # the scheduler refuses a banned machine (machine_is_banned); never advertise one
     if machine.asking_price_per_hour is None:
         return False
     if machine.availability != "online":
@@ -123,8 +126,11 @@ def _matches_filters(
     region: str | None,
     workload: str | None,
     verification_status: str | None,
+    host_kind: str | None = None,
 ) -> bool:
     hw = machine.hardware
+    if host_kind is not None and machine_host_kind(machine) != host_kind:
+        return False
     if gpu_model is not None:
         model = (hw.gpu_model if hw else None) or ""
         if gpu_model.lower() not in model.lower():
@@ -187,6 +193,7 @@ def shape_marketplace_machine(
         # Honest: no completed-job history yet, so success_rate is null.
         reliability=ReliabilityOut(completed_jobs=0, success_rate=None),
         last_heartbeat_at=ensure_aware(machine.last_heartbeat_at),
+        host_kind=machine_host_kind(machine),
     )
 
 
@@ -208,6 +215,7 @@ async def list_marketplace_machines(
     region: str | None = None,
     workload: str | None = None,
     verification_status: str | None = None,
+    host_kind: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[MarketplaceMachineOut], int]:
@@ -235,6 +243,7 @@ async def list_marketplace_machines(
             region=region,
             workload=workload,
             verification_status=verification_status,
+            host_kind=host_kind,
         )
     ]
     total = len(filtered)

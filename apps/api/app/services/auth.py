@@ -70,7 +70,11 @@ async def issue_session(
 async def find_session_by_refresh(db: AsyncSession, refresh_token: str) -> UserSession | None:
     token_hash = hash_token(refresh_token)
     result = await db.execute(
-        select(UserSession).where(UserSession.refresh_token_hash == token_hash)
+        select(UserSession)
+        .where(UserSession.refresh_token_hash == token_hash)
+        # Rotation is check-then-revoke: without the row lock two concurrent refreshes of one token both see it
+        # un-revoked and each mint a live child session, defeating reuse detection.
+        .with_for_update()
     )
     return result.scalar_one_or_none()
 

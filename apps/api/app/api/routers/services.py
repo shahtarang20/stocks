@@ -246,7 +246,10 @@ async def poll(replica_id: uuid.UUID, request: Request, db: AsyncSession = Depen
     data = _json_body(raw)
     healthy = data.get("healthy") is True
     want_work = data.get("accepting", True) is True
-    wait = max(0, min(int(data.get("wait_seconds") or 0), int(settings.SERVICE_POLL_MAX_WAIT_SECONDS)))
+    try:
+        wait = max(0, min(int(data.get("wait_seconds") or 0), int(settings.SERVICE_POLL_MAX_WAIT_SECONDS)))
+    except (TypeError, ValueError, OverflowError):  # "abc", [], inf: a malformed body is a 400, not a 500
+        raise HTTPException(status_code=400, detail="invalid_body")
     end = time.monotonic() + wait
     while True:
         r = await _machine_replica(db, machine, replica_id)

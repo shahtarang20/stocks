@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import constant_time_compare
 from app.db.base import utcnow
 from app.models.jobs import Job
 from app.models.workloads import Dataset, TrainingCheckpoint
@@ -101,7 +102,7 @@ def verify_grant(scope: str, token: str, now: dt.datetime | None = None) -> str 
     tok_scope, resource_id, exp_str, sig = parts
     if tok_scope != scope:
         return None
-    if not hmac.compare_digest(_sign(f"{tok_scope}:{resource_id}:{exp_str}"), sig):
+    if not constant_time_compare(_sign(f"{tok_scope}:{resource_id}:{exp_str}"), sig):
         return None
     try:
         exp = int(exp_str)

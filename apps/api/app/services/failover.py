@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 #: ``job_attempts.status`` values that mean "this machine did not deliver".
 #: A machine with such an attempt is excluded from the next placement.
 FAILED_ATTEMPT_STATUSES: frozenset[str] = frozenset(
-    {"lease_expired", "failed", "timed_out", "cancelled"}
+    {"lease_expired", "runtime_exceeded", "failed", "timed_out", "cancelled"}
 )
 
 #: ``reputation_events.kind`` written when a machine lets a lease lapse.

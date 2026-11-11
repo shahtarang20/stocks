@@ -48,6 +48,9 @@ class MarketplaceMachineOut(BaseModel):
     max_concurrent_jobs: int = 1
     reliability: ReliabilityOut = Field(default_factory=ReliabilityOut)
     last_heartbeat_at: dt.datetime | None = None
+    # "dedicated" (a server nobody else uses), "shared" (a PC its owner also uses: the job may slow down or be
+    # interrupted) or "unspecified". Declared by the host; Windows hosts are always shared.
+    host_kind: str = "unspecified"
 
 
 class MarketplaceListOut(BaseModel):
@@ -66,7 +69,9 @@ class QuoteCreate(BaseModel):
     estimated_minutes: int = Field(gt=0, le=525_600)
     gpu_count: int = Field(default=1, ge=1, le=64)
     # max_digits bounds the exponent too: "1e400" used to overflow Decimal arithmetic (HTTP 500).
-    max_authorized_spend: decimal.Decimal | None = Field(default=None, max_digits=24)
+    # le: quotes.max_authorized_spend is NUMERIC(14, 2); a larger value was accepted here and then failed at INSERT time
+    # on Postgres (HTTP 500). 10**12 is already far beyond any quote total (a maximal quote is under 7e11).
+    max_authorized_spend: decimal.Decimal | None = Field(default=None, max_digits=24, lt=10**12)
 
 
 class QuoteBreakdownOut(BaseModel):

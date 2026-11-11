@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,7 @@ from app.schemas.jobs import (
 )
 from app.schemas.marketplace import money_str
 from app.services import billing
+from app.services.capability_flags import job_risk_note, machine_host_kind
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
 from app.services.key_guardians import validate_sealed_shares
@@ -304,6 +305,8 @@ async def create_job(
 
 @router.get("", response_model=list[JobOut])
 async def list_jobs(
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[JobOut]:
@@ -316,7 +319,9 @@ async def list_jobs(
             Job.customer_id == current.id,
             ~((Job.status == fsm.FAILED) & Job.error_code.in_(_REJECTED_AT_SUBMIT)),
         )
-        .order_by(Job.created_at.desc())
+        .order_by(Job.created_at.desc(), Job.id)
+        .limit(limit)
+        .offset(offset)
     )
     return [shape_job(j) for j in result.scalars().all()]
 
@@ -337,7 +342,15 @@ async def get_job(
         if exp is not None and exp <= now:
             await recover_expired_leases(db, now)
             await db.refresh(job)
-    return shape_job(job)
+    out = shape_job(job)
+    if job.machine_id is not None:
+        machine = await db.get(ProviderMachine, job.machine_id)
+        if machine is not None:
+            out.host_kind = machine_host_kind(machine)
+            out.risk_note = job_risk_note(out.host_kind, job.status, job.attempts_made)
+    elif job.attempts_made > 0:
+        out.risk_note = job_risk_note("unspecified", job.status, job.attempts_made)
+    return out
 
 
 @router.get("/{job_id}/events", response_model=list[JobEventOut])

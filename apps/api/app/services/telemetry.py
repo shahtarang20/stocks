@@ -98,7 +98,12 @@ async def record_machine_telemetry(
     if alerts_to_create:
         # Deduplicate alerts if an active alert for the machine & type was fired within the last 5m
         recent_threshold = now - timedelta(minutes=5)
+        # Sessions run with autoflush off, so alerts added earlier in THIS batch are invisible to the query below:
+        # track them here, otherwise a batch of N hot samples raises N duplicate alerts.
+        raised_in_batch: set[tuple[uuid.UUID, str]] = set()
         for alert in alerts_to_create:
+            if (alert.machine_id, alert.alert_type) in raised_in_batch:
+                continue
             recent_alert = await db.execute(
                 select(TelemetryAlert.id).where(
                     TelemetryAlert.machine_id == alert.machine_id,
@@ -107,8 +112,9 @@ async def record_machine_telemetry(
                     TelemetryAlert.created_at >= recent_threshold,
                 )
             )
-            if recent_alert.scalar_one_or_none() is None:
+            if recent_alert.scalars().first() is None:
                 db.add(alert)
+                raised_in_batch.add((alert.machine_id, alert.alert_type))
                 created_alerts_count += 1
 
     await db.flush()

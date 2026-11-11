@@ -33,6 +33,20 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
+_dummy_hash: str | None = None
+
+
+def burn_password_check(password: str) -> None:
+    """Spend the same time a real verification would, for a login whose account does not exist.
+
+    Without it an unknown email answers in microseconds and a known one after a full Argon2 verify, which tells an
+    attacker which addresses are registered even though the error message is identical."""
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = _password_hasher.hash(secrets.token_urlsafe(16))
+    verify_password(_dummy_hash, password)
+
+
 def needs_rehash(password_hash: str) -> bool:
     try:
         return _password_hasher.check_needs_rehash(password_hash)
@@ -54,7 +68,8 @@ def hash_token(token: str) -> str:
 
 
 def constant_time_compare(a: str, b: str) -> bool:
-    return hmac.compare_digest(a, b)
+    # Bytes, not str: compare_digest raises TypeError on non-ASCII str (a 500 for attacker-chosen input).
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------

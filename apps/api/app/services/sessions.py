@@ -217,6 +217,14 @@ async def claim_next(db: AsyncSession, machine, *, host_pubkey: str, machine_gpu
     """A host claims the oldest pending session it can run. Returns (session, host_token) or None."""
     if not HEX32.match(host_pubkey or ""):
         raise SessionError("host_pubkey_must_be_32_byte_hex")
+    # A session has no scheduler pass, so this claim IS its eligibility gate: a banned machine (proven leak / tamper)
+    # or one the owner took out of service (maintenance / throttled / offline) must never be handed a customer's shell.
+    if getattr(machine, "is_banned", False) or getattr(machine, "availability", "online") != "online":
+        return None
+    from app.services.provider import blocked_provider_ids
+
+    if await blocked_provider_ids(db, {machine.provider_id}):
+        return None
     rows = (
         await db.execute(
             select(ComputeSession).where(ComputeSession.status == SESSION_PENDING).order_by(ComputeSession.created_at).limit(20)

@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 from app.services.ledger import InsufficientFunds
 from app.services.marketplace import active_reservation_slots, reserve_capacity
 from app.services.pricing import compute_breakdown, get_active_fee_rate
-from app.services.provider import derive_status
+from app.services.provider import blocked_provider_ids, derive_status
 from app.services.provider_pricing import machine_ineligibility_reason
 from app.services.spend_limits import SpendLimitExceeded
 
@@ -339,7 +339,13 @@ async def _eligible_machines(
     from app.services import scheduler_v2 as _s2
 
     cpu_only_job = _s2.is_cpu_only_job(job)
-    for m in result.scalars().all():
+    machines = result.scalars().all()
+    # A suspended / deleted provider account must not be handed new work (its agent keeps a valid machine key).
+    blocked = await blocked_provider_ids(db, {m.provider_id for m in machines})
+    for m in machines:
+        if m.provider_id in blocked:
+            logger.debug("scheduler skip (provider suspended): machine=%s", m.id)
+            continue
         if m.status == "deregistered" or m.asking_price_per_hour is None:
             logger.debug("scheduler skip (deregistered/unpriced): machine=%s", m.id)
             continue

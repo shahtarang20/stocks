@@ -235,7 +235,8 @@ def _verify_grant(scope: str, token: str, now: dt.datetime | None = None) -> str
     if tok_scope != scope:
         return None
     payload = f"{tok_scope}:{resource_id}:{exp_str}"
-    if not hmac.compare_digest(_sign(payload), sig):
+    # Bytes: a non-ASCII signature (the token is attacker-chosen) must be a refusal, not a TypeError (HTTP 500).
+    if not hmac.compare_digest(_sign(payload).encode("utf-8"), sig.encode("utf-8")):
         return None
     try:
         exp = int(exp_str)

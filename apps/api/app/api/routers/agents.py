@@ -90,9 +90,12 @@ from app.services import stream_relay
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
 from app.services.leases import (
+    HOST_CAUSED_ERROR_CODES,
     close_running_attempt,
+    extend_job_reservation,
     recover_expired_leases,
     release_job_reservation,
+    retry_after_host_failure,
 )
 from app.services import challenge as challenge_service
 from app.services import reputation as reputation_svc
@@ -159,9 +162,9 @@ async def enroll(
     db: AsyncSession = Depends(get_db),
 ) -> AgentEnrollResponse:
     result = await db.execute(
-        select(EnrollmentToken).where(
-            EnrollmentToken.token_hash == hash_enrollment_token(body.enrollment_token)
-        )
+        select(EnrollmentToken)
+        .where(EnrollmentToken.token_hash == hash_enrollment_token(body.enrollment_token))
+        .with_for_update()  # single-use: two concurrent enrolments must not both pass the used_at check
     )
     token = result.scalar_one_or_none()
     now = utcnow()
@@ -357,7 +360,11 @@ async def heartbeat(
     # Keep attestation state (the pending challenge nonce) across heartbeats: they arrive every
     # 30 s and would otherwise erase a nonce between challenge and verify.
     kept = {k: v for k, v in (machine.last_health or {}).items() if k.startswith("latest_attestation_nonce")}
-    machine.last_health = {**payload.health.model_dump(), **kept}
+    # HeartbeatHealth allows extra keys, so the host could otherwise PLANT its own challenge here: with no open server
+    # challenge `kept` is empty and a host-supplied ``latest_attestation_nonce*`` would survive, letting it choose the
+    # "fresh" nonce a replayed (old, genuine) hardware quote is bound to. Those keys are server-owned.
+    reported = {k: v for k, v in payload.health.model_dump().items() if not k.startswith("latest_attestation_nonce")}
+    machine.last_health = {**reported, **kept}
     await db.flush()
 
     return HeartbeatResponse(ok=True, directives={})
@@ -473,6 +480,7 @@ async def claim_job(
     await fsm.transition(db, job, fsm.RUNNING, reason="claimed", actor="agent")
     lease_expires_at = now + dt.timedelta(seconds=settings.LEASE_TTL_SECONDS)
     job.lease_expires_at = lease_expires_at
+    await extend_job_reservation(db, job, now)
 
     db.add(
         JobAttempt(
@@ -604,6 +612,7 @@ async def job_heartbeat(
     now = utcnow()
     lease_expires_at = now + dt.timedelta(seconds=settings.LEASE_TTL_SECONDS)
     job.lease_expires_at = lease_expires_at
+    await extend_job_reservation(db, job, now)
     if body.metrics is not None:
         merged = dict(job.metrics or {})
         merged.update(body.metrics)
@@ -844,7 +853,7 @@ async def job_result(
             except Exception as exc:
                 logger.error("Privacy receipt creation failed for job %s: %s", job.id, exc)
                 job.error_code = "privacy_receipt_generation_failed"
-                job.error_message = f"privacy receipt failed: {exc}"
+                job.error_message = f"privacy receipt failed: {exc}"[:1024]  # jobs.error_message is VARCHAR(1024)
                 job.verification = {"valid": False, "reason": job.error_code}
                 await fsm.transition(db, job, fsm.FAILED, reason="privacy_receipt_failed", actor="system")
                 await close_running_attempt(db, job, now, outcome="failed", error_code=job.error_code)
@@ -927,7 +936,18 @@ async def job_result(
                 await _post_terminal_hooks(db, job)
     else:  # "failed"
         err = body.error or {}
-        job.error_code = (err.get("code") or "agent_reported_failure")[:64]
+        reported_code = (err.get("code") or "agent_reported_failure")[:64]
+        if reported_code in HOST_CAUSED_ERROR_CODES:
+            # The HOST ended the attempt (overheating, an interruption), not the customer's code: re-dispatch on another
+            # machine instead of failing the customer's job. No charge: the hold is kept for the next attempt.
+            retried = await retry_after_host_failure(db, job, now, reason=reported_code)
+            if retried is not None:
+                await record_audit(
+                    db, action="job.host_interrupted", outcome="failure", actor_user_id=None,
+                    ip=client_ip(request), resource_type="job", resource_id=str(job.id), reason=reported_code,
+                )
+                return JobResultResponse(job_id=job.id, status=job.status)
+        job.error_code = reported_code
         job.error_message = (err.get("message") or "agent reported failure")[:1024]
         job.verification = {"valid": False, "reason": "agent_reported_failure"}
         await fsm.transition(db, job, fsm.FAILED, reason="agent_failed", actor="agent")
@@ -1061,7 +1081,7 @@ async def agent_attestation_verify(
     for k in sorted(body.pcr_measurements.keys()):
         quote_hasher.update(f"{k}:{body.pcr_measurements[k]}".encode("utf-8"))
     computed_quote = quote_hasher.hexdigest()
-    if not hmac.compare_digest(body.platform_quote, computed_quote):
+    if not hmac.compare_digest(body.platform_quote.encode("utf-8"), computed_quote.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="platform_quote_tampered",
@@ -1082,7 +1102,7 @@ async def agent_attestation_verify(
         canonical_str.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    if not hmac.compare_digest(body.signature, expected_sig):
+    if not hmac.compare_digest(body.signature.encode("utf-8"), expected_sig.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="signature_verification_failed",

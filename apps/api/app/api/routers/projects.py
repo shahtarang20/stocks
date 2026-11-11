@@ -23,6 +23,7 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services.audit import record_audit
+from app.services.orgs import ORG_ROLE_RANK, get_membership, role_rank
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -132,6 +133,17 @@ async def delete_project(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     project = await _get_owned_project(db, project_id, current)
+    if project.owner_id != current.id:
+        # Reaching an org project makes you a member of it, not entitled to destroy it (deletion cascades its API keys
+        # and breaks everything keyed to it): only the project's creator or an org admin/owner may.
+        membership = (
+            await get_membership(db, project.org_id, current.id) if project.org_id is not None else None
+        )
+        if membership is None or role_rank(membership.role) < ORG_ROLE_RANK["admin"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only the project's creator or an organization admin can delete it",
+            )
     await db.delete(project)
     await db.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

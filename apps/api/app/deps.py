@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.core.security import (
     API_KEY_PREFIX,
+    constant_time_compare,
     decode_access_token,
     hash_token,
 )
@@ -24,9 +25,10 @@ from app.models.user import User
 from app.schemas.auth import CurrentUser
 from app.services.auth import get_user_by_id, get_user_roles
 
-import secrets
-
 CSRF_PROTECTED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+#: Roles a project API key never inherits from its owner.
+API_KEY_DENIED_ROLES = frozenset({"administrator", "security_operator", "support_operator"})
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -73,7 +75,10 @@ async def _authenticate_api_key(db: AsyncSession, raw_key: str) -> CurrentUser:
     # Last-used is what makes an unused or leaked key visible to its owner.
     api_key.last_used_at = utcnow()
 
-    roles = await get_user_roles(db, user.id)
+    # A key is a long-lived bearer secret that lives in CI configs and env files. It must never carry operator
+    # authority, or leaking one belonging to an administrator hands over the whole platform (the key is "the
+    # owner's identity, not elevated privilege"). Operators use their login session for those routes.
+    roles = [r for r in await get_user_roles(db, user.id) if r not in API_KEY_DENIED_ROLES]
     return CurrentUser(
         id=user.id,
         email=user.email,
@@ -107,7 +112,7 @@ async def get_current_user(
     if is_cookie_auth and request.method.upper() in CSRF_PROTECTED_METHODS:
         csrf_cookie = request.cookies.get("csrf_token")
         csrf_header = request.headers.get("x-csrf-token")
-        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+        if not csrf_cookie or not csrf_header or not constant_time_compare(csrf_cookie, csrf_header):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="CSRF validation failed: missing or invalid X-CSRF-Token header",

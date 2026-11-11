@@ -77,7 +77,7 @@ from app.services import job_fsm as fsm
 from app.services import stream_relay
 from app.services.ledger import InsufficientFunds, lock_customer, to_minor
 from app.services.leases import release_job_reservation
-from app.services.provider import derive_status
+from app.services.provider import blocked_provider_ids, derive_status
 from app.services.scheduler import JobValidationError, schedule_job, validate_job
 from app.services.spend_limits import SpendLimitExceeded, spend_guard
 
@@ -145,9 +145,14 @@ async def _find_eligible_machine(
     if model_version is not None and model_version.runtime != "simulated":
         image_runtimes = await model_image_runtimes(db, model_version)
 
-    for m in result.scalars().all():
+    machines = result.scalars().all()
+    blocked = await blocked_provider_ids(db, {m.provider_id for m in machines})
+    for m in machines:
         if getattr(m, "is_banned", False):
             logger.debug("inference skip (banned): machine=%s", m.id)
+            continue
+        if m.provider_id in blocked:
+            logger.debug("inference skip (provider suspended): machine=%s", m.id)
             continue
         if derive_status(m, now) != "online":
             logger.debug("inference skip (offline): machine=%s avail=%s", m.id, m.availability)

@@ -6,7 +6,20 @@ import datetime as dt
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Token amounts travel as decimal strings (uint256). "abc", "-5", "1.5" or a 100-digit number used to reach
+# ``int(...)`` / ``encode_packed`` in the service and surface as HTTP 500 (or an unsignable voucher).
+_UINT256_MAX = 2**256 - 1
+_ADDRESS_PATTERN = r"^0x[0-9a-fA-F]{40}$"
+
+
+def _uint256_str(value: str) -> str:
+    if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+        raise ValueError("must be a non-negative integer decimal string")
+    if int(value) > _UINT256_MAX:
+        raise ValueError("exceeds uint256")
+    return str(int(value))  # canonical: no leading zeros, so string comparisons with stored values are exact
 
 
 class ContractDeploymentInfo(BaseModel):
@@ -28,8 +41,16 @@ class CreateEscrowLockRequest(BaseModel):
     locked_amount_units: str = Field(description="Amount locked in wei (minor units) as decimal string")
     deadline_seconds: int = Field(default=86400, ge=300, le=2592000)
     lock_tx_hash: str = Field(min_length=64, max_length=66)
-    customer_address: str = Field(min_length=42, max_length=42)
-    provider_address: str = Field(min_length=42, max_length=42)
+    customer_address: str = Field(min_length=42, max_length=42, pattern=_ADDRESS_PATTERN)
+    provider_address: str = Field(min_length=42, max_length=42, pattern=_ADDRESS_PATTERN)
+
+    @field_validator("locked_amount_units")
+    @classmethod
+    def _locked_positive(cls, value: str) -> str:
+        canonical = _uint256_str(value)
+        if int(canonical) == 0:
+            raise ValueError("the contract refuses a zero lock")
+        return canonical
 
 
 class EscrowResponse(BaseModel):
@@ -63,6 +84,11 @@ class IssueSettlementVoucherRequest(BaseModel):
     job_id: uuid.UUID
     final_cost_units: str
     platform_fee_units: str
+
+    @field_validator("final_cost_units", "platform_fee_units")
+    @classmethod
+    def _amounts(cls, value: str) -> str:
+        return _uint256_str(value)
 
 
 class SettlementVoucherResponse(BaseModel):

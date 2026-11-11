@@ -123,6 +123,16 @@ class Settings(BaseSettings):
     # Background recovery sweeper interval (seconds); 0 disables the sweeper.
     SWEEP_INTERVAL_SECONDS: int = 30
     JOB_MAX_RUNTIME_DEFAULT: int = 300
+    # A RUNNING job whose current attempt has been going for max_runtime_seconds + this many seconds is treated like an
+    # expired lease (hold released, nobody charged, retried or timed out). The slack covers what happens before the
+    # container starts counting its own limit: staging inputs, pulling the image, loading a model. The agent kills the
+    # container at max_runtime_seconds itself, so only a stuck or misbehaving job ever reaches this.
+    JOB_RUNTIME_GRACE_SECONDS: int = 900
+    # Automatic re-dispatches the PLATFORM grants when the HOST caused the loss (the lease lapsed: crash, sleep, abort; or the
+    # agent reported a thermal shutdown / host interruption), on top of the customer's own retry_policy. The customer
+    # never pays for the host's problem, and a job lost to a host should not simply die because the customer left
+    # max_retries at 0. Platform audit jobs (challenge / shadow) and service replicas never get free retries.
+    HOST_FAILURE_FREE_RETRIES: int = 1
     JOB_POLL_INTERVAL_SECONDS: int = 5
     JOB_RESERVATION_TTL_SECONDS: int = 3600  # how long a job reservation holds capacity
     # Transparent scheduler weights (price is "lower is better").

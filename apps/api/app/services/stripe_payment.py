@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import constant_time_compare
 from app.models.billing import Payment, Refund
 from app.services import ledger
 
@@ -96,7 +97,7 @@ def verify_stripe_signature(
                 secret.encode("utf-8"), signed_payload, hashlib.sha256
             ).hexdigest()
 
-            if not hmac.compare_digest(computed_sig, expected_sig):
+            if not constant_time_compare(computed_sig, expected_sig):
                 raise StripeSignatureError("Stripe webhook signature mismatch")
 
             return json.loads(payload.decode("utf-8"))
@@ -214,9 +215,22 @@ class StripePaymentProvider:
                 logger.error("Invalid customer UUID in event %s: %s", event_id, customer_id_str)
                 return {"received": True, "event_id": event_id, "status": "invalid_customer_id"}
 
+            # A Checkout Session can complete BEFORE the money has moved (delayed payment methods report
+            # payment_status="unpaid" and settle later). Crediting then would hand out credits for a payment that may
+            # still fail. Only a paid session mints credits.
+            if event_type == "checkout.session.completed" and data_object.get("payment_status") == "unpaid":
+                return {"received": True, "event_id": event_id, "event_type": event_type, "status": "payment_unpaid"}
+
+            # Credits are USD cents. A charge in another currency (or a zero-decimal one, where 500 means 500 yen) must
+            # never be read as that many US cents.
+            currency = data_object.get("currency")
+            if currency is not None and str(currency).lower() != "usd":
+                logger.warning("Stripe event %s has non-USD currency %s; not credited", event_id, currency)
+                return {"received": True, "event_id": event_id, "event_type": event_type, "status": "unsupported_currency"}
+
             # Extract amount
             amount_minor = data_object.get("amount_total") or data_object.get("amount") or 0
-            if amount_minor <= 0:
+            if isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor <= 0:
                 return {"received": True, "event_id": event_id, "status": "zero_amount"}
 
             session_id = data_object.get("id") if event_type == "checkout.session.completed" else None
@@ -225,6 +239,30 @@ class StripePaymentProvider:
                 if event_type == "checkout.session.completed"
                 else data_object.get("id")
             )
+
+            # ONE purchase fires several events (checkout.session.completed AND payment_intent.succeeded, each with its
+            # own event id). The ledger key below is per event, so without this a payment whose events both carry the
+            # customer reference would be credited twice. Dedupe on the payment intent: serialize on it, then refuse if a
+            # successful payment for the same intent was already recorded under a different event.
+            if payment_intent_id:
+                await ledger._advisory_xact_lock(db, f"stripe_pi:{payment_intent_id}")
+                prior = (
+                    await db.execute(
+                        select(Payment).where(
+                            Payment.stripe_payment_intent_id == str(payment_intent_id),
+                            Payment.status == "succeeded",
+                            Payment.external_reference != event_id,
+                        )
+                    )
+                ).scalars().first()
+                if prior is not None:
+                    return {
+                        "received": True,
+                        "event_id": event_id,
+                        "event_type": event_type,
+                        "status": "duplicate_payment_intent",
+                        "transaction_id": str(prior.transaction_id) if prior.transaction_id else None,
+                    }
 
             # Post to double-entry ledger with Stripe event ID as idempotency key
             account = await ledger.get_or_create_customer_account(db, customer_id)
@@ -274,11 +312,20 @@ class StripePaymentProvider:
         # 2. Failed payment -> record failure, NEVER post credits (no phantom credits)
         elif event_type in ("payment_intent.payment_failed", "invoice.payment_failed"):
             customer_id_str = (data_object.get("metadata") or {}).get("customer_id")
-            customer_id = uuid.UUID(customer_id_str) if customer_id_str else None
+            try:
+                customer_id = uuid.UUID(str(customer_id_str)) if customer_id_str else None
+            except ValueError:
+                # A malformed reference is not retryable: answering 500 made Stripe redeliver it forever.
+                customer_id = None
             amount_minor = data_object.get("amount") or 0
+            if isinstance(amount_minor, bool) or not isinstance(amount_minor, int):
+                amount_minor = 0
             payment_intent_id = data_object.get("id")
+            already_recorded = (
+                await db.execute(select(Payment.id).where(Payment.external_reference == event_id))
+            ).first() is not None
 
-            if customer_id:
+            if customer_id and not already_recorded:
                 payment = Payment(
                     customer_id=customer_id,
                     amount_minor=amount_minor,

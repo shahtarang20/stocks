@@ -30,6 +30,9 @@ class DataPolicy(BaseModel):
     classification: str | None = Field(default=None, max_length=64)
     allowed_regions: list[str] | None = Field(default=None, max_length=32)
     min_stake: decimal.Decimal | None = Field(default=None, ge=0, le=decimal.Decimal("1000000000"))
+    # Only place this job on a host that declares it is DEDICATED (a server nobody else uses). A shared PC (a laptop or
+    # gaming machine whose owner may start other GPU work mid-job) is refused. Windows hosts are always shared.
+    require_dedicated_host: bool | None = None
     # X25519 public key (hex) the sealed host encrypts the result to. Required for privacy tiers.
     result_public_key: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
 
@@ -47,7 +50,7 @@ class JobCreate(BaseModel):
     estimated_minutes: int = Field(default=1, gt=0, le=525_600)  # <= 1 year; an unbounded int overflows the DB column (500)
     # A spending cap must be positive — a negative/zero budget is rejected at
     # validation (defense-in-depth; the hold/budget math never sees a negative).
-    max_cost: decimal.Decimal | None = Field(default=None, gt=0)
+    max_cost: decimal.Decimal | None = Field(default=None, gt=0, le=decimal.Decimal("999999999999.99"), max_digits=24)  # max_digits also bounds the exponent (1e-400 / 1e400); jobs.max_cost is NUMERIC(14,2): above this Postgres raises (500)
     max_runtime_seconds: int | None = Field(default=None, gt=0, le=31_536_000)
     retry_policy: RetryPolicy | None = None
     priority: int = Field(default=0, ge=0, le=1_000_000)
@@ -135,6 +138,9 @@ class JobOut(BaseModel):
     updated_at: dt.datetime
     started_at: dt.datetime | None = None
     finished_at: dt.datetime | None = None
+    # Set on the job detail endpoint only: what kind of host the job is on, and a note for the customer when it matters.
+    host_kind: str | None = None
+    risk_note: str | None = None
 
 
 class JobEventOut(BaseModel):

@@ -21,16 +21,26 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.base import ensure_aware, utcnow
 from app.models.jobs import Job, JobAssignment, JobAttempt
 from app.models.marketplace import ResourceReservation
 from app.services import billing, failover
 from app.services import job_fsm as fsm
 from app.services.scheduler import run_scheduler
-from app.services.verification import abandon_unbilled_job, is_shadow_job, is_unbilled_job
+from app.services.verification import (
+    abandon_unbilled_job,
+    is_service_replica_job,
+    is_shadow_job,
+    is_unbilled_job,
+)
+
+#: Error codes an agent reports when the HOST (not the customer's code) ended the attempt. They are retried like a lost
+#: lease instead of being recorded as the customer's failed job.
+HOST_CAUSED_ERROR_CODES = frozenset({"thermal_shutdown", "host_interrupted"})
 
 
 def _unbilled_placement_is_dead(job: Job, now: dt.datetime) -> bool:
@@ -69,6 +79,29 @@ async def release_job_reservation(
     await db.flush()
 
 
+async def extend_job_reservation(
+    db: AsyncSession, job: Job, now: dt.datetime | None = None
+) -> None:
+    """Keep a RUNNING job's capacity reservation live for as long as the job is.
+
+    A reservation is created with a fixed ``RESERVATION_TTL_SECONDS`` expiry, and capacity accounting
+    (``marketplace.active_reservation_slots``) ignores any reservation past its expiry. Without this a job that
+    runs longer than the TTL silently frees its slot while still executing, and the scheduler then reserves
+    (and the agent claims) another job on a machine that is already full. Called at claim and on every job
+    heartbeat; if heartbeats stop, the lease sweeper releases the reservation as before.
+    """
+    if job.reservation_id is None:
+        return
+    now = now or utcnow()
+    reservation = await db.get(ResourceReservation, job.reservation_id)
+    if reservation is None or reservation.status != "active":
+        return
+    new_exp = now + dt.timedelta(seconds=settings.RESERVATION_TTL_SECONDS)
+    cur = ensure_aware(reservation.expires_at)
+    if cur is None or cur < new_exp:
+        reservation.expires_at = new_exp
+
+
 async def close_running_attempt(
     db: AsyncSession, job: Job, now: dt.datetime, *, outcome: str, error_code: str | None = None
 ) -> None:
@@ -85,6 +118,68 @@ async def close_running_attempt(
     await db.flush()
 
 
+def host_failure_retry_budget(job: Job) -> int:
+    """Free re-dispatches for a loss the host caused (see ``settings.HOST_FAILURE_FREE_RETRIES``).
+
+    Zero for platform audit jobs (their placement is special-cased: a shadow must never be re-placed blind) and for
+    service replicas (long-lived servers with their own lifecycle)."""
+    if is_unbilled_job(job) or is_service_replica_job(job):
+        return 0
+    return max(0, int(settings.HOST_FAILURE_FREE_RETRIES))
+
+
+async def retry_after_host_failure(
+    db: AsyncSession, job: Job, now: dt.datetime, *, reason: str
+) -> dict | None:
+    """Re-queue a RUNNING job whose attempt the host ended (agent-reported ``thermal_shutdown`` / ``host_interrupted``).
+
+    Same handling as an expired lease: the reservation and attempt are closed, the machine is blamed in the audit trail,
+    the job is re-placed on a DIFFERENT machine, and the hold is kept (never re-posted), so the customer is charged at
+    most once. Returns ``None`` when no retry is available (cancelled, or the budget of ``max_retries`` plus the free
+    host-failure retries is spent): the caller then records the ordinary failure.
+    """
+    if job.cancel_requested:
+        return None
+    max_retries = int((job.retry_policy or {}).get("max_retries", 0) or 0)
+    if job.attempts_made + 1 > max_retries + host_failure_retry_budget(job):
+        return None
+    failed_machine_id = job.machine_id
+    await release_job_reservation(db, job, now)
+    await close_running_attempt(db, job, now, outcome="failed", error_code=reason)
+    await failover.record_provider_failure(
+        db, job, failed_machine_id, reason=f"host ended the attempt ({reason}) on machine {failed_machine_id} for job {job.id}"
+    )
+    job.attempts_made += 1
+    await fsm.transition(db, job, fsm.RETRY_PENDING, reason=reason, actor="agent")
+    await fsm.transition(db, job, fsm.QUEUED, reason="retry", actor="system")
+    exclude = await failover.failed_machine_ids(db, job)
+    if failed_machine_id is not None:
+        exclude.add(failed_machine_id)
+    placement = await failover.reschedule_with_failover(db, job, now, exclude=exclude)
+    await db.flush()
+    return {
+        "job_id": str(job.id),
+        "action": "requeued",
+        "reason": reason,
+        "attempts_made": job.attempts_made,
+        "rescheduled": placement["rescheduled"],
+        "machine_id": placement["machine_id"],
+        "failed_over": placement["failed_over"],
+    }
+
+
+async def _running_attempt_starts(db: AsyncSession, job_ids: list) -> dict:
+    """``job_id -> start of its current (running) attempt``, in one query."""
+    if not job_ids:
+        return {}
+    rows = await db.execute(
+        select(JobAttempt.job_id, func.max(JobAttempt.started_at))
+        .where(JobAttempt.job_id.in_(job_ids), JobAttempt.status == "running")
+        .group_by(JobAttempt.job_id)
+    )
+    return {job_id: started for job_id, started in rows.all()}
+
+
 async def recover_expired_leases(
     db: AsyncSession, now: dt.datetime | None = None
 ) -> list[dict]:
@@ -99,16 +194,28 @@ async def recover_expired_leases(
         select(Job).where(Job.status == fsm.RUNNING).with_for_update(skip_locked=True)
     )
     recovered: list[dict] = []
-    for job in result.scalars().all():
+    running = list(result.scalars().all())
+    started_at = await _running_attempt_starts(db, [j.id for j in running])
+    for job in running:
         if job.status != fsm.RUNNING:
             continue
         exp = ensure_aware(job.lease_expires_at)
-        if exp is None or exp > now:
+        lease_dead = exp is None or exp <= now
+        # A job that keeps heartbeating forever never lets its lease lapse, so the lease alone cannot stop it: bound the
+        # attempt by the job's own max_runtime_seconds (plus the staging grace).
+        started = ensure_aware(started_at.get(job.id))
+        overrun = (
+            not lease_dead
+            and started is not None
+            and now > started + dt.timedelta(seconds=int(job.max_runtime_seconds) + int(settings.JOB_RUNTIME_GRACE_SECONDS))
+        )
+        if not (lease_dead or overrun):
             continue
+        reason = "lease_expired" if lease_dead else "runtime_exceeded"
 
         failed_machine_id = job.machine_id
         await release_job_reservation(db, job, now)
-        await close_running_attempt(db, job, now, outcome="lease_expired", error_code="lease_expired")
+        await close_running_attempt(db, job, now, outcome=reason, error_code=reason)
         # Audit fact for the provider that dropped the job (B1). Written before
         # any branch so a cancelled/exhausted job still attributes the failure.
         await failover.record_provider_failure(db, job, failed_machine_id)
@@ -133,10 +240,13 @@ async def recover_expired_leases(
 
         job.attempts_made += 1
         max_retries = int((job.retry_policy or {}).get("max_retries", 0) or 0)
+        # A lost lease is the host's doing: it earns the platform's free re-dispatches on top of the customer's retries.
+        # A runtime overrun is not (the job itself ran too long), so it keeps only the customer's own budget.
+        free_retries = host_failure_retry_budget(job) if lease_dead else 0
 
-        if job.attempts_made <= max_retries:
+        if job.attempts_made <= max_retries + free_retries:
             await fsm.transition(
-                db, job, fsm.RETRY_PENDING, reason="lease_expired", actor="system"
+                db, job, fsm.RETRY_PENDING, reason=reason, actor="system"
             )
             await fsm.transition(db, job, fsm.QUEUED, reason="retry", actor="system")
             # True failover: prefer a machine that has not already failed this
@@ -161,10 +271,10 @@ async def recover_expired_leases(
             )
         else:
             await fsm.transition(
-                db, job, fsm.TIMED_OUT, reason="lease_expired", actor="system"
+                db, job, fsm.TIMED_OUT, reason=reason, actor="system"
             )
             job.error_code = "timed_out"
-            job.error_message = "lease expired; retries exhausted"
+            job.error_message = "lease expired; retries exhausted" if lease_dead else "max runtime exceeded; retries exhausted"
             # A timed-out job is never charged — return the full hold.
             await billing.release_hold(db, job)
             recovered.append(

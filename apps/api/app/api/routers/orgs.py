@@ -11,6 +11,7 @@ Access rules enforced here:
 
 from __future__ import annotations
 
+import html
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -250,12 +251,18 @@ async def invite_member(
         db, org=org, email=str(body.email), role=role, invited_by=current
     )
     accept_url = f"{settings.frontend_base_url}/orgs/accept-invite?token={raw_token}"
+    # The org name is chosen by whoever created the org, so it is untrusted text going into an email that comes
+    # FROM the platform: escape it for the HTML part (else a name like `<a href=evil>...` is a phishing link in
+    # our own mail) and flatten line breaks in the subject (header injection / a rejected message).
+    org_name_html = html.escape(org.name)
+    inviter_html = html.escape(current.email)
+    subject_org = " ".join(org.name.split())
     await send_email(
         to_email=invitation.email,
-        subject=f"You've been invited to {org.name} on ComputeCoin",
+        subject=f"You've been invited to {subject_org} on ComputeCoin",
         html_content=(
-            f"<p>{current.email} invited you to join <strong>{org.name}</strong> "
-            f"as {role}.</p><p><a href=\"{accept_url}\">Accept the invitation</a></p>"
+            f"<p>{inviter_html} invited you to join <strong>{org_name_html}</strong> "
+            f"as {role}.</p><p><a href=\"{html.escape(accept_url)}\">Accept the invitation</a></p>"
         ),
         text_content=(
             f"{current.email} invited you to join {org.name} as {role}.\n\n{accept_url}\n"

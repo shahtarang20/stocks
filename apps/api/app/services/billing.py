@@ -33,6 +33,7 @@ from app.services.spend_limits import check_spend_allowed
 from app.services.verification import is_unbilled_job
 
 _CENTS = decimal.Decimal("0.01")
+_MAX_METERED_SECONDS = decimal.Decimal(10**9)  # ~31 years
 
 
 def _money(value: decimal.Decimal) -> decimal.Decimal:
@@ -168,6 +169,26 @@ def _meter_actual_cost(
     return ledger.to_minor(gpu_cost), ledger.to_minor(platform_fee)
 
 
+def _metered_seconds(raw: object) -> decimal.Decimal | None:
+    """The agent-reported duration as a Decimal, or None when it is not a usable duration.
+
+    ``job.metrics`` is merged verbatim from the provider agent, so ``duration_seconds`` can be anything: "NaN",
+    "Infinity", a negative number, a bool or a dict. Each of those used to either raise out of settlement (the job could
+    then never complete) or, when the minimum-billable floor is disabled, produce a negative capture. Anything that is
+    not a finite, non-negative number is treated as "not reported".
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        seconds = decimal.Decimal(str(raw))
+    except (decimal.InvalidOperation, ValueError):
+        return None
+    if not seconds.is_finite() or seconds < 0:
+        return None
+    # The capture is capped at the hold anyway; clamping keeps the Decimal math inside the context's precision.
+    return min(seconds, _MAX_METERED_SECONDS)
+
+
 async def settle_job(db: AsyncSession, job: Job) -> Invoice | None:
     """Settle a COMPLETED job: capture actual cost + release the remainder.
 
@@ -185,11 +206,9 @@ async def settle_job(db: AsyncSession, job: Job) -> Invoice | None:
     fee_rate = await get_active_fee_rate(db)
 
     metrics = job.metrics or {}
-    raw_seconds = metrics.get("duration_seconds")
-    if raw_seconds is not None:
-        actual_seconds = decimal.Decimal(str(raw_seconds))
-    else:
-        # No metered duration -> fall back to the estimate.
+    actual_seconds = _metered_seconds(metrics.get("duration_seconds"))
+    if actual_seconds is None:
+        # No (usable) metered duration -> fall back to the estimate.
         actual_seconds = decimal.Decimal(job.estimated_minutes) * decimal.Decimal(60)
 
     # Disclosed billing policy: a completed job is billed for at least a minimum
@@ -413,35 +432,26 @@ async def refund(
 # Customer account view helpers
 # ---------------------------------------------------------------------------
 async def customer_reserved_minor(db: AsyncSession, customer_id: uuid.UUID) -> int:
-    """Current holds for a customer = net holding attributable to their jobs.
+    """Current holds for a customer = net holding attributable to their jobs and sessions.
 
-    Sums holding-account entries across transactions that reference the customer's
-    jobs (credit adds, debit subtracts) -> the outstanding reserved amount.
+    Sums holding-account entries across the customer's hold/capture/release transactions (credit adds, debit
+    subtracts) -> the outstanding reserved amount. Every such transaction is posted with ``actor_user_id`` set to the
+    customer, so the query is narrowed in SQL instead of reading the WHOLE platform's holding history on every
+    balance request. Interactive sessions hold funds the same way jobs do (reference_type ``session``) and used to be
+    left out, which made ``available + reserved`` understate the balance while a session was live.
     """
     holding = await ledger.get_platform_account(db, "holding")
-    job_ids = (
-        await db.execute(select(Job.id).where(Job.customer_id == customer_id))
-    ).scalars().all()
-    if not job_ids:
-        return 0
-    ref_ids = {str(j) for j in job_ids}
     rows = (
         await db.execute(
-            select(
-                LedgerEntry.direction,
-                LedgerEntry.amount_minor,
-                LedgerTransaction.reference_id,
-            )
+            select(LedgerEntry.direction, func.coalesce(func.sum(LedgerEntry.amount_minor), 0))
             .join(LedgerTransaction, LedgerEntry.transaction_id == LedgerTransaction.id)
             .where(
                 LedgerEntry.account_id == holding.id,
-                LedgerTransaction.reference_type == "job",
+                LedgerTransaction.reference_type.in_(("job", "session")),
+                LedgerTransaction.actor_user_id == customer_id,
             )
+            .group_by(LedgerEntry.direction)
         )
     ).all()
-    reserved = 0
-    for direction, amount, ref_id in rows:
-        if ref_id not in ref_ids:
-            continue
-        reserved += int(amount) if direction == "credit" else -int(amount)
-    return max(0, reserved)
+    totals = {direction: int(amount) for direction, amount in rows}
+    return max(0, totals.get("credit", 0) - totals.get("debit", 0))

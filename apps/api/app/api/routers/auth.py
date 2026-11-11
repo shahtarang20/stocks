@@ -7,11 +7,14 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.rate_limit import rate_limiter
 from app.core.security import (
+    burn_password_check,
+    constant_time_compare,
     generate_opaque_token,
     hash_password,
     hash_token,
@@ -148,7 +151,15 @@ async def register(
         user.aup_version = body.aup_version
         user.aup_accepted_at = utcnow()
     db.add(user)
-    await db.flush()
+    try:
+        # The pre-check above is a read; two simultaneous registrations of one address both pass it and the
+        # UNIQUE(email) constraint decides. Answer that with the same 409 instead of a bare 500.
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Unable to register with these details"
+        )
 
     db.add(UserRole(user_id=user.id, role=Role.customer))
 
@@ -180,9 +191,9 @@ async def verify_email(
 ) -> MessageResponse:
     token_hash = hash_token(body.token)
     result = await db.execute(
-        select(EmailVerificationToken).where(
-            EmailVerificationToken.token_hash == token_hash
-        )
+        select(EmailVerificationToken)
+        .where(EmailVerificationToken.token_hash == token_hash)
+        .with_for_update()  # single-use: serialise concurrent redemptions of one token
     )
     token = result.scalar_one_or_none()
     now = utcnow()
@@ -253,6 +264,8 @@ async def login(
     user = await get_user_by_email(db, email)
     user_agent = request.headers.get("user-agent")
 
+    if user is None:
+        burn_password_check(body.password)
     if user is None or not verify_password(user.password_hash, body.password):
         await record_audit(
             db, action="auth.login", outcome="failure", ip=ip,
@@ -313,7 +326,7 @@ async def refresh(
     if not (body and body.refresh_token) and "refresh_token" in request.cookies:
         csrf_cookie = request.cookies.get("csrf_token")
         csrf_header = request.headers.get("x-csrf-token")
-        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+        if not csrf_cookie or not csrf_header or not constant_time_compare(csrf_cookie, csrf_header):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="CSRF validation failed: missing or invalid X-CSRF-Token header",
@@ -420,7 +433,7 @@ async def logout(
     if not (body and body.refresh_token) and "refresh_token" in request.cookies:
         csrf_cookie = request.cookies.get("csrf_token")
         csrf_header = request.headers.get("x-csrf-token")
-        if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+        if not csrf_cookie or not csrf_header or not constant_time_compare(csrf_cookie, csrf_header):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="CSRF validation failed: missing or invalid X-CSRF-Token header",
@@ -648,7 +661,9 @@ async def password_reset_confirm(
     ip = client_ip(request)
     token_hash = hash_token(body.token)
     result = await db.execute(
-        select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
+        select(PasswordResetToken)
+        .where(PasswordResetToken.token_hash == token_hash)
+        .with_for_update()  # single-use: two concurrent confirms must not both pass the used_at check
     )
     token = result.scalar_one_or_none()
     now = utcnow()
@@ -665,7 +680,16 @@ async def password_reset_confirm(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token"
         )
 
+    from sqlalchemy import update as sa_update
+
     user.password_hash = hash_password(body.new_password)
+    # Every reset link issued before this one was spent is now stale: a second, still-live token (an older email
+    # that sat in a mailbox, or one requested by whoever triggered the reset) must not set the password again.
+    await db.execute(
+        sa_update(PasswordResetToken)
+        .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+        .values(used_at=now)
+    )
     # Revoke all sessions on password change.
     await revoke_all_user_sessions(db, user.id)
     await record_audit(

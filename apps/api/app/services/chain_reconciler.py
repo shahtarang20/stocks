@@ -844,6 +844,7 @@ async def reconcile_withdrawals(db: AsyncSession, client: Any | None = None, *, 
 
     * ``unknown_payout``  : a chain transfer from the hot wallet that no withdrawal row owns
     * ``amount_or_destination_mismatch`` : a withdrawal's tx exists but pays another amount or address
+    * ``refunded_but_paid_on_chain`` : a withdrawal whose credits were refunded although its transfer was mined (paid twice)
     * ``missing_on_chain``: a paid_out withdrawal with no matching chain transfer
     * ``ledger_paid_out`` : the paid_out ledger account differs from the sum of paid_out withdrawals
     * ``ledger_pending``  : withdrawal_pending differs from the sum of open withdrawals
@@ -885,6 +886,10 @@ async def reconcile_withdrawals(db: AsyncSession, client: Any | None = None, *, 
             findings.append({"kind": "unknown_payout", "tx_hash": h, "amount": str(log["amount"])})
             continue
         seen_hashes.add(h)
+        if row.status == "refunded" and row.tx_hash:
+            # The credits went back to the user, yet the transfer is on chain: the user was paid twice.
+            findings.append({"kind": "refunded_but_paid_on_chain", "tx_hash": h, "withdrawal_id": str(row.id)})
+            continue
         if row.status == "paid_out" and (
             int(row.amount_raw) != int(log["amount"]) or row.destination.lower() != log["to_address"].lower()
         ):

@@ -208,7 +208,11 @@ async def test_single_machine_still_retries_on_the_same_machine(client):
 # ===========================================================================
 # (c) + (d) retries exhausted -> terminal, hold released in full, no leak
 # ===========================================================================
-async def test_retries_exhausted_times_out_and_releases_full_hold(client):
+async def test_retries_exhausted_times_out_and_releases_full_hold(client, monkeypatch):
+    # This test is about the CUSTOMER's retry budget alone, so take the platform's free host-failure retry out of it.
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "HOST_FAILURE_FREE_RETRIES", 0)
     await seed_echo_model()
     a = await create_listable_machine(client, "p-b1x@x.com", hostname="b1x")
     b = await create_listable_machine(client, "p-b1y@x.com", hostname="b1y")

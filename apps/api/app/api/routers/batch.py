@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,11 +89,14 @@ async def create_batch(
 
 @router.get("", response_model=list[BatchOut])
 async def list_batches(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     current: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[BatchOut]:
     result = await db.execute(
-        select(Batch).where(Batch.customer_id == current.id).order_by(Batch.created_at.desc())
+        select(Batch).where(Batch.customer_id == current.id).order_by(Batch.created_at.desc(), Batch.id)
+        .limit(limit).offset(offset)  # each row costs several queries in _shape: never unbounded
     )
     return [await _shape(db, b) for b in result.scalars().all()]
 

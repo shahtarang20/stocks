@@ -92,4 +92,6 @@ def compute_signature(signing_key: str, canonical: str) -> str:
 def verify_signature(signing_key: str, canonical: str, provided_signature: str) -> bool:
     """Constant-time comparison of the recomputed HMAC against the provided one."""
     expected = compute_signature(signing_key, canonical)
-    return hmac.compare_digest(expected, provided_signature or "")
+    # Compare bytes: compare_digest raises TypeError for a str with non-ASCII characters, and the signature
+    # comes from a request header (decoded latin-1), so a crafted header would turn a 401 into a 500.
+    return hmac.compare_digest(expected.encode("utf-8"), (provided_signature or "").encode("utf-8"))

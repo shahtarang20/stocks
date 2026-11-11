@@ -23,7 +23,7 @@ from app.db.base import utcnow
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user
 from app.models.enterprise import SSO_PROVIDERS, SsoConnection
-from app.models.enums import Role
+from app.models.enums import Role, UserStatus
 from app.models.org import OrganizationMember
 from app.models.user import User, UserRole
 from app.schemas.auth import CurrentUser
@@ -366,6 +366,16 @@ async def oidc_callback(
 
     user = await get_user_by_email(db, email)
     provisioned = False
+    if user is not None and user.status != UserStatus.active:
+        # A suspended or deleted account must not get a session just because the IdP vouches for its mailbox
+        # (password login and token refresh both refuse it; SSO was the one path that did not).
+        await record_audit(
+            db, action="sso.login", outcome="failure", actor_user_id=user.id,
+            ip=client_ip(request), resource_type="sso_connection",
+            resource_id=str(connection.id), reason="account_not_active",
+        )
+        await db.commit()  # persist the audit row; the HTTPException below rolls back anything uncommitted
+        raise SsoError("sso_account_not_active", status.HTTP_403_FORBIDDEN)
     if user is not None:
         # An IdP assertion must NEVER be allowed to adopt a pre-existing local
         # account. Every endpoint of this connection's IdP (issuer, client_id,

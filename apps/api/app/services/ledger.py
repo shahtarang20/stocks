@@ -160,11 +160,20 @@ async def post_transaction(
 
         # (3) Row-lock the affected accounts (Postgres; no-op on SQLite).
         account_ids = list({acct.id for acct, _d, _a in legs})
+        # populate_existing is REQUIRED, not cosmetic: the session keeps expired-on-commit off, so an
+        # account row the caller loaded earlier in this request is still in the identity map with the
+        # balance it had THEN. Without it the locked SELECT returns the fresh row but SQLAlchemy keeps the
+        # stale instance, and the recompute-and-write below silently overwrites a concurrent committer's
+        # credit/debit (lost update) -- exactly what the row lock is meant to prevent.
         locked = (
             await db.execute(
                 select(BillingAccount)
                 .where(BillingAccount.id.in_(account_ids))
+                # Deterministic lock order: two postings touching the same accounts in a different
+                # leg order must not take the row locks in opposite orders (deadlock).
+                .order_by(BillingAccount.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalars().all()
         by_id = {a.id: a for a in locked}

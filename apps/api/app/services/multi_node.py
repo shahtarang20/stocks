@@ -18,6 +18,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import constant_time_compare
 from app.db.base import utcnow
 from app.models.jobs import Job
 from app.models.node_group import GROUP_PLACED, NetworkBenchmark, NodeGroup, NodeGroupMember
@@ -65,7 +66,7 @@ def nonce_ok(nonce: str, prober_id: uuid.UUID, peer_id: uuid.UUID, now_unix: int
         return False
     if exp < now_unix or exp > now_unix + int(settings.MULTI_NODE_BENCHMARK_NONCE_TTL_SECONDS) + 5:
         return False
-    return hmac.compare_digest(make_nonce(prober_id, peer_id, exp), nonce)
+    return constant_time_compare(make_nonce(prober_id, peer_id, exp), nonce)
 
 
 def peer_proof(peer_signing_key: str, nonce: str, prober_id: uuid.UUID) -> str:
@@ -115,7 +116,7 @@ async def store_benchmark(db: AsyncSession, prober: ProviderMachine, body: dict,
         nonce, proof = str(r.get("nonce") or ""), str(r.get("peer_proof") or "")
         if not nonce_ok(nonce, prober.id, peer.id, int(now.timestamp())):
             continue
-        if not hmac.compare_digest(peer_proof(peer.signing_key, nonce, prober.id), proof):
+        if not constant_time_compare(peer_proof(peer.signing_key, nonce, prober.id), proof):
             continue
         row = (await db.execute(select(NetworkBenchmark).where(
             NetworkBenchmark.from_machine_id == prober.id, NetworkBenchmark.to_machine_id == peer.id))).scalar_one_or_none()

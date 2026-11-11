@@ -12,13 +12,34 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.db.base import ensure_aware, utcnow
+from app.models.enums import UserStatus
 from app.models.provider import Provider, ProviderMachine
+from app.models.user import User
 from app.schemas.provider import HardwareOut, MachineDetailOut, MachineOut
 
 
 async def get_provider_by_user(db: AsyncSession, user_id: uuid.UUID) -> Provider | None:
     result = await db.execute(select(Provider).where(Provider.user_id == user_id))
     return result.scalar_one_or_none()
+
+
+async def blocked_provider_ids(db: AsyncSession, provider_ids) -> set[uuid.UUID]:
+    """Providers that may not receive new work: the provider row is not ``active`` (e.g. deleted) or its owner account
+    is suspended / deleted. An owner row that cannot be found does not block (never fail open into a hard error)."""
+    ids = {pid for pid in provider_ids if pid is not None}
+    if not ids:
+        return set()
+    rows = (
+        await db.execute(
+            select(Provider.id, Provider.status, User.status)
+            .outerjoin(User, User.id == Provider.user_id)
+            .where(Provider.id.in_(ids))
+        )
+    ).all()
+    return {
+        pid for pid, pstatus, ustatus in rows
+        if pstatus != "active" or (ustatus is not None and ustatus != UserStatus.active)
+    }
 
 
 def _machine_query():

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.deps import client_ip, get_current_user
+from app.models.jobs import Job
 from app.models.marketplace import ResourceReservation
 from app.schemas.auth import CurrentUser
 from app.schemas.marketplace import ReservationOut, ReservationReleaseOut
@@ -71,6 +72,23 @@ async def release_reservation(
     reservation = await _get_own_reservation(db, current.id, reservation_id)
     if reservation is None:
         raise _RESERVATION_NOT_FOUND
+
+    # A reservation backing a job that is placed / running / verifying holds the machine capacity that job is using.
+    # Releasing it would free that slot while the work is still executing and let the scheduler oversubscribe the
+    # machine. The job releases it itself when it ends (leases.release_job_reservation).
+    if reservation.status == "active":
+        in_use = (
+            await db.execute(
+                select(Job.id)
+                .where(
+                    Job.reservation_id == reservation.id,
+                    Job.status.in_(("reserved", "running", "verifying")),
+                )
+                .limit(1)
+            )
+        ).first()
+        if in_use is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="reservation_in_use")
 
     # Idempotent: releasing an already-released reservation succeeds (no error).
     if reservation.status == "active":

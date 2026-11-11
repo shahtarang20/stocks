@@ -31,7 +31,7 @@ import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,7 @@ from app.core.config import settings
 from app.db.base import ensure_aware, utcnow
 from app.models.billing import BillingAccount, LedgerEntry, LedgerTransaction
 from app.models.jobs import Job
+from app.models.sessions import ComputeSession
 from app.models.spend import SPEND_PERIODS, SPEND_SCOPES, SpendAlert, SpendLimit
 from app.services import ledger
 
@@ -150,7 +151,15 @@ async def _project_job_references(db: AsyncSession, project_id: uuid.UUID) -> li
     rows = (
         await db.execute(select(Job.id).where(Job.project_id == project_id))
     ).scalars().all()
-    return [str(job_id) for job_id in rows]
+    references = [str(job_id) for job_id in rows]
+    # Interactive sessions hold and capture funds exactly like jobs do (reference_type "session") and carry a
+    # project_id; check_spend_allowed() already enforces project budgets on them, so their spend must be COUNTED
+    # here too or a project cap could be dodged by running sessions instead of jobs.
+    session_rows = (
+        await db.execute(select(ComputeSession.id).where(ComputeSession.project_id == project_id))
+    ).scalars().all()
+    references.extend(str(session_id) for session_id in session_rows)
+    return references
 
 
 async def period_spend_minor(
@@ -189,13 +198,19 @@ async def period_spend_minor(
                 )
             )
         )
-        conditions.append(LedgerTransaction.reference_type == "job")
+        conditions.append(LedgerTransaction.reference_type.in_(("job", "session")))
         conditions.append(LedgerTransaction.reference_id.in_(references))
     elif scope == "customer":
         account = await _customer_account(db, customer_id)
         if account is None:
             return 0
         conditions.append(LedgerEntry.account_id == account.id)
+        # A failed/cancelled TOKEN WITHDRAWAL is returned to the customer as a ledger "refund" too. It is not a
+        # reversal of spend, so counting it as one would silently lower the period's spend and let the customer
+        # exceed their own budget (withdraw, get refunded, spend the "refund" headroom).
+        conditions.append(
+            or_(LedgerTransaction.reference_type.is_(None), LedgerTransaction.reference_type != "withdrawal")
+        )
     else:
         # api_key scope is not attributable: nothing in the schema links a job
         # (and therefore a ledger transaction) back to the API key that created

@@ -54,6 +54,11 @@ async def upload_artifact(
     except ValueError:
         raise _INVALID_GRANT
 
+    # artifacts.kind is String(32): a longer header would store the bytes and then fail the INSERT (HTTP 500 on
+    # Postgres, and an orphaned object), so refuse it up front.
+    if len(x_artifact_kind or "") > 32:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_artifact_kind")
+
     job = await db.get(Job, job_id)
     if job is None:
         raise _NOT_FOUND

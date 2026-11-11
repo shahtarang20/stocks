@@ -308,6 +308,13 @@ async def _advance_in_flight(db: AsyncSession, chain: PayoutChain, out: dict[str
     if (utcnow() - started).total_seconds() > int(settings.WITHDRAWALS_TIMEOUT_SECONDS):
         used = await chain.nonce(wd.hot_wallet, "latest")
         if wd.nonce is not None and used > wd.nonce:
+            # "The nonce is spent and we have no receipt" only proves another transaction used it if OUR transaction
+            # was not mined between the receipt lookup above and this nonce read (it consumes the same nonce, and a
+            # lagging node can also answer the two calls from different heights). Look again before refunding: refunding
+            # a transfer that did mine pays the user twice.
+            if await chain.receipt(wd.tx_hash) is not None:
+                await db.commit()
+                return True  # mined after all: the next pass takes the receipt path (confirmations, paid out / revert)
             # The nonce is spent by some other transaction and ours has no receipt: it can never mine.
             await refund_withdrawal(db, wd, "timeout_nonce_used")
             await db.commit()

@@ -228,9 +228,9 @@ async def accept_invitation(
     """
     invitation = (
         await db.execute(
-            select(OrganizationInvitation).where(
-                OrganizationInvitation.token_hash == hash_token(raw_token or "")
-            )
+            select(OrganizationInvitation)
+            .where(OrganizationInvitation.token_hash == hash_token(raw_token or ""))
+            .with_for_update()  # single-use: serialise concurrent redemptions
         )
     ).scalar_one_or_none()
     if invitation is None:

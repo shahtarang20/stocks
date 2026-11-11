@@ -18,6 +18,7 @@ import decimal
 import difflib
 import json
 import logging
+import math
 import secrets
 import uuid
 from typing import Any
@@ -26,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import constant_time_compare
 from app.db.base import utcnow
 from app.models.jobs import Job
 from app.models.model_registry import ModelVersion
@@ -60,6 +62,30 @@ def verify_output(
         valid = has_text
         if not has_text:
             reason = "missing_text_field"
+
+    elif workload_type == "embeddings":
+        # Real (hardware) /v1/embeddings runs as an "embeddings" job: one non-empty, finite vector per input text.
+        # Without this branch such a job fell through to "unknown_workload" and was always failed and refunded.
+        texts = job_input.get("input") if isinstance(job_input, dict) else None
+        vectors = output.get("embeddings")
+        shape_ok = (
+            isinstance(vectors, list)
+            and len(vectors) > 0
+            and all(
+                isinstance(v, list)
+                and len(v) > 0
+                and all(
+                    isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v
+                )
+                for v in vectors
+            )
+        )
+        count_ok = shape_ok and (not isinstance(texts, list) or len(vectors) == len(texts))
+        checks["output_has_embedding_vectors"] = shape_ok
+        checks["vector_count_matches_input"] = count_ok
+        valid = bool(count_ok)
+        if not valid:
+            reason = "malformed_embeddings"
 
     elif workload_type == "batch-inference":
         items = job_input.get("items")
@@ -606,7 +632,7 @@ async def check_model_identity(
         logger.info("model identity: no pinned digest for model=%s", job.model)
         return None
 
-    passed = secrets.compare_digest(expected, reported)
+    passed = constant_time_compare(expected, reported)
     return await _record_result(
         db,
         job_id=job.id,

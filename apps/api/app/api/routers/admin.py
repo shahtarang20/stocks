@@ -369,6 +369,10 @@ async def suspend_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
     if user.id == current.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot_suspend_self")
+    if user.status == UserStatus.deleted:
+        # A deleted account is anonymised and final; "suspending" it would turn it into a suspended one that
+        # reinstate then reactivates (the reinstate route refuses only status == deleted).
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_deleted")
     user.status = UserStatus.suspended
     await record_audit(
         db, action="admin.user.suspend", outcome="success", actor_user_id=current.id,

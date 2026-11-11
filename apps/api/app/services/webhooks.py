@@ -47,6 +47,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import constant_time_compare
 from app.db.base import ensure_aware, utcnow
 from app.models.webhooks import WebhookDelivery, WebhookEndpoint
 
@@ -159,7 +160,7 @@ def sign_stored(secret_hash: str, timestamp: str, raw_body: str) -> str:
 
 def verify_signature(secret: str, timestamp: str, raw_body: str, signature: str) -> bool:
     """Constant-time check used by tests and by any first-party receiver."""
-    return hmac.compare_digest(compute_signature(secret, timestamp, raw_body), signature)
+    return constant_time_compare(compute_signature(secret, timestamp, raw_body), signature)
 
 
 def signature_header_name() -> str:

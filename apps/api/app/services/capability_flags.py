@@ -126,6 +126,55 @@ def host_capabilities(machine: Any) -> HostCapabilities:
     return HostCapabilities(legacy=False, os=os_name, flags=flags, has_capabilities=bool(caps))
 
 
+HOST_KINDS = ("dedicated", "shared")
+
+
+def machine_host_kind(machine: Any) -> str:
+    """``"dedicated"``, ``"shared"`` or ``"unspecified"``.
+
+    SELF-DECLARED by the host (``host_kind`` in the heartbeat health block): ``dedicated`` means the machine does nothing
+    but run ComputeCoin jobs (a server), ``shared`` means a person also uses it (a laptop or gaming PC). A Windows host is
+    ALWAYS ``shared`` whatever it says: it exists to be a PC its owner also uses. A host that never declared one is
+    ``unspecified`` and is not treated as dedicated.
+    """
+    health = getattr(machine, "last_health", None)
+    if not isinstance(health, dict):
+        return "unspecified"
+    platform = sanitize_platform(health.get("platform"))
+    if platform is not None and platform.get("os") == "windows":
+        return "shared"
+    kind = health.get("host_kind")
+    return kind if isinstance(kind, str) and kind in HOST_KINDS else "unspecified"
+
+
+_ACTIVE_JOB_STATES = ("queued", "reserved", "running")
+
+
+def job_risk_note(host_kind: str, job_status: str, attempts_made: int) -> str | None:
+    """A plain-language note for the customer about the host their job is on, or None when there is nothing to say.
+
+    Honest about what is known: ``host_kind`` is declared by the host. Never says the job WILL be interrupted."""
+    notes: list[str] = []
+    if attempts_made > 0:
+        notes.append(
+            "This job was re-run on another host after the previous host stopped it. You are not charged for the "
+            "earlier attempt."
+        )
+    if host_kind == "shared" and job_status in _ACTIVE_JOB_STATES:
+        notes.append(
+            "This job is on a shared PC: its owner also uses it, so the job may run slower or be moved to another host "
+            "if the owner needs the graphics card. You are never charged for an interrupted attempt. For important "
+            "work, choose a dedicated host."
+        )
+    return " ".join(notes) or None
+
+
+def job_requires_dedicated(job: Any) -> bool:
+    """The customer asked for a dedicated host (``data_policy.require_dedicated_host``)."""
+    policy = getattr(job, "data_policy", None)
+    return isinstance(policy, dict) and policy.get("require_dedicated_host") is True
+
+
 def machine_platform_view(machine: Any) -> tuple[dict[str, str] | None, list[str] | None]:
     """(platform, capabilities) for admin output: sanitised, None when the agent never sent them."""
     health = getattr(machine, "last_health", None)
@@ -232,9 +281,11 @@ def job_required_flags(job: Any) -> list[tuple[str, ...]]:
 def capability_refusal(job: Any, machine: Any) -> str | None:
     """Why ``machine`` may not receive ``job`` on capability grounds, or None.
 
-    Reason codes: ``windows_host_<kind>`` (X5) and ``capability_missing_<flag>[_or_<flag>]``.
+    Reason codes: ``host_not_dedicated``, ``windows_host_<kind>`` (X5) and ``capability_missing_<flag>[_or_<flag>]``.
     """
     host = host_capabilities(machine)
+    if job_requires_dedicated(job) and machine_host_kind(machine) != "dedicated":
+        return "host_not_dedicated"  # the customer wants a machine nobody else is using; only a declared dedicated host
     if host.is_windows:
         kind = x5_violation(job)
         if kind:

@@ -20,6 +20,7 @@ from eth_account.messages import encode_defunct
 from eth_utils import is_address, to_checksum_address
 
 from app.core.config import settings
+from app.core.security import constant_time_compare
 
 _PREFIX = "ComputeCoin wallet link"
 _TAG_RE = re.compile(r"^Tag: ([0-9a-f]{64})$", re.M)
@@ -63,11 +64,11 @@ def verify_link(
     if m is None:
         raise WalletLinkError("message_invalid")
     body = message[: m.start()].rstrip("\n")
-    if not hmac.compare_digest(m.group(1), _tag(body)):
+    if not constant_time_compare(m.group(1), _tag(body)):
         raise WalletLinkError("message_invalid")  # not issued by us, or edited
 
     expected = build_message(user_id, addr, chain_id, _parse_issued(body))
-    if not hmac.compare_digest(expected, message):
+    if not constant_time_compare(expected, message):
         raise WalletLinkError("message_mismatch")  # wrong account, address or chain
 
     age = (now - _parse_issued(body)).total_seconds()

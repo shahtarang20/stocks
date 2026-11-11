@@ -170,7 +170,11 @@ async def compute_signals(
     job_rows = (
         await db.execute(
             select(Job.status, Job.finished_at).where(
-                Job.machine_id.in_(machine_ids), Job.finished_at.is_not(None)
+                Job.machine_id.in_(machine_ids),
+                Job.finished_at.is_not(None),
+                # Bounded in SQL: this runs on every finished job, so reading a busy provider's whole history each
+                # time made result handling O(all jobs ever run). The Python check below stays as the exact guard.
+                Job.finished_at >= window_start,
             )
         )
     ).all()
@@ -196,7 +200,7 @@ async def compute_signals(
         await db.execute(
             select(VerificationResult.passed, VerificationResult.created_at)
             .join(Job, VerificationResult.job_id == Job.id)
-            .where(Job.machine_id.in_(machine_ids))
+            .where(Job.machine_id.in_(machine_ids), VerificationResult.created_at >= window_start)
         )
     ).all()
     for passed, created_at in verification_rows:
@@ -502,6 +506,24 @@ async def slash_provider(
 
     provider_acct = await ledger.get_provider_account(db, provider_id)
     platform_rev = await ledger.get_platform_account(db, "platform_revenue")
+
+    # A replay (retry after a lost response, double click) must come back as the SAME slash. The cap check below
+    # counts money that already moved, so evaluated first it refuses the replay of a slash that used the whole cap
+    # ("slash_cap_exceeded") even though the first call succeeded.
+    from app.models.billing import LedgerTransaction
+
+    replayed = (
+        await db.execute(
+            select(SlashEvent)
+            .join(LedgerTransaction, SlashEvent.ledger_txn_id == LedgerTransaction.id)
+            .where(
+                LedgerTransaction.idempotency_key == f"slash:{idempotency_key}",
+                SlashEvent.provider_id == provider_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if replayed is not None:
+        return replayed
 
     fraction = decimal.Decimal(str(settings.SLASH_MAX_FRACTION))
     if job_id is not None:

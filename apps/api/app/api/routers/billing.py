@@ -95,6 +95,11 @@ async def purchase_credits(
     current: CurrentUser = Depends(require_verified_user),
     db: AsyncSession = Depends(get_db),
 ) -> AccountOut:
+    # This endpoint is the SIMULATED top-up: it mints credits from nothing, with no payment behind them. With a real
+    # payment rail configured, credits may only come from a verified Stripe webhook; leaving this open would let any
+    # verified user fund themselves (and then withdraw tokens against those credits).
+    if settings.PAYMENT_PROVIDER == "stripe":
+        raise HTTPException(status.HTTP_409_CONFLICT, "simulated_topup_disabled_use_checkout")
     account = await ledger.get_or_create_customer_account(db, current.id)
     external = await ledger.get_platform_account(db, "external")
     amount_minor = ledger.to_minor(body.amount)

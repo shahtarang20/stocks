@@ -365,7 +365,7 @@ async def upload_checkpoint(
     job = await db.get(Job, job_id)
     if job is None:
         raise _JOB_NOT_FOUND
-    if x_checkpoint_step < 0:
+    if x_checkpoint_step < 0 or x_checkpoint_step > 2_147_483_647:  # training_checkpoints.step is a 32-bit INTEGER
         raise HTTPException(status_code=422, detail="invalid_step")
     metrics: dict | None = None
     if x_checkpoint_metrics:

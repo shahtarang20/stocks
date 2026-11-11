@@ -500,9 +500,11 @@ async def _active_slots(machine_id: str) -> int:
     return sum(r.slots for r in rows)
 
 
-async def test_lease_recovery_requeues_then_times_out(client):
+async def test_lease_recovery_requeues_then_times_out(client, monkeypatch):
     from app.services.leases import recover_expired_leases
 
+    # About the CUSTOMER's retry budget alone: take the platform's free host-failure retry out of it.
+    monkeypatch.setattr(settings, "HOST_FAILURE_FREE_RETRIES", 0)
     await seed_echo_model()
     m = await create_listable_machine(client, "p-lr@x.com", hostname="lr")
     cust = await _customer(client, "c-lr@x.com")

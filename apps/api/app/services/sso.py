@@ -149,10 +149,26 @@ _BLOCKED_NETWORKS = (
 )
 
 
+_NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+
+
 def _is_blocked_ip(ip: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
+        return True
+    if isinstance(addr, ipaddress.IPv6Address):
+        # An IPv4-mapped / 6to4 / NAT64-style AAAA record (``::ffff:169.254.169.254``) is dialled as the IPv4 address
+        # on a dual-stack host, but ``addr in <IPv4 network>`` is always False for an IPv6 address, so it would slip
+        # past every IPv4 range below. Judge the embedded IPv4 address instead.
+        embedded = addr.ipv4_mapped or addr.sixtofour
+        if embedded is not None:
+            return _is_blocked_ip(str(embedded))
+        if addr in _NAT64_NETWORK:
+            return _is_blocked_ip(str(ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)))
+    if not addr.is_global:
+        # Anything that is not a public address: also covers shared address space 100.64.0.0/10 (carrier-grade NAT,
+        # where some clouds put their metadata service, e.g. 100.100.100.200), reserved and documentation ranges.
         return True
     if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
         return True
@@ -204,6 +220,17 @@ class OidcClient(Protocol):
         ...
 
 
+def _json_object(resp: httpx.Response, code: str) -> dict[str, Any]:
+    """The IdP's JSON body, or a clean SsoError: an IdP answering 200 with HTML / a list is not our 500."""
+    try:
+        body = resp.json()
+    except ValueError:
+        raise SsoError(code)
+    if not isinstance(body, dict):
+        raise SsoError(code)
+    return body
+
+
 class HttpxOidcClient:
     """Real transport: SSRF-guarded, short-timeout httpx calls."""
 
@@ -231,28 +258,37 @@ class HttpxOidcClient:
             cid, csec = basic_auth
             raw = f"{quote(cid, safe='')}:{quote(csec, safe='')}".encode("utf-8")
             headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(token_endpoint, data=data, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(token_endpoint, data=data, headers=headers)
+        except httpx.HTTPError:
+            raise SsoError("sso_token_exchange_failed", status.HTTP_502_BAD_GATEWAY)
         if resp.status_code != 200:
             raise SsoError("sso_token_exchange_failed")
-        return resp.json()
+        return _json_object(resp, "sso_token_exchange_failed")
 
     async def fetch_jwks(self, jwks_uri: str) -> dict[str, Any]:
         assert_public_http_url(jwks_uri)
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.get(jwks_uri)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.get(jwks_uri)
+        except httpx.HTTPError:
+            raise SsoError("sso_jwks_fetch_failed", status.HTTP_502_BAD_GATEWAY)
         if resp.status_code != 200:
             raise SsoError("sso_jwks_fetch_failed")
-        return resp.json()
+        return _json_object(resp, "sso_jwks_fetch_failed")
 
     async def discover(self, issuer: str) -> dict[str, Any]:
         url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
         assert_public_http_url(url)
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.get(url)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.get(url)
+        except httpx.HTTPError:
+            raise SsoError("sso_discovery_failed", status.HTTP_502_BAD_GATEWAY)
         if resp.status_code != 200:
             raise SsoError("sso_discovery_failed")
-        return resp.json()
+        return _json_object(resp, "sso_discovery_failed")
 
 
 def get_oidc_client() -> OidcClient:
@@ -420,6 +456,9 @@ def extract_email(claims: dict[str, Any]) -> str:
     email = claims.get("email")
     if not email or not isinstance(email, str) or "@" not in email:
         raise SsoError("sso_email_claim_missing")
-    if claims.get("email_verified") is False:
+    verified = claims.get("email_verified")
+    # Some IdPs (e.g. AWS Cognito, older Azure AD tenants) send the claim as the STRING "false"; `is False` alone
+    # would let an unverified mailbox through.
+    if verified is False or (isinstance(verified, str) and verified.strip().lower() in ("false", "0", "no")):
         raise SsoError("sso_email_not_verified")
     return email.strip().lower()

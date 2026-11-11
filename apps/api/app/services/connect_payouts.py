@@ -412,13 +412,21 @@ async def create_connect_payout(
 
     payout.request_txn_id = request_txn.id
 
-    transfer = client.create_transfer(
-        amount_minor=amount_minor,
-        currency=earnings.currency.lower() if earnings.currency else "usd",
-        destination=account.stripe_account_id,
-        idempotency_key=request_key,
-        metadata={"payout_id": str(payout.id), "provider_id": str(provider.id)},
-    )
+    try:
+        transfer = client.create_transfer(
+            amount_minor=amount_minor,
+            # Credits are USD-pegged cents. ``earnings.currency`` is the ledger's own label ("USDC_CREDITS"), which is
+            # not an ISO currency and made every live Stripe transfer fail.
+            currency="usd",
+            destination=account.stripe_account_id,
+            idempotency_key=request_key,
+            metadata={"payout_id": str(payout.id), "provider_id": str(provider.id)},
+        )
+    except Exception as exc:  # noqa: BLE001 - any Stripe/transport failure must leave NO ledger effect
+        logger.error("connect transfer failed for payout %s: %s", payout.id, exc)
+        # Raising rolls the request transaction back: the earnings debit and the payout row are not persisted, so the
+        # provider keeps the money and may retry (Stripe's idempotency key protects a transfer that did go through).
+        raise ConnectError("connect_transfer_failed", status_code=502) from exc
     transfer_id = str(transfer.get("id") or "")
 
     settle_txn = await ledger.post_transaction(
@@ -559,6 +567,10 @@ async def handle_connect_webhook(
         }
 
     if event_type in ("transfer.failed", "payout.failed", "transfer.reversed"):
+        if event_type == "transfer.reversed" and data_object.get("reversed") is False:
+            # Stripe also sends transfer.reversed for a PARTIAL reversal (``reversed`` stays false until the whole
+            # transfer is reversed). Crediting the full payout back for a partial reversal would pay the provider twice.
+            return {"received": True, "event_id": event_id, "status": "partial_reversal_needs_review"}
         payout_id = (data_object.get("metadata") or {}).get("payout_id")
         if not payout_id:
             return {"received": True, "event_id": event_id, "status": "no_payout_reference"}

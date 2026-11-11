@@ -1,7 +1,12 @@
 name: Production Deploy
 
+# Deploys only AFTER the CI workflow has passed on main (never straight from a push), or when run by hand.
+# Both jobs use the `production` GitHub environment: add required reviewers to it (Settings > Environments >
+# production) to make every deploy wait for a person's approval.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -13,28 +18,47 @@ jobs:
   deploy-railway:
     name: Deploy Backend API & Worker to Railway
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'shahtarang20'
+    environment: production
+    if: >-
+      github.repository_owner == 'shahtarang20' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    # The token must be a JOB-level variable: a step's own `env:` is not visible to that step's `if:`, so the
+    # `if: env.RAILWAY_TOKEN != ''` below used to be false on every run and the deploy never happened.
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - name: Checkout Code
+      - name: Checkout the commit that passed CI
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Railway CLI
+        if: env.RAILWAY_TOKEN != ''
         run: npm install -g @railway/cli
 
       - name: Deploy to Railway
         if: env.RAILWAY_TOKEN != ''
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up --service api --detach || echo "Railway token not configured; skipping automatic dispatch."
+        # No `|| echo ...`: a failed deploy must fail this job, not be reported as a success.
+        run: railway up --service api --detach
+
+      - name: Railway token not configured
+        if: env.RAILWAY_TOKEN == ''
+        run: echo "RAILWAY_TOKEN is not set; nothing was deployed."
 
   deploy-vercel:
     name: Deploy Web Application to Vercel
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'shahtarang20'
+    environment: production
+    if: >-
+      github.repository_owner == 'shahtarang20' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
-      - name: Checkout Code
+      - name: Checkout the commit that passed CI
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
@@ -45,5 +69,7 @@ jobs:
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           working-directory: ./apps/web
           vercel-args: '--prod'
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Vercel token not configured
+        if: env.VERCEL_TOKEN == ''
+        run: echo "VERCEL_TOKEN is not set; nothing was deployed."

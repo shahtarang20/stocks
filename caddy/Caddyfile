@@ -28,3 +28,11 @@
     reverse_proxy web:3000
   }
 }
+
+# The web app is built with NEXT_PUBLIC_API_BASE_URL=https://api.<domain> (see docker-compose.prod.yml), and the API has
+# top-level routes (/auth, /projects, /provider, /orgs, ...) that collide with web pages (/admin, /provider), so the API is
+# served on its own host. Without this block nothing answered on api.<domain>. Needs a DNS record for it.
+api.{$DOMAIN:localhost} {
+  encode zstd gzip
+  reverse_proxy api:8000
+}

@@ -175,6 +175,25 @@ jobs:
           cache-dependency-path: contracts/package-lock.json
       - run: npm ci || npm install
       - run: npm test
+      # The launch-plan / pool validation library has its own offline tests; they never ran in CI.
+      - run: npm run test:js
+
+  sdk-typescript:
+    name: SDK typescript (typecheck, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
 
   security-scan:
     name: Dependency vulnerability scan

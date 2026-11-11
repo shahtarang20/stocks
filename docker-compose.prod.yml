@@ -65,6 +65,10 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* values are inlined into the client bundle at BUILD time; the runtime variable below does
+        # not change what the browser calls. apps/web/Dockerfile must declare ARG NEXT_PUBLIC_API_BASE_URL.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://api.computecoin.ai}
     container_name: computecoin-prod-web
     restart: unless-stopped
     environment:

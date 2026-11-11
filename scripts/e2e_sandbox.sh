@@ -52,11 +52,12 @@ for f in .netrc .npmrc .pypirc .git-credentials .config/git/credentials; do
   [ -e "$REAL_HOME/$f" ] && args+=(--ro-bind /dev/null "$REAL_HOME/$f")
 done
 
-# Blank every .env file in the repository (real credentials live there).
+# Blank every .env file in the repository (real credentials live there), including named ones such as
+# contracts/testnet.env and contracts/testnet-wallets.env, which hold private keys.
 while IFS= read -r envf; do
   args+=(--ro-bind /dev/null "$envf")
 done < <(find "$ROOT" -maxdepth 4 \( -name node_modules -o -name .venv -o -name .git -o -name .next -o -name .tools \) -prune -o \
-           -type f \( -name ".env" -o -name ".env.*" \) ! -name "*.example" -print 2>/dev/null)
+           -type f \( -name ".env" -o -name ".env.*" -o -name "*.env" \) ! -name "*.example" -print 2>/dev/null)
 
 # Environment: an allow-list, nothing inherited by accident (tokens in your shell do not enter).
 envargs=(

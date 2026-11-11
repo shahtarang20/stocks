@@ -391,16 +391,25 @@ rejected with 401 — verified by test.
 - **NVIDIA Container Toolkit**: Installed and configured as Docker default runtime (`nvidia-ctk runtime configure`).
 
 #### AMD Hosts (ROCm)
-- **ROCm Version**: ROCm 6.1.x or 6.2.x. Tested on RDNA3 (Radeon RX 7900 series) and CDNA (Instinct MI300X/MI250).
+- **ROCm Version**: ROCm 6.1.x or 6.2.x. Intended for RDNA3 (Radeon RX 7900 series) and CDNA (Instinct MI300X/MI250). AMD support has not yet been tried on a real AMD card (see the real-hardware checklist in `operations/amd-gpu-support-plan.md`).
 - **Driver & Groups**: Kernel driver with `/dev/kfd` and render nodes (`/dev/dri/renderD*`). The agent user must belong to both `render` and `video` groups (`sudo usermod -aG render,video $USER`).
 - **Agent AMD Extra**: The agent must be installed with the optional `amd` extra (`pip install -e ".[amd]"`), which pulls in `amdsmi` matching the host's ROCm version.
 - **Mixed-Vendor Hosts (D2 Policy)**: ComputeCoin requires exactly one GPU vendor per machine. If a host contains both NVIDIA and AMD GPUs, enrollment is refused unless `gpu_vendor = "nvidia"` or `gpu_vendor = "amd"` is pinned in `computecoin.toml` (or via `--gpu-vendor`).
 - **Isolation Tier (D5)**: AMD GPU jobs run under the `container` tier by default. gVisor, microVM and Confidential are always refused on AMD (Confidential needs a GPU confidential mode that current AMD GPUs do not have). Sealed and Sealed Pro on AMD are coded but OFF by default, behind three locks that must all be open: the server setting `AMD_SEALED_ENABLED`, a current attestation verdict that names a Sealed image for the machine, and the host's own `amd_sealed_enabled` agent setting. This path has not been proven on real hardware, and an owner decision on D5 is still pending, so do not advertise AMD Sealed.
 
+#### Dedicated or shared: tell customers what your machine is
+Set `host_kind` in `~/.computecoin/agent.toml` (Windows hosts always report `shared`):
+
+- `host_kind = "dedicated"` — the machine does nothing but run ComputeCoin jobs (a server).
+- `host_kind = "shared"` — you also use it (a laptop or gaming PC). Customers see a "Shared PC" label and a note that their job may run slower or be moved if you need the graphics card.
+- Not set — customers see "unspecified", and a customer who asked for dedicated hosts only is never placed on your machine.
+
+This is self-declared: say `dedicated` only if it is true. If a job is ended by the host (the machine goes to sleep, overheats, or is stopped), the platform re-runs it on another machine for free, the customer is not charged for the lost attempt, and the host earns nothing for it. Repeated losses count against the host's reputation.
+
 #### Windows hosts (planned, not available yet)
 A Windows 10 or 11 PC with an NVIDIA card is meant to be able to host later: a native Windows service plus a managed WSL2 distro that runs the same Linux agent
 (cross-platform plan W2 to W7). **Limits:** container tier only (no private tiers, BYOC, gVisor, microVM or multi-node jobs), NVIDIA only (AMD on Windows is a recorded
-no-go), and the agent yields to the PC's owner by default. Nothing here has run on a Windows machine yet and there is no installer. Requirements, enrolment and troubleshooting:
+no-go), and the agent yields to the PC's owner by default. Nothing here has run on a Windows machine yet; the installer is written but has never been built, signed or run. Requirements, enrolment and troubleshooting:
 [windows-host-guide.md](operations/windows-host-guide.md); plain-language website page: `/share/windows`. The Linux steps above do not change.
 
 **Windows and the command line.** Every operator command in this guide and in [operator-cheatsheet.md](operations/operator-cheatsheet.md) has a PowerShell equivalent; the

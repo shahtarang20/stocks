@@ -1,7 +1,7 @@
 # Sharing a Windows PC's GPU: host guide
 
 _Cross-platform plan W14 · Written 2026-11-06 · **Status: the Windows host is not released.** The pieces exist in the repository as code that has **never been run on a Windows machine**
-(supervisor, runtime provisioning, requirements checker, resource governance, updater); the installer does not exist yet. This guide describes how it is meant to work so that
+(supervisor, runtime provisioning, requirements checker, resource governance, updater); the installer is written (WiX source and install/uninstall actions in `provider-agent/windows/installer/`) but has never been built, signed or run. This guide describes how it is meant to work so that
 the owner, testers and support can check the product against it. Do not tell anyone they can install it today. Vendor statements are `TODO(verify-docs)` unless marked **[read 2026-11-06]**._
 
 Plain-language version for hosts: <https://computecoin.example/share/windows> (page source: `apps/web/src/app/(marketing)/share/windows/page.tsx`).
@@ -92,7 +92,7 @@ that are still open (plan section 9): the values in `agent.toml` (`governance_*`
 |---|---|
 | Pause for now | Website: set the machine to maintenance. Or `computecoin-agent service stop` (administrator). A running job is finished or failed over without charging the customer. |
 | Stop sharing completely, keep the software | `computecoin-agent service stop`, then `computecoin-agent service remove` removes the service registration. |
-| Remove everything | Uninstall from **Settings, Apps** (the installer's uninstaller): it removes the service, the `computecoin` distro (with its virtual disk), the firewall rules and the stored credential. `TODO`: written as a requirement (X14, W6.3 "no residue"), not built or tested yet. |
+| Remove everything | Uninstall from **Settings, Apps** (the installer's uninstaller): it removes the service, the `computecoin` distro (with its virtual disk), the firewall rules and the stored credential. The removal is written (`cleanup` in `provider-agent/windows/installer/msi_actions.py`, wired into `Package.wxs`; X14, W6.3 "no residue") but has never been run on a Windows machine, so the check below is how to prove it. |
 | Check nothing is left | `wsl --list --verbose` must not list `computecoin`; `Get-Service` must not list the ComputeCoin service; the folder `%ProgramData%\ComputeCoin` should be gone. |
 
 ## 8. Troubleshooting

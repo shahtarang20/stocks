@@ -55,6 +55,14 @@ Build auth ourselves in the FastAPI backend.
   secret.
 - Keys are scoped to a project, independently revocable, and carry their own
   rate limits.
+- **A key never carries operator authority.** A key acts as its owner, but the
+  roles `administrator`, `security_operator` and `support_operator` are dropped
+  from it (`API_KEY_DENIED_ROLES` in `apps/api/app/deps.py`). A key lives in CI
+  configs and env files; if an administrator's key leaked, it must not hand over
+  the platform. Operators use a login session (access token + CSRF) for operator
+  routes. If automation ever needs a narrow operator capability, add a
+  scoped-key feature (a scopes column and a migration) rather than widening this
+  rule.
 
 ### Audit logs
 

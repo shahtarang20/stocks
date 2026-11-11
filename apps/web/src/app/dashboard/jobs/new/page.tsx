@@ -97,6 +97,7 @@ const schema = z
       .int("Use a whole number, like 1.")
       .min(0, "Use 0 or more.")
       .max(10, "Use 10 or less."),
+    require_dedicated_host: z.boolean().optional(),
   })
   .superRefine((val, ctx) => {
     if (val.workload_type === "text-generation") {
@@ -184,6 +185,7 @@ export default function NewJobPage() {
       max_cost: "5.00",
       max_runtime_seconds: 300,
       max_retries: 1,
+      require_dedicated_host: false,
     },
   });
 
@@ -234,6 +236,9 @@ export default function NewJobPage() {
     };
     const machine = (values.machine_id ?? "").trim();
     if (machine) payload.machine_id = machine;
+    if (values.require_dedicated_host) {
+      payload.data_policy = { ...(payload.data_policy || {}), require_dedicated_host: true };
+    }
 
     if (
       values.isolation_tier &&
@@ -620,8 +625,25 @@ export default function NewJobPage() {
                     {errors.max_retries.message}
                   </p>
                 ) : (
-                  <p className="text-xs text-muted-foreground">How many times we move your job to another computer. 0 means never.</p>
+                  <p className="text-xs text-muted-foreground">How many times we move your job to another computer. 0 means never. If a computer fails or its owner stops your job, we try one more computer for free, and you are never charged for the stopped attempt.</p>
                 )}
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2">
+              <input
+                id="require_dedicated_host"
+                type="checkbox"
+                className="mt-1 h-4 w-4"
+                {...register("require_dedicated_host")}
+              />
+              <div className="space-y-0.5">
+                <Label htmlFor="require_dedicated_host">Only use dedicated computers (recommended for important work)</Label>
+                <p className="text-xs text-muted-foreground">
+                  A dedicated computer is a server that only runs ComputeCoin jobs. A shared PC (a laptop or gaming computer) is
+                  also used by its owner, so your job may run slower or be moved. Fewer computers qualify, so your job may wait longer.
+                  The computer's owner declares this.
+                </p>
               </div>
             </div>
 

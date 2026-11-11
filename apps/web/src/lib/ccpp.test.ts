@@ -173,3 +173,11 @@ describe("hex parsing is strict", () => {
     expect(Array.from(hexToBytes("00ff"))).toEqual([0, 255]);
   });
 });
+
+describe("canonicalJson matches Python json.dumps(ensure_ascii=True, sort_keys=True)", () => {
+  it("escapes DEL (0x7f) and non-ASCII, sorts keys at every depth", () => {
+    const text = (v: unknown) => new TextDecoder().decode(canonicalJson(v));
+    expect(text({ "k\x7f": "é\x7f" })).toBe('{"k\\u007f":"\\u00e9\\u007f"}');
+    expect(text({ b: { z: 1, a: "\u{1F600}" }, a: [] })).toBe('{"a":[],"b":{"a":"\\ud83d\\ude00","z":1}}');
+  });
+});

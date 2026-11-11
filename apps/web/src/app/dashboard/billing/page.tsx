@@ -392,7 +392,7 @@ export default function BillingPage() {
                         {e.amount}
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground md:table-cell">
-                        {e.reference ? <CopyId id={e.reference} length={12} label="Copy reference" /> : "—"}
+                        {e.reference_id ?? e.reference ? <CopyId id={(e.reference_id ?? e.reference) as string} length={12} label="Copy reference" /> : "—"}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         <RelativeTime iso={e.created_at} />

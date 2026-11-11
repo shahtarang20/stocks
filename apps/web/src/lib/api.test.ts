@@ -117,3 +117,23 @@ describe("CSRF token recovery after a reload (web and API on different origins)"
     expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toMatch(/\/auth\/csrf$/);
   });
 });
+
+describe("settlement requests", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the payload as one JSON object, not a JSON-encoded string", async () => {
+    setStoredTokens("access-1", "refresh-1", "csrf-1");
+    const fetchMock = vi.fn(async () => jsonResponse(200, {}));
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = { job_id: "j1", final_cost_units: "10", platform_fee_units: "1" };
+
+    await api.issueSettlementVoucher("access-1", payload);
+    await api.confirmSettlement("access-1", { job_id: "j1", settle_tx_hash: "0x" + "a".repeat(64) });
+    await api.confirmRefund("access-1", { job_id: "j1", refund_tx_hash: "0x" + "b".repeat(64) });
+
+    for (const call of fetchMock.mock.calls as unknown as [string, RequestInit][]) {
+      expect(typeof JSON.parse(call[1].body as string)).toBe("object");
+    }
+    expect(JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toEqual(payload);
+  });
+});

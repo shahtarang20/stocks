@@ -97,11 +97,12 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 // Matches Python's json.dumps(sort_keys=True, separators=(",", ":")): keys sorted at every
-// depth and non-ASCII escaped as \uXXXX (ensure_ascii). A replacer array would instead act as
+// depth and everything outside printable ASCII escaped as \uXXXX (ensure_ascii escapes DEL, 0x7f, too;
+// JSON.stringify leaves it as is, so the range starts there). A replacer array would instead act as
 // a key allowlist at every depth and silently drop nested keys.
 export function canonicalJson(data: unknown): Uint8Array {
   const str = JSON.stringify(sortKeysDeep(data)).replace(
-    /[\u0080-￿]/g,
+    /[\u007f-\uffff]/g,
     (ch) => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0")
   );
   return new TextEncoder().encode(str);

@@ -41,6 +41,7 @@ import {
   type OnChainTransactionResponse,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { parseChainReceipt, type ChainReceipt } from "@/lib/chain-receipt";
 
 function formatUnits(weiStr?: string | null): string {
   if (!weiStr) return "0";
@@ -126,12 +127,12 @@ export default function AdminSettlementPage() {
   });
 
   const confirmSettlementMutation = useMutation({
-    mutationFn: async (jobId: string) => {
+    mutationFn: async (v: { jobId: string; receipt: ChainReceipt }) => {
       if (!accessToken) return;
       return api.confirmSettlement(accessToken, {
-        job_id: jobId,
-        settle_tx_hash: "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(""),
-        block_number: 104523,
+        job_id: v.jobId,
+        settle_tx_hash: v.receipt.txHash,
+        block_number: v.receipt.blockNumber,
       });
     },
     onSuccess: () => {
@@ -146,12 +147,12 @@ export default function AdminSettlementPage() {
   });
 
   const confirmRefundMutation = useMutation({
-    mutationFn: async (jobId: string) => {
+    mutationFn: async (v: { jobId: string; receipt: ChainReceipt }) => {
       if (!accessToken) return;
       return api.confirmRefund(accessToken, {
-        job_id: jobId,
-        refund_tx_hash: "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(""),
-        block_number: 104524,
+        job_id: v.jobId,
+        refund_tx_hash: v.receipt.txHash,
+        block_number: v.receipt.blockNumber,
       });
     },
     onSuccess: () => {
@@ -164,6 +165,32 @@ export default function AdminSettlementPage() {
       setActionError(err?.message || "We could not mark this as refunded. Refresh the page and try again.");
     },
   });
+
+  // The transaction must already exist on the chain. Ask for its real hash and block; never invent them.
+  const askForReceipt = (what: "payout" | "refund"): ChainReceipt | null => {
+    const hash = window.prompt(`Paste the transaction hash of the on-chain ${what} (0x followed by 64 characters).`);
+    if (hash === null) return null;
+    const block = window.prompt(`Enter the block number of that ${what} transaction.`);
+    if (block === null) return null;
+    const parsed = parseChainReceipt(hash, block);
+    if (!parsed.ok) {
+      setActionError(parsed.error);
+      setActionSuccess(null);
+      return null;
+    }
+    setActionError(null);
+    return parsed.receipt;
+  };
+
+  const handleConfirmSettlement = (jobId: string) => {
+    const receipt = askForReceipt("payout");
+    if (receipt) confirmSettlementMutation.mutate({ jobId, receipt });
+  };
+
+  const handleConfirmRefund = (jobId: string) => {
+    const receipt = askForReceipt("refund");
+    if (receipt) confirmRefundMutation.mutate({ jobId, receipt });
+  };
 
   const copyToClipboard = (text: string, keyName: string) => {
     navigator.clipboard.writeText(text);
@@ -535,7 +562,7 @@ export default function AdminSettlementPage() {
                             size="sm"
                             variant="outline"
                             className="text-xs h-7"
-                            onClick={() => confirmSettlementMutation.mutate(escrow.job_id)}
+                            onClick={() => handleConfirmSettlement(escrow.job_id)}
                           >
                             Pay the host
                           </Button>
@@ -543,7 +570,7 @@ export default function AdminSettlementPage() {
                             size="sm"
                             variant="ghost"
                             className="text-xs h-7 text-rose-400 hover:text-rose-300"
-                            onClick={() => confirmRefundMutation.mutate(escrow.job_id)}
+                            onClick={() => handleConfirmRefund(escrow.job_id)}
                           >
                             Refund the customer
                           </Button>

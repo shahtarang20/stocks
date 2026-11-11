@@ -21,7 +21,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isReady && !isAuthenticated) {
-      const next = encodeURIComponent(pathname || "/dashboard");
+      // Keep the query string too (e.g. /dashboard/sessions?kit=...), or signing in lands on the bare page.
+      const next = encodeURIComponent(`${pathname || "/dashboard"}${window.location.search}`);
       router.replace(`/login?next=${next}`);
     }
   }, [isReady, isAuthenticated, pathname, router]);

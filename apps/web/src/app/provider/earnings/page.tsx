@@ -171,7 +171,7 @@ export default function ProviderEarningsPage() {
                           {e.amount}
                         </TableCell>
                         <TableCell className="hidden text-muted-foreground md:table-cell">
-                          <CopyId id={e.reference ?? e.job_id} length={12} label="Copy reference" />
+                          {e.reference_id ?? e.reference ?? e.job_id ? <CopyId id={(e.reference_id ?? e.reference ?? e.job_id) as string} length={12} label="Copy reference" /> : "—"}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           <RelativeTime iso={e.created_at} />

@@ -40,18 +40,23 @@ export function FileUpload({
 
   function pick(file: File | undefined) {
     if (!file) return;
-    up.current?.pause();
+    const previous = up.current;
     setName(file.name);
     onCleared();
     const u = createUploader({
       token,
       file,
       onProgress: (p) => {
+        // A replaced uploader may still be hashing or sending: whatever it reports now belongs to the OLD file
+        // and must not overwrite this one's progress or hand the old file back as the input.
+        if (up.current !== u) return;
         setProgress(p);
         if (p.phase === "done" && p.file) onUploaded(p.file);
       },
     });
     up.current = u;
+    // pause() cannot stop a hash that is still running (the old upload would carry on and finish); cancel() does.
+    void previous?.cancel();
     void u.start();
   }
 

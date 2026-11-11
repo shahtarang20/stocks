@@ -498,6 +498,16 @@ export default function JobDetailPage() {
 
             <p className="mt-4 text-sm text-muted-foreground">{jobStatusHelp(job.status)}</p>
 
+            {job.risk_note ? (
+              <div
+                className="mt-4 flex items-start gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-muted-foreground"
+                role="note"
+              >
+                <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{job.risk_note}</span>
+              </div>
+            ) : null}
+
             {job.error_code || job.error_message ? (
               <div className="mt-4 flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />

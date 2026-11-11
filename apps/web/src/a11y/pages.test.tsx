@@ -58,6 +58,7 @@ describe("axe: zero serious or critical violations", () => {
   it("provider setup guide", () => check(() => import("@/app/provider/onboarding/page")));
   it("help and glossary", () => check(() => import("@/app/(marketing)/help/page")));
   it("become a host (marketing)", () => check(() => import("@/app/(marketing)/providers/page")));
+  it("what you can do", () => check(() => import("@/app/(marketing)/what-you-can-do/page")));
   it("share a Windows PC", () => check(() => import("@/app/(marketing)/share/windows/page")));
   it("kit catalogue", () => check(() => import("@/app/dashboard/kits/page")));
   it("kit job wizard", () => check(() => import("@/app/dashboard/kits/[slug]/page")));

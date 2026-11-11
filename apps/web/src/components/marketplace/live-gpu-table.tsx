@@ -55,6 +55,7 @@ export function LiveGpuTable() {
   const [region, setRegion] = useState("");
   const [workload, setWorkload] = useState("");
   const [verification, setVerification] = useState("");
+  const [hostKind, setHostKind] = useState("");
   const [page, setPage] = useState(1);
 
   const [quoteTarget, setQuoteTarget] = useState<MarketplaceMachine | null>(
@@ -72,8 +73,9 @@ export function LiveGpuTable() {
     if (region.trim()) p.region = region.trim();
     if (workload.trim()) p.workload = workload.trim();
     if (verification) p.verification_status = verification;
+    if (hostKind === "dedicated" || hostKind === "shared") p.host_kind = hostKind;
     return p;
-  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, verification, page]);
+  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, verification, hostKind, page]);
 
   const query = useQuery({
     queryKey: ["marketplace", "machines", params],
@@ -95,6 +97,7 @@ export function LiveGpuTable() {
     setRegion("");
     setWorkload("");
     setVerification("");
+    setHostKind("");
     setPage(1);
   }
 
@@ -233,6 +236,22 @@ export function LiveGpuTable() {
               <option value="detected">Reported by the computer</option>
             </select>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="f-kind">Kind of computer</Label>
+            <select
+              id="f-kind"
+              className={selectClass}
+              value={hostKind}
+              onChange={(e) => {
+                setHostKind(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">Any</option>
+              <option value="dedicated">Dedicated (a server nobody else uses)</option>
+              <option value="shared">Shared (a PC its owner also uses)</option>
+            </select>
+          </div>
         </div>
         <div className="mt-4 flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
@@ -341,6 +360,19 @@ export function LiveGpuTable() {
                           className="border-primary/30 text-primary bg-primary/10 text-[10px] uppercase font-mono px-1.5 py-0"
                         >
                           {m.gpu_runtime}
+                        </Badge>
+                      ) : null}
+                      {m.host_kind === "dedicated" || m.host_kind === "shared" ? (
+                        <Badge
+                          variant="neutral"
+                          title={
+                            m.host_kind === "dedicated"
+                              ? "A server that only runs ComputeCoin jobs. Declared by the host."
+                              : "A PC its owner also uses. Your job may run slower or be moved to another computer. Declared by the host."
+                          }
+                          className="text-[10px] px-1.5 py-0"
+                        >
+                          {m.host_kind === "dedicated" ? "Dedicated" : "Shared PC"}
                         </Badge>
                       ) : null}
                     </div>

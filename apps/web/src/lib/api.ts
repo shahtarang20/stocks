@@ -177,6 +177,8 @@ export interface MarketplaceMachine {
   gpu_vendor?: string | null;
   gpu_runtime?: string | null;
   gpu_runtime_version?: string | null;
+  /** "dedicated" (a server nobody else uses), "shared" (a PC its owner also uses) or "unspecified". Declared by the host. */
+  host_kind?: "dedicated" | "shared" | "unspecified" | string;
   [key: string]: unknown;
 }
 
@@ -189,6 +191,7 @@ export interface MarketplaceSearchParams {
   region?: string;
   workload?: string;
   verification_status?: string;
+  host_kind?: "dedicated" | "shared" | "unspecified";
   page?: number;
   page_size?: number;
 }
@@ -340,6 +343,10 @@ export interface Job {
   gpu_runtime?: "cuda" | "rocm" | "any" | string;
   privacy_receipt_id?: string | null;
   data_policy?: Record<string, unknown> | null;
+  /** Job detail only: the kind of host the job is on (declared by the host). */
+  host_kind?: "dedicated" | "shared" | "unspecified" | string | null;
+  /** Job detail only: a plain-language note for the customer (shared PC, or the job was re-run), or null. */
+  risk_note?: string | null;
   encrypted_output?: Record<string, unknown> | null;
   value_at_risk?: string | null;
   match_explanation?: JobMatchExplanation | null;
@@ -437,6 +444,8 @@ export interface CreateJobInput {
     min_stake?: string;
     /** X25519 public key (hex) the result is sealed to. Required for privacy tiers. */
     result_public_key?: string;
+    /** Only place the job on a host that declares itself dedicated (a server nobody else uses). */
+    require_dedicated_host?: boolean;
   };
   /** ccpp-v1 data envelope; produced client-side (Python SDK), never plaintext. */
   encrypted_input?: Record<string, string>;
@@ -487,7 +496,11 @@ export interface LedgerEntry {
   direction: LedgerDirection;
   amount: string;
   currency: string;
-  reference: string | null;
+  /** What the entry belongs to (e.g. "job"), and its id. The API sends these two, not a single `reference`. */
+  reference_type?: string | null;
+  reference_id?: string | null;
+  /** Legacy single-field form; kept for tolerance only. */
+  reference?: string | null;
   created_at: string;
   [key: string]: unknown;
 }
@@ -639,6 +652,9 @@ export interface EarningEntry {
   direction?: LedgerDirection;
   amount: string;
   currency?: string;
+  reference_type?: string | null;
+  reference_id?: string | null;
+  /** Legacy single-field form; kept for tolerance only. */
   reference?: string | null;
   created_at?: string;
   [key: string]: unknown;
@@ -1506,6 +1522,7 @@ export const api = {
     if (params.workload) qs.set("workload", params.workload);
     if (params.verification_status)
       qs.set("verification_status", params.verification_status);
+    if (params.host_kind) qs.set("host_kind", params.host_kind);
     if (params.page != null) qs.set("page", String(params.page));
     if (params.page_size != null) qs.set("page_size", String(params.page_size));
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
@@ -2047,7 +2064,7 @@ export const api = {
     return request<EscrowResponse>("/v1/settlement/escrows", {
       method: "POST",
       token: accessToken,
-      body: JSON.stringify(payload),
+      body: payload,
     });
   },
 
@@ -2062,7 +2079,7 @@ export const api = {
     return request<SettlementVoucherResponse>("/v1/settlement/vouchers", {
       method: "POST",
       token: accessToken,
-      body: JSON.stringify(payload),
+      body: payload,
     });
   },
 
@@ -2077,7 +2094,7 @@ export const api = {
     return request<EscrowResponse>("/v1/settlement/confirm", {
       method: "POST",
       token: accessToken,
-      body: JSON.stringify(payload),
+      body: payload,
     });
   },
 
@@ -2092,7 +2109,7 @@ export const api = {
     return request<EscrowResponse>("/v1/settlement/refund", {
       method: "POST",
       token: accessToken,
-      body: JSON.stringify(payload),
+      body: payload,
     });
   },
 

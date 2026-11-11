@@ -23,7 +23,7 @@ import { api, getStoredAccessToken } from "@/lib/api";
 import { plainAuthError } from "./auth-errors";
 
 // U16: must match the API's AUP_CURRENT_VERSION. The API only requires acceptance when AUP_REQUIRED is on.
-const AUP_VERSION = process.env.NEXT_PUBLIC_AUP_VERSION ?? "draft-0";
+const AUP_VERSION = process.env.NEXT_PUBLIC_AUP_VERSION || "draft-0";
 
 const schema = z.object({
   email: z.string().min(1, "Enter your email address.").email("That does not look like an email address. Check it and try again."),

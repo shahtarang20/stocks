@@ -78,7 +78,7 @@ export function KitJobPanel({ job, token }: { job: Job; token: string }) {
     mutationFn: (f: DataFile) => dataApi.downloadLink(token, f.id),
     onSuccess: (res, f) => {
       setLinkInfo((m) => ({ ...m, [f.id]: res.expires_at ? `Link expires ${formatRelativeTime(res.expires_at)}.` : "This link expires soon." }));
-      if (res?.url) window.open(res.url, "_blank", "noopener,noreferrer");
+      if (res?.url) window.open(apiAbsoluteUrl(res.url), "_blank", "noopener,noreferrer");
     },
   });
   const download = useMutation({

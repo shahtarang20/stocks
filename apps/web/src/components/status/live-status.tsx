@@ -23,7 +23,9 @@ export function LiveStatus() {
     retry: false,
     queryFn: async () => {
       const res = await fetch(`${API_BASE_URL}/health`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // 503 is how /health reports "degraded"; its body says which part is down, so read it instead of
+      // claiming the whole service is unreachable.
+      if (!res.ok && res.status !== 503) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
   });
@@ -39,7 +41,8 @@ export function LiveStatus() {
   const rows = [
     row("ComputeCoin service", loading ? null : !unreachable && h?.status === "ok"),
     row("Data storage", loading ? null : unreachable ? false : h?.db === "up"),
-    row("Speed and safety limits", loading ? null : unreachable ? false : h?.redis === "up"),
+    // "not_configured" means this deployment runs without Redis: that is not a fault.
+    row("Speed and safety limits", loading ? null : unreachable ? false : h?.redis !== "down"),
   ];
 
   return (

@@ -373,7 +373,13 @@ token list.
 
 ### Step 3 — Connect your machine
 
-Install the agent on the GPU host and give it the enrollment token. The agent:
+**The easy way (Linux): one line.** The setup page shows a single line to paste into a terminal on the computer (it saves the installer to a temporary file and runs it with `sudo`, so it keeps your
+terminal for one question). It asks for the one-time token (typing hidden; the setup page shows the token to paste),
+checks the computer (Docker, graphics card), installs the agent in its own folder with every dependency hash-checked, connects the computer, and installs and starts
+services that restart after a crash or reboot: the agent, its heat watchdog and, on NVIDIA, a tiny root-only power cap service. For scripts that cannot answer a prompt, add `--token enr_...` (visible to other users while it runs). It is safe to run again (it upgrades), `--dry-run` shows what it would do, `--uninstall` removes it. It does not
+install Docker or graphics drivers. Options: `--reenroll` (connect again after removing the computer on the website), `--gpu-vendor nvidia|amd`, `--force` (upgrade while a customer job is running), `--run-as-root`. How it works and how a new agent version is released: [operations/agent-release-and-install.md](operations/agent-release-and-install.md).
+
+**By hand (advanced):** install the agent on the GPU host and give it the enrollment token. The agent:
 
 1. Detects your real hardware (GPU model, VRAM, CPU, RAM, disk)
 2. Enrols with the token
@@ -506,12 +512,12 @@ The Computecoin app protects your graphics card in layers. What each one does, a
 |---|---|---|
 | **Heat limit** | At 85 °C it stops taking new jobs. At 95 °C it stops the running job. The customer is not charged and the job re-runs elsewhere | `gpu_temp_cap_c`, `gpu_temp_hard_stop_c` |
 | **Lost sensor** | If the temperature reading worked and then goes silent for 2 minutes, it stops taking jobs and stops the running one. A computer that never had a reading is left alone | `gpu_sensor_lost_seconds` (10 to 3600) |
-| **Power cap** | Runs NVIDIA cards at 90% of their own default power limit and puts the old limit back when the app stops. It never raises a limit you set lower yourself. Needs the app to run as root | `gpu_power_limit_percent` (50 to 100; unset or 100 turns it off), or an exact `gpu_power_limit_w` |
+| **Power cap** | Runs NVIDIA cards at 90% of their own default power limit and puts the old limit back when stopped. It never raises a limit you set lower yourself. Needs root: the one-line installer runs a tiny separate root service for it, so the agent itself does not need root (without it, run the agent as root) | `gpu_power_limit_percent` (50 to 100; unset or 100 turns it off), or an exact `gpu_power_limit_w` |
 | **Heat watchdog** | A separate small process. If the card stays over the heat limit (or the sensor stays silent) for 30 seconds longer than the app needs to react, it removes the customer containers. It covers a crashed or frozen app | `heat_watchdog_enabled` |
 | **Clean start** | When the app starts it removes customer containers an earlier run left behind | always on |
 | **No swap, no core dumps** | A job over its memory limit is stopped instead of pushing your own programs into swap, and a crashing job cannot write its memory to disk | always on |
 
-**Run the watchdog as its own service.** The app starts the watchdog for you, but under systemd a process started by the app's own service is stopped with it. To keep it running when the app crashes, run `computecoin-agent watchdog --print-unit`, save the output as `/etc/systemd/system/computecoin-watchdog.service`, then `sudo systemctl enable --now computecoin-watchdog`.
+**Run the watchdog as its own service.** The one-line install does this for you (it installs `computecoin-watchdog` as a separate service). If you installed by hand: the app starts the watchdog for you, but under systemd a process started by the app's own service is stopped with it. To keep it running when the app crashes, run `computecoin-agent watchdog --print-unit`, save the output as `/etc/systemd/system/computecoin-watchdog.service`, then `sudo systemctl enable --now computecoin-watchdog`.
 
 **What this cannot do.** Software cannot promise a card never overheats. The card's own firmware still throttles and shuts down on its own, and that is the real last line of defence. If the app crashes and the watchdog is not running, a customer container can keep the card busy until the app is restarted, which clears it.
 

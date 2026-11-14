@@ -1,0 +1,137 @@
+name: Agent release
+
+# Publishes the provider agent where the one-line installer (apps/web/public/install.sh) downloads it.
+#
+# To release:  edit `version` in provider-agent/pyproject.toml, commit, then
+#                git tag agent-v<that version> && git push origin agent-v<that version>
+#
+# What this job does, in order, and stops at the first failure:
+#   1. checks the tag matches the version in pyproject.toml
+#   2. runs the agent's tests
+#   3. builds the package (one wheel) and a hash-locked list of every dependency (`requirements.lock`, covering x86 and ARM and
+#      Python 3.12 and newer), and writes `LATEST`: two lines, "<wheel file name> <sha256>" and "requirements.lock <sha256>"
+#   4. installs the built wheel into a fresh environment the way the installer does (every dependency hash checked) and runs the
+#      commands the installer relies on
+#   5. publishes a release named after the tag, and moves the `agent-latest` release (the fixed address the installer uses)
+#      to the new files
+#
+# NEVER RUN YET. The installer's default download address is
+#   https://github.com/<owner>/<repo>/releases/download/agent-latest/LATEST
+# That address only works for a PUBLIC repository. For a private one, host the two files somewhere the hosts can reach and
+# give the setup page that address (NEXT_PUBLIC_AGENT_PACKAGE_BASE on the web app, or --package-base on the installer).
+
+on:
+  push:
+    tags:
+      - "agent-v*"
+
+permissions:
+  contents: write  # to create the releases; nothing else
+
+concurrency:
+  group: agent-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, check and publish the agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tag must match the package version
+        run: |
+          python -m pip install -q packaging
+          # Compared as Python versions, so a tag like agent-v1.0.0-rc1 matches version 1.0.0rc1 (which is what the wheel is named).
+          python - <<'PY'
+          import os, sys, tomllib
+          from packaging.version import InvalidVersion, Version
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tomllib.load(open("provider-agent/pyproject.toml", "rb"))["project"]["version"]
+          try:
+              same = tag.startswith("agent-v") and Version(tag[len("agent-v"):]) == Version(version)
+          except InvalidVersion:
+              same = False
+          if not same:
+              sys.exit(f"Tag {tag} does not match version {version} in provider-agent/pyproject.toml")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"VERSION={version}\n")
+          PY
+
+      - name: Agent tests
+        working-directory: provider-agent
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+          pytest -q
+
+      - name: Build the package and its hash-locked dependency list
+        run: |
+          python -m pip install build==1.6.1 uv==0.13.8  # exact versions: the same tools build every release
+          python -m build --wheel provider-agent --outdir dist
+          (cd provider-agent && uv pip compile pyproject.toml --extra gpu --universal --generate-hashes --python-version 3.12 -o ../dist/requirements.lock)
+          cd dist
+          test "$(ls -1 *.whl | wc -l)" = "1"
+          wheel="$(ls -1 *.whl)"
+          {
+            echo "${wheel} $(sha256sum "${wheel}" | awk '{print $1}')"
+            echo "requirements.lock $(sha256sum requirements.lock | awk '{print $1}')"
+          } > LATEST
+          cat LATEST
+
+      - name: Install the built package in a clean environment and run what the installer runs
+        run: |
+          python -m venv /tmp/clean
+          # exactly what the installer does: every dependency from the locked list with its hash checked, then the agent itself
+          /tmp/clean/bin/pip install --require-hashes --no-deps -r dist/requirements.lock
+          /tmp/clean/bin/pip install --no-deps "dist/$(awk 'NR==1 {print $1}' dist/LATEST)"
+          /tmp/clean/bin/pip check
+          /tmp/clean/bin/computecoin-agent --help
+          unit="$(/tmp/clean/bin/computecoin-agent watchdog --print-unit)"   # captured first: `| grep -q` can fail with SIGPIPE
+          printf '%s\n' "${unit}" | grep '^ExecStart=/' >/dev/null
+          /tmp/clean/bin/python -m computecoin_agent --help >/dev/null
+
+      - name: The lock also works with uv, and for ARM and Python 3.13
+        run: |
+          # The installer uses uv on computers with no usable Python. Install for real with it, then check (without installing)
+          # that every combination of processor and Python version a host might have can get every package with a matching hash.
+          uv venv /tmp/uvclean
+          uv pip install --python /tmp/uvclean/bin/python --require-hashes --no-deps -r dist/requirements.lock
+          for platform in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            for pyver in 3.12 3.13; do
+              echo "== ${platform} / Python ${pyver}"
+              uv pip install --python /tmp/uvclean/bin/python --dry-run --require-hashes --no-deps \
+                --python-platform "${platform}" --python-version "${pyver}" -r dist/requirements.lock
+            done
+          done
+
+      - name: Publish the release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.whl dist/LATEST dist/requirements.lock \
+            --title "Agent ${VERSION}" \
+            --notes "Computecoin provider agent ${VERSION}. Hosts install it with the one-line command on the setup page."
+
+      - name: Move the agent-latest release to the new files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view agent-latest >/dev/null 2>&1; then
+            gh release create agent-latest --prerelease \
+              --title "Latest agent (used by the installer)" \
+              --notes "Always holds the newest agent package. The installer downloads LATEST from here."
+          fi
+          # Upload FIRST (LATEST names the wheel, so installers switch over as soon as it lands), then remove older wheels.
+          # Deleting first would leave the address empty, and every install would fail, if the upload went wrong.
+          new_wheel="$(awk 'NR==1 {print $1}' dist/LATEST)"
+          gh release upload agent-latest dist/*.whl dist/LATEST dist/requirements.lock --clobber
+          for old in $(gh release view agent-latest --json assets --jq '.assets[].name'); do
+            if [ "${old}" != "LATEST" ] && [ "${old}" != "requirements.lock" ] && [ "${old}" != "${new_wheel}" ]; then
+              gh release delete-asset agent-latest "${old}" --yes
+            fi
+          done

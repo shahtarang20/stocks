@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LifeBuoy, Menu, X } from "lucide-react";
+import { LifeBuoy, Menu, Sparkles, X } from "lucide-react";
 import { Logo } from "@/components/layout/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "./user-menu";
@@ -67,6 +67,14 @@ function NavLinks({
         </div>
       ))}
       <div className="space-y-1 border-t border-border pt-4">
+        <Link
+          href="/what-you-can-do"
+          onClick={onNavigate}
+          className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
+        >
+          <Sparkles aria-hidden="true" className="h-4 w-4" />
+          What you can do
+        </Link>
         <Link
           href="/help"
           onClick={onNavigate}

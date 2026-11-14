@@ -18,7 +18,6 @@ import {
   Server,
   Scale,
   Wallet,
-  Sparkles,
 } from "lucide-react";
 import { AuthGuard } from "@/components/console/auth-guard";
 import { ConsoleShell, type NavSection } from "@/components/console/console-shell";
@@ -31,7 +30,6 @@ const BASE_SECTIONS: NavSection[] = [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/dashboard/projects", label: "Projects", icon: FolderGit2 },
       { href: "/dashboard/kits", label: "Kits", icon: Boxes },
-      { href: "/what-you-can-do", label: "What you can do", icon: Sparkles },
       { href: "/dashboard/sessions", label: "Sessions", icon: Terminal },
       { href: "/dashboard/jobs", label: "Jobs", icon: ListChecks },
       {

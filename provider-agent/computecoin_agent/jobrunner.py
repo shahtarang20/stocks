@@ -38,6 +38,7 @@ import shutil
 import time
 from typing import Any, Callable, Optional
 
+from . import interrupts
 from .attestation import AttestationSession, perform_attestation
 from .executor import (
     Artifact,
@@ -676,6 +677,22 @@ def _run_private_claim(
             wipe_dir(kit_ctx.ram_dir)
 
 
+def _shared_gpu_probe():
+    """Other programs on the GPU, for the "this GPU is shared" signal. NVIDIA cards on a Linux host only; None elsewhere.
+
+    Inside the managed WSL2 distro on a Windows host the host's own programs are invisible, so nothing would be seen there
+    (a Windows host is labelled shared anyway). Never raises."""
+    try:
+        from .owner_activity import NvidiaGpuUsers
+        from .platform import get_platform
+
+        if get_platform().name != "linux":
+            return None
+        return NvidiaGpuUsers().other_processes
+    except Exception:
+        return None
+
+
 def _make_monitor(
     base_url: str, machine_id: str, machine_secret: str, spec: JobSpec, transport: Any
 ) -> Any:
@@ -694,6 +711,7 @@ def _make_monitor(
             cancel_event=spec.cancel_event,
             # U16: BYOC containers (named ccoin-job-<id> by the executor) get process-name / I/O sampling.
             byoc_container=f"ccoin-job-{spec.job_id}" if (spec.v2 or {}).get("byoc") is not None else None,
+            shared_gpu_probe=_shared_gpu_probe(),
         )
     except Exception:
         return None
@@ -711,6 +729,7 @@ def _run_open(
     progress / GPU util / VRAM and streams ordered token chunks while the executor runs.
     """
     executor = executor_selector(spec, capabilities)
+    spec.interrupt_event = interrupts.REGISTRY.register(spec.job_id)  # the owner may need the computer back mid-job
     try:
         if monitor is not None:
             spec.on_output_dir = monitor.set_output_dir
@@ -718,6 +737,13 @@ def _run_open(
             monitor.start()
         try:
             result = executor.run(spec)
+            if monitor is not None:
+                try:
+                    shared = monitor.sharing_metrics()
+                except Exception:  # an optional signal must never fail a customer's job
+                    shared = {}
+                if shared:  # the owner's own program was on the GPU while this job ran: the customer is told
+                    result.metrics = {**(result.metrics or {}), **shared}
         finally:
             if monitor is not None:
                 monitor.stop()  # its last tick still reads the stream file, so the dir is removed only after this
@@ -754,6 +780,8 @@ def _run_open(
             output_schema_valid=False,
             error={"code": "executor_error", "message": str(exc)},
         )
+    finally:
+        interrupts.REGISTRY.unregister(spec.job_id)  # on EVERY exit, including a monitor that failed to start
     return result
 
 
@@ -976,8 +1004,13 @@ def poll_loop(
     cluster_addr: Optional[str] = None,
     control: Any = None,
     amd_sealed_enabled: bool = False,
+    owner_gate: Any = None,
 ) -> list[dict[str, Any]]:
     """Run the claim->execute->result loop a bounded number of times.
+
+    ``owner_gate`` (Linux owner-governance, see owner_governance.py): anything with ``claim_block_reason() -> str | None``.
+    While it names a reason (the owner is at the computer, on battery, using the GPU, or paused hosting) no job is
+    claimed (``{"claimed": False, "held": reason}``). A gate that raises blocks too: an unknown state never means "free".
 
     ``control`` (W4, default None = unchanged behaviour): a ``control_channel.RunnerControl`` obeying the supervisor.
     No claim is made before ``start`` or while draining / stopped / not ``online`` / the supervisor is gone; a
@@ -1041,6 +1074,20 @@ def poll_loop(
                 if iterations <= 0 or i < iterations:
                     sleeper(interval)
                 continue
+            if owner_gate is not None:
+                try:
+                    owner_held = owner_gate.claim_block_reason()
+                except Exception:  # noqa: BLE001 - fail closed
+                    owner_held = "owner_check_failed"
+                if owner_held is not None:
+                    summary = {"claimed": False, "held": owner_held}
+                    results.append(summary)
+                    if emit is not None:
+                        emit(i, summary)
+                    i += 1
+                    if iterations <= 0 or i < iterations:
+                        sleeper(interval)
+                    continue
             if thermal_guard is not None and not thermal_guard.may_claim():
                 summary = {"claimed": False, "throttled": True}
                 results.append(summary)

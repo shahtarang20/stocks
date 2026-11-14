@@ -320,11 +320,15 @@ def heartbeat_loop(
     sleeper: Callable[[float], None] = time.sleep,
     emit: Optional[Callable[[int, Any], None]] = None,
     availability_fn: Optional[Callable[[], str]] = None,
+    health_extras: Optional[Callable[[], dict[str, Any]]] = None,
 ) -> list[Any]:
     """Send heartbeats on a fixed cadence.
 
     ``availability_fn`` (B6) is asked before each beat for the availability to report
     ("online" or "throttled"); an error in it falls back to ``availability``.
+
+    ``health_extras`` is asked before each beat for additive health fields (the Linux owner-governance reports
+    ``availability_detail`` this way); an error in it, or an empty answer, sends the ordinary health block.
 
     ``iterations <= 0`` loops until interrupted; a positive value runs a bounded
     number of heartbeats (what tests use, with an injected ``transport`` and a
@@ -341,12 +345,21 @@ def heartbeat_loop(
                 current = availability_fn() if availability_fn is not None else availability
             except Exception:
                 current = availability
+            health = None
+            if health_extras is not None:
+                try:
+                    extra = health_extras() or {}
+                except Exception:
+                    extra = {}
+                if extra:
+                    health = {**default_health(report), **extra}
             resp = send_contract_heartbeat(
                 base_url,
                 machine_id,
                 machine_secret,
                 report=report,
                 availability=current,
+                health=health,
                 transport=transport,
             )
             responses.append(resp)

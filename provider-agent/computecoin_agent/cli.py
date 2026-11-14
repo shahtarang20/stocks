@@ -326,12 +326,25 @@ def start(
     thermal_guard = ThermalGuard.from_config(config)
     apply_power_limit(config.gpu_power_limit_w)  # best effort; never fails startup
 
+    # Step aside for the owner (Linux laptops and desktops that are also somebody's computer). Off unless the owner sets
+    # `governance_enabled = true`: a server must keep taking jobs exactly as before.
+    owner = _owner_governance(config)
+    if owner is not None:
+        typer.echo("[owner] stepping aside for the owner is ON: no new jobs while you use the computer, "
+                   "`computecoin-agent pause` stops hosting now")
+
+    def availability() -> str:
+        if owner is not None and owner.availability() != "online":
+            return "throttled"
+        return thermal_guard.availability()
+
     auth_failed = threading.Event()
     hb_thread = threading.Thread(
         target=_heartbeat_until_auth_failure,
         args=(auth_failed, base_url, config.machine_id, config.machine_secret),
         kwargs={
-            "availability_fn": thermal_guard.availability,
+            "availability_fn": availability,
+            "health_extras": owner.health_extras if owner is not None else None,
             "report": report,
             "iterations": 0,
             "interval": period,
@@ -342,6 +355,11 @@ def start(
         daemon=True,
     )
     hb_thread.start()
+
+    if config.telemetry_enabled:  # real GPU readings for the host's own usage page; never a made-up number
+        from .telemetry_loop import build_telemetry_loop
+
+        build_telemetry_loop(base_url, config.machine_id, config.machine_secret).start()
 
     if config.netbench_enabled:  # U13: off by default; the responder binds ONLY to cluster_addr
         from .netbench import start_netbench
@@ -376,11 +394,54 @@ def start(
             multinode_network_firewalled=config.multinode_network_firewalled,
             cluster_addr=config.cluster_addr,
             amd_sealed_enabled=config.amd_sealed_enabled,
+            owner_gate=owner,
         )
     except (KeyboardInterrupt, SystemExit):
         typer.echo("\nStopping ComputeCoin agent gracefully...")
     if auth_failed.is_set():
         raise typer.Exit(code=1)
+
+
+def _owner_governance(config: "AgentConfig"):
+    """The Linux owner-governance object, or None when it is off (the default) or this is not a Linux host.
+
+    On Windows the supervisor does this job (``windows/governance``); ``governance_enabled`` there defaults to on."""
+    if getattr(config, "governance_enabled", None) is not True:
+        return None
+    from .platform import PLATFORM_WINDOWS, get_platform
+
+    if get_platform().name == PLATFORM_WINDOWS:
+        return None
+    from .owner_governance import LinuxGovernance
+
+    return LinuxGovernance.from_config(config)
+
+
+@app.command()
+def pause() -> None:
+    """Pause hosting NOW: stop the running job cleanly and take no new jobs until you run `resume`.
+
+    The customer is not charged for the stopped job, and the platform runs it again on another computer. Needs the
+    agent started with `governance_enabled = true` (it watches for this pause)."""
+    from .owner_governance import owner_stop_path
+
+    path = owner_stop_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("paused\n", encoding="utf-8")
+    typer.echo(f"Hosting is paused. Run `computecoin-agent resume` to start taking jobs again. ({path})")
+
+
+@app.command()
+def resume() -> None:
+    """Lift a `pause`. Jobs start again after the computer has been quiet for a minute."""
+    from .owner_governance import owner_stop_path
+
+    path = owner_stop_path()
+    try:
+        path.unlink()
+        typer.echo("Hosting will resume once the computer has been quiet for a minute.")
+    except FileNotFoundError:
+        typer.echo("Hosting was not paused.")
 
 
 def _heartbeat_until_auth_failure(

@@ -207,6 +207,8 @@ _SCHEMAS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "start": ((), ("max_concurrent_jobs", "availability")),
     "drain": ((), ("reason",)),
     "stop": ((), ("reason", "grace_seconds")),
+    # The host's owner needs the computer back: stop the running job(s) cleanly and report them host_interrupted.
+    "interrupt": ((), ("reason",)),
     "set_limits": (
         (),
         ("max_concurrent_jobs", "gpu_temp_cap_c", "gpu_temp_resume_c", "gpu_temp_hard_stop_c", "gpu_power_limit_w"),
@@ -731,8 +733,9 @@ class RunnerControl:
       * no claim before ``start``; none while draining, stopped, or availability is not ``online``;
       * none while the supervisor has been gone longer than ``orphan_grace_seconds`` (a running job is NOT killed);
       * an invalid command changes nothing and is answered with an ``error`` message.
-    ``stop`` and ``drain`` never abort an in-flight job: the runner has no safe cancel path. The supervisor
-    enforces its own timeout and terminates the process if needed (the lease then expires server-side).
+    ``stop`` and ``drain`` never abort an in-flight job. ``interrupt`` does, on purpose: it stops the running containers
+    and reports each job ``host_interrupted`` (see interrupts.py), so the platform re-runs it elsewhere at once. If the
+    runner cannot do that in time, the supervisor still terminates the process (the lease then expires server-side).
     """
 
     TEMP_STALE_SECONDS = 30.0
@@ -812,6 +815,11 @@ class RunnerControl:
             self._stopped, self._started = True, False
         if self._on_stop:
             self._on_stop()
+
+    def _cmd_interrupt(self, data: dict[str, Any]) -> None:
+        from . import interrupts
+
+        interrupts.REGISTRY.interrupt_all(str(data.get("reason") or "owner_needs_computer"))
 
     def _cmd_set_limits(self, data: dict[str, Any]) -> None:
         with self._lock:

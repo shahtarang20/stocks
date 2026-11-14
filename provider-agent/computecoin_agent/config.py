@@ -151,6 +151,9 @@ class AgentConfig(BaseSettings):
     # ---- CPU-only Kits (resource_defaults.gpu_count 0). Operator opt-in: when true the heartbeat health block carries
     # ``cpu_capable: true`` so the platform may place a CPU-only Kit job here. Such a job runs without --gpus.
     cpu_only_kits_enabled: bool = False
+    # Send this computer's real GPU readings (use, memory, temperature, power) to the platform every minute or so, so the
+    # host's usage page and the platform's overheating alerts work. Nothing about jobs or programs is sent. Set false to opt out.
+    telemetry_enabled: bool = True
     # ---- AMD GPUs in the Sealed tiers (A6, OWNER DECISION on D5). Second lock: the platform must allow it (server setting
     # AMD_SEALED_ENABLED and a current verdict naming a Sealed image) AND this host must opt in. Default false: an AMD GPU
     # job in any tier other than `container` is refused. Confidential, gVisor and microVM stay refused on AMD either way.

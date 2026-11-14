@@ -142,6 +142,8 @@ class JobMonitor:
         pad_bytes: Optional[int] = None,
         byoc_container: Optional[str] = None,
         docker_runner: Optional[Callable[[list[str]], Optional[str]]] = None,
+        shared_gpu_probe: Optional[Callable[[], Optional[list]]] = None,
+        sharing_poll_seconds: float = 5.0,
     ) -> None:
         from .progress import ProgressReporter
 
@@ -166,6 +168,14 @@ class JobMonitor:
         self.cancel_event = cancel_event
         self._cancel_poll = cancel_poll_seconds
         self._last_cancel_poll = time.monotonic()
+        # Is the GPU shared with the host owner's own programs while this job runs? ``shared_gpu_probe`` returns the names
+        # of other programs on the GPU (``[]`` = looked, none; ``None`` = could not look). Only a yes and a count are ever
+        # reported, never a name: those belong to the host's owner, not to the customer.
+        self._share_probe = shared_gpu_probe
+        self._share_poll = sharing_poll_seconds
+        self._last_share_poll = -1e9
+        self._share_seen = False
+        self._share_max = 0
         # U8/U16: for a BYOC container, sample process NAMES (docker top) and cumulative I/O (docker stats) and report
         # them additively with the progress point. Never contents, never arguments, size capped.
         self.byoc_container = byoc_container
@@ -233,6 +243,29 @@ class JobMonitor:
             self._report_progress()
         if not final:
             self._check_cancelled()
+            self._observe_sharing()
+
+    def _observe_sharing(self) -> None:
+        """Rate-limited, best-effort: remember whether anyone else used the GPU, and how many programs at the most."""
+        probe = self._share_probe
+        if probe is None or time.monotonic() - self._last_share_poll < self._share_poll:
+            return
+        self._last_share_poll = time.monotonic()
+        try:
+            names = probe()
+        except Exception:
+            return  # a broken probe never stops a job and never invents a signal
+        if names:
+            self._share_seen = True
+            self._share_max = max(self._share_max, min(len(names), 64))
+
+    def sharing_metrics(self) -> dict[str, Any]:
+        """``{"gpu_shared": True, "gpu_other_processes": n}`` if another program was seen on the GPU while the job ran,
+        else ``{}``. Absence means "not seen", NOT "alone on the GPU": a probe that cannot look (an AMD card, a runtime
+        that cannot see the host's processes) also says nothing, and a "not shared" claim would be a guess."""
+        if not self._share_seen:
+            return {}
+        return {"gpu_shared": True, "gpu_other_processes": self._share_max}
 
     def _check_cancelled(self) -> None:
         ev = self.cancel_event

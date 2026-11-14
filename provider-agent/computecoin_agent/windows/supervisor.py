@@ -76,6 +76,8 @@ class SupervisorSettings:
     drain_grace_seconds: float = 20.0
     stop_grace_seconds: float = 10.0
     kill_wait_seconds: float = 5.0
+    # How long a polite "interrupt" gets to stop the running job(s) before the runner process is killed instead.
+    interrupt_grace_seconds: float = 20.0
     max_restarts: int = 5
     restart_window_seconds: float = 300.0
     restart_backoff_seconds: tuple[float, ...] = (2.0, 5.0, 15.0, 30.0, 60.0)
@@ -108,7 +110,7 @@ class SupervisorSettings:
     def validate(self) -> None:
         if not 1 <= int(self.control_port) <= 65535:
             raise ValueError("control_port must be 1..65535")
-        for name in ("tick_seconds", "drain_grace_seconds", "stop_grace_seconds", "kill_wait_seconds", "snapshot_max_age_seconds"):
+        for name in ("tick_seconds", "drain_grace_seconds", "stop_grace_seconds", "kill_wait_seconds", "interrupt_grace_seconds", "snapshot_max_age_seconds"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be > 0")
         if self.max_restarts < 0 or not self.restart_backoff_seconds:
@@ -283,6 +285,7 @@ class Supervisor:
         update_gate: Any = None,
         update_runner: Optional[Callable[[threading.Event], None]] = None,
         on_shutdown: Sequence[Callable[[], None]] = (),
+        timer_factory: Callable[..., Any] = threading.Timer,
     ) -> None:
         self._base_url, self._machine_id, self._secret = base_url, machine_id, machine_secret
         self._token = token
@@ -306,6 +309,8 @@ class Supervisor:
         self._update_gate = update_gate
         self._update_runner = update_runner
         self._on_shutdown = tuple(on_shutdown)
+        self._timer_factory = timer_factory  # tests inject one that fires on demand
+        self._interrupt_timer: Any = None  # the pending "kill if the polite stop did not work" fallback, if any
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -392,12 +397,38 @@ class Supervisor:
 
     def abort_running_job(self, reason: str) -> None:
         """Governance said stop the running job now (an explicit "stop now", or a full-screen app with the owner's
-        preempt option on). The runner has no safe cancel, so the runner process is terminated and the server-side lease
-        expires and re-queues the job; the supervisor then restarts the runner, which claims nothing while the engine says no."""
+        preempt option on).
+
+        First ask the runner to stop politely (``interrupt``): it stops the container and reports the job
+        ``host_interrupted``, so the platform re-runs it on another computer at once and does not charge the customer.
+        This returns immediately (it is called from the availability check, which must not stall). If a job is still
+        running ``interrupt_grace_seconds`` later, or the runner cannot be reached at all, the runner process is
+        terminated as before and the server-side lease expires and re-queues the job. The supervisor then restarts the
+        runner, which claims nothing while the engine says no."""
         if self._active_jobs() <= 0:
             return
         logger.warning("stopping the running job on governance request (%s)", reason)
-        self._terminate_process()
+        if not self._send_quiet("interrupt", {"reason": str(reason or "governance")[:200]}):
+            self._terminate_process()  # nobody to ask: the old, blunt way
+            return
+        with self._lock:
+            if self._interrupt_timer is not None:
+                return  # already waiting on a polite stop; one fallback timer is enough
+            timer = self._timer_factory(max(0.0, float(self._s.interrupt_grace_seconds)), self._force_stop_if_still_running)
+            self._interrupt_timer = timer
+        try:
+            timer.daemon = True
+        except Exception:  # noqa: BLE001
+            pass
+        timer.start()
+
+    def _force_stop_if_still_running(self) -> None:
+        """The polite stop did not finish in time: end the runner process (the lease expiry re-queues the job)."""
+        with self._lock:
+            self._interrupt_timer = None
+        if self._active_jobs() > 0 and self._proc_alive():
+            logger.warning("the job did not stop after the interrupt; terminating the runner")
+            self._terminate_process()
 
     def shutdown(self, timeout: float = 25.0, *, progress: Optional[Callable[[], None]] = None) -> ShutdownResult:
         """Drain, then stop, then terminate the runner, all within ``timeout`` seconds (best effort).

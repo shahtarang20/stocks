@@ -65,6 +65,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from .interrupts import HOST_INTERRUPTED_CODE
 from .platform import AMD_KFD_DEVICE, get_platform
 
 
@@ -200,6 +201,9 @@ class JobSpec:
     on_output_dir: Optional[Callable[[str], None]] = None
     # U13: set by the job monitor when the API reports the job cancelled; the executor then stops the container.
     cancel_event: Optional[threading.Event] = None
+    # Set when the HOST'S OWNER needs the computer back (see interrupts.py); the executor then stops the container and
+    # reports ``host_interrupted``, which the platform retries on another computer without charging the customer.
+    interrupt_event: Optional[threading.Event] = None
     # Set by DockerExecutor when IT created the output dir (no ``output_dir`` given). The dir holds the customer's input.json
     # and the container's outputs, so whoever passed ``on_output_dir`` (a monitor still tailing it) removes it afterwards.
     owned_output_dir: Optional[str] = None
@@ -1000,6 +1004,20 @@ class DockerExecutor(Executor):
                     pass
                 return
 
+    def _interrupt_watch(self, container: str, output_dir: str, stop: "threading.Event", interrupt_event: "threading.Event",
+                         interrupted: list[bool]) -> None:
+        """The owner needs the computer: kill exactly this container, and remember why it died."""
+        while not stop.is_set():
+            if interrupt_event.wait(1.0):
+                if stop.is_set():
+                    return
+                interrupted.append(True)
+                try:
+                    self._runner(["docker", "kill", container], output_dir)
+                except Exception:
+                    pass
+                return
+
     def run(self, job_spec: JobSpec) -> ExecutionResult:
         if job_spec.execution_mode != "hardware":
             # A simulated job must never be routed to the DockerExecutor.
@@ -1101,6 +1119,8 @@ class DockerExecutor(Executor):
         thermal_tripped: list[float] = []
         cancelled: list[bool] = []
         cancel_watchdog = None
+        interrupted: list[bool] = []
+        interrupt_watchdog = None
         watchdog = None
         try:
             if egress:
@@ -1131,6 +1151,13 @@ class DockerExecutor(Executor):
                     daemon=True,
                 )
                 cancel_watchdog.start()
+            if job_spec.interrupt_event is not None:
+                interrupt_watchdog = threading.Thread(
+                    target=self._interrupt_watch,
+                    args=(container_name, output_dir, stop_event, job_spec.interrupt_event, interrupted),
+                    daemon=True,
+                )
+                interrupt_watchdog.start()
             run_result = self._runner(argv, output_dir)
         finally:
             if run_result is None or run_result.returncode != 0:
@@ -1144,6 +1171,8 @@ class DockerExecutor(Executor):
                 watchdog.join(timeout=5)
             if cancel_watchdog is not None:
                 cancel_watchdog.join(timeout=5)
+            if interrupt_watchdog is not None:
+                interrupt_watchdog.join(timeout=5)
             if egress:
                 logs.extend(self._teardown_egress(job_spec, output_dir))
         duration = max(0.0, self._clock() - start)
@@ -1167,6 +1196,18 @@ class DockerExecutor(Executor):
                 logs=logs + ["[cancel] the job was cancelled by the API; container stopped"],
                 output_schema_valid=False,
                 error={"code": "cancelled", "message": "job cancelled; container stopped"},
+            )
+
+        if interrupted:
+            # The host's owner needed the computer. Reported failed with a code the platform treats as the HOST's doing:
+            # it re-runs the job elsewhere for free and the customer is not charged for this attempt.
+            return ExecutionResult(
+                status="failed",
+                execution_mode=self.execution_mode,
+                metrics={"duration_seconds": round(duration, 6), "max_memory_mb": None, "gpu_util_pct": None},
+                logs=logs + ["[interrupted] the computer's owner needed it back; container stopped"],
+                output_schema_valid=False,
+                error={"code": HOST_INTERRUPTED_CODE, "message": "the host's owner needed the computer; container stopped"},
             )
 
         if run_result.returncode != 0:

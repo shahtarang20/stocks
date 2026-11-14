@@ -24,6 +24,7 @@ from . import (
     Paths,
     Platform,
     PlatformUnsupported,
+    PowerSnapshot,
     PowerState,
     RamWorkdir,
     RuntimeBackend,
@@ -330,8 +331,54 @@ class LinuxGpuControl(GpuControl):
         return apply_power_limit(watts)
 
 
+_POWER_SUPPLY_DIR = "/sys/class/power_supply"
+_MAINS_TYPES = ("mains", "usb", "usb_c", "usb_pd", "usb_dcp", "usb_cdp", "usb_aca", "wireless")
+
+
+def _read_text(path: str) -> Optional[str]:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
 class LinuxPower(PowerState):
-    platform_name = PLATFORM_LINUX  # no sleep / battery / reboot handling on Linux hosts today: every field stays unknown
+    """Battery state from ``/sys/class/power_supply``. Sleep and reboot-pending stay unknown on Linux (Ubuntu's
+    ``reboot-required`` file lingers for days, so it is deliberately not read as "a restart is pending").
+
+    * no battery at all (a desktop or a server): not on battery;
+    * a battery and a charger that is online: not on battery;
+    * a battery that is discharging with no charger online: on battery;
+    * anything else, or a missing directory: unknown (None), never a guess. A mouse or headset battery
+      (``scope`` = ``Device``) is not this computer's battery and is ignored."""
+
+    platform_name = PLATFORM_LINUX
+
+    def __init__(self, root: str = _POWER_SUPPLY_DIR) -> None:
+        self._root = root
+
+    def snapshot(self) -> PowerSnapshot:
+        try:
+            names = sorted(os.listdir(self._root))
+        except OSError:
+            return PowerSnapshot()
+        batteries: list[str] = []
+        mains_online = False
+        for name in names:
+            base = os.path.join(self._root, name)
+            kind = (_read_text(os.path.join(base, "type")) or "").lower()
+            if kind == "battery":
+                if (_read_text(os.path.join(base, "scope")) or "").lower() == "device":
+                    continue
+                batteries.append(_read_text(os.path.join(base, "status")) or "")
+            elif kind in _MAINS_TYPES and _read_text(os.path.join(base, "online")) == "1":
+                mains_online = True
+        if not batteries or mains_online:
+            return PowerSnapshot(on_battery=False)
+        if any(status.lower() == "discharging" for status in batteries):
+            return PowerSnapshot(on_battery=True)
+        return PowerSnapshot()
 
 
 class LinuxActivity(ActivityProbe):

@@ -286,6 +286,33 @@ def sessions(
 
 
 @app.command()
+def watchdog(
+    print_unit: bool = typer.Option(False, "--print-unit", help="Print a systemd unit that runs the watchdog on its own, then exit."),
+    poll_seconds: float = typer.Option(5.0, "--poll-seconds", min=1.0, help="Seconds between looks at the GPU temperature."),
+    grace_seconds: float = typer.Option(30.0, "--grace-seconds", min=0.0, help="How long the GPU must stay too hot (or unreadable) before containers are removed. Keep it longer than the agent needs to react."),
+) -> None:
+    """Independent heat watchdog: removes customer containers if the GPU overheats and the agent did not stop them.
+
+    Run it as its own service (use --print-unit) so it keeps running if the agent crashes."""
+    if print_unit:
+        from .watchdog import systemd_unit
+
+        typer.echo(systemd_unit(sys.argv[0] if sys.argv and sys.argv[0] else "computecoin-agent"), nl=False)
+        return
+    from .thermal import ThermalGuard
+    from .watchdog import run_forever
+
+    config = AgentConfig.load()
+    guard = ThermalGuard.from_config(config)
+    stop = threading.Event()
+    typer.echo(f"heat watchdog running: hard stop {guard.hard_stop_c:g} C, grace {grace_seconds:g} s")
+    try:
+        run_forever(guard, stop, poll_seconds=poll_seconds, grace_seconds=grace_seconds)
+    except (KeyboardInterrupt, SystemExit):
+        stop.set()
+
+
+@app.command()
 def start(
     server: Optional[str] = typer.Option(
         None, "--server", help="Backend base URL (defaults to the stored api_url)."
@@ -325,6 +352,8 @@ def start(
 
     thermal_guard = ThermalGuard.from_config(config)
     apply_power_limit(config.gpu_power_limit_w)  # best effort; never fails startup
+    restore_power = _apply_default_power_cap(config, typer.echo)
+    _start_safeguards(config, typer.echo)
 
     # Step aside for the owner (Linux laptops and desktops that are also somebody's computer). Off unless the owner sets
     # `governance_enabled = true`: a server must keep taking jobs exactly as before.
@@ -398,8 +427,136 @@ def start(
         )
     except (KeyboardInterrupt, SystemExit):
         typer.echo("\nStopping ComputeCoin agent gracefully...")
+    finally:
+        restore_power()
     if auth_failed.is_set():
         raise typer.Exit(code=1)
+
+
+def _power_state_file():
+    from pathlib import Path
+
+    from .platform import get_platform
+
+    return Path(get_platform().paths.data_dir()) / "power_cap_state.json"
+
+
+def _apply_default_power_cap(config: "AgentConfig", emit: Callable[[str], None]) -> Callable[[], None]:
+    """Run NVIDIA cards at ``gpu_power_limit_percent`` of their own default limit, and return a function that puts the
+    old limits back (a no-op when nothing was changed, and safe to call more than once). Never raises and never stops the
+    agent from starting.
+
+    An explicit ``gpu_power_limit_w`` wins (it is applied separately).
+
+    * The old limits are also written to a small state file, so that if the agent is killed without restoring, the NEXT
+      start puts them back before it caps again (and only on cards still at the cap this agent set).
+    * SIGTERM / SIGINT become a graceful stop, once: a second signal while the limits are being put back is ignored.
+    * The restore also runs at interpreter exit, so an exit during start-up cannot leave the cards capped."""
+    nothing: Callable[[], None] = lambda: None  # noqa: E731
+    try:
+        if config.gpu_power_limit_w is not None:
+            return nothing
+        import atexit
+
+        from .thermal import (apply_power_percent, power_cap_from_json, power_cap_to_json, restore_power_limits)
+
+        state_file = _power_state_file()
+        try:  # undo what a run that never got to restore left behind
+            leftover = power_cap_from_json(state_file.read_text()) if state_file.exists() else None
+        except OSError:
+            leftover = None
+        if leftover is not None and leftover.changed:
+            n = restore_power_limits(leftover)
+            emit(f"[power] put back the power limit an earlier run left on {n} card(s)")
+        try:
+            state_file.unlink()
+        except OSError:
+            pass
+
+        result = apply_power_percent(config.gpu_power_limit_percent)
+        if not result.changed:
+            if result.reason and result.reason not in ("off",):
+                emit(f"[power] default power cap not applied: {result.reason}")
+            return nothing
+        try:
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            state_file.write_text(power_cap_to_json(result))
+        except OSError:
+            pass  # without the file a crash is not recoverable by the next run; the normal stop still restores
+        emit(f"[power] graphics card power limited to {config.gpu_power_limit_percent:g}% of its default "
+             f"({len(result.changed)} card(s)); restored when the agent stops. Set gpu_power_limit_percent to 100 to turn this off")
+
+        stopping = threading.Event()
+        installed = False
+        try:
+            from .platform import get_platform
+
+            def _graceful(_name: str) -> None:
+                if stopping.is_set():
+                    return  # already stopping: do not interrupt the restore
+                raise SystemExit(0)
+
+            get_platform().signals.install(_graceful)
+            installed = True
+        except Exception:  # no signal support here: the limit is simply restored on a normal exit
+            pass
+
+        done = threading.Event()
+
+        def restore() -> None:
+            if done.is_set():
+                return
+            done.set()
+            stopping.set()  # from here on a further signal is ignored until the limits are back
+            n = restore_power_limits(result)
+            try:
+                state_file.unlink()
+            except OSError:
+                pass
+            if n:
+                emit(f"[power] power limit put back on {n} card(s)")
+            if installed:
+                try:
+                    from .platform import get_platform
+
+                    get_platform().signals.restore()
+                except Exception:
+                    pass
+
+        atexit.register(restore)
+        return restore
+    except Exception as exc:  # noqa: BLE001
+        emit(f"[power] default power cap skipped: {type(exc).__name__}")
+        return nothing
+
+
+def _start_safeguards(config: "AgentConfig", emit: Callable[[str], None]) -> None:
+    """Linux: clear containers an earlier run left behind, and make sure the heat watchdog is running.
+
+    Never raises and never stops the agent from starting: a failure here is reported and the agent carries on."""
+    try:
+        from .platform import PLATFORM_LINUX, get_platform
+
+        if get_platform().name != PLATFORM_LINUX:
+            return  # Windows: the supervisor does both
+        from . import watchdog
+
+        reaped = watchdog.reap_orphans()
+        if reaped.containers or reaped.networks:
+            emit(f"[safety] removed {reaped.containers} container(s) and {reaped.networks} network(s) left by an earlier run")
+        from .isolation import sandbox_hint
+
+        emit(f"[sandbox] {sandbox_hint()}")
+        if config.heat_watchdog_enabled:
+            outcome = watchdog.ensure_running()
+            if outcome == "failed":
+                emit("[safety] the heat watchdog could not be started; run `computecoin-agent watchdog` as its own service")
+            else:
+                emit(f"[safety] heat watchdog: {outcome.replace('_', ' ')}")
+            # If it dies later (or was stopped together with a crashed agent), start it again within half a minute.
+            threading.Thread(target=watchdog.keep_running, args=(threading.Event(),), daemon=True).start()
+    except Exception as exc:  # noqa: BLE001
+        emit(f"[safety] startup safeguards skipped: {type(exc).__name__}")
 
 
 def _owner_governance(config: "AgentConfig"):

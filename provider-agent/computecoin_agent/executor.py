@@ -816,6 +816,12 @@ class DockerExecutor(Executor):
             str(pids_limit),
             "--memory",
             f"{memory_mb}m",
+            # No swap: a job over its memory is stopped, it does not push the host's own programs into swap.
+            "--memory-swap",
+            f"{memory_mb}m",
+            # No core dumps: a crashing job must not write its memory (the customer's data) to disk.
+            "--ulimit",
+            "core=0",
             "--cpus",
             cpus,
             # dedicated writable scratch (NOT a host-sensitive bind):
@@ -966,8 +972,9 @@ class DockerExecutor(Executor):
 
         # The pinned image is the LAST positional before the (implicit) entrypoint.
         if byoc is not None:
-            # no swap, no shared IPC; never privileged / host namespaces / devices (none of these flags exist here)
-            argv += ["--memory-swap", f"{byoc.memory_mb}m", "--ipc", "none"]
+            # no shared IPC (swap is already off for every job); never privileged / host namespaces / devices
+            # (none of these flags exist here)
+            argv += ["--ipc", "none"]
             for key, value in sorted(byoc.env.items()):
                 argv += ["-e", f"{key}={value}"]
             if byoc.command:
@@ -975,20 +982,27 @@ class DockerExecutor(Executor):
             return argv, job_spec.image_digest, [*byoc.command[1:], *byoc.args]
         return argv, job_spec.image_digest, []
 
-    def _thermal_watch(self, container: str, output_dir: str, stop: "threading.Event", tripped: list[float]) -> None:
-        """Poll the GPU temperature while the job runs; at the hard stop, kill the container."""
-        from .thermal import HARD_STOP
+    def _thermal_watch(self, container: str, output_dir: str, stop: "threading.Event", tripped: list[float],
+                       sensor_lost: Optional[list[float]] = None) -> None:
+        """Poll the GPU temperature while the job runs. At the hard stop, or when a sensor that used to work has been
+        unreadable for too long, kill the container (the result is ``thermal_shutdown`` either way: the host's doing)."""
+        from .thermal import HARD_STOP, SENSOR_LOST
 
         guard = self._thermal_guard
         while not stop.wait(self._thermal_poll_seconds):
             try:
                 temp = guard.read_max_temp()
-                if guard.evaluate(temp) == HARD_STOP and temp is not None:
+                state = guard.evaluate(temp)
+                if state == HARD_STOP and temp is not None:
                     tripped.append(temp)
-                    self._runner(["docker", "kill", container], output_dir)
-                    return
+                elif state == SENSOR_LOST and sensor_lost is not None:
+                    sensor_lost.append(guard.blind_seconds())
+                else:
+                    continue
+                self._runner(["docker", "kill", container], output_dir)
+                return
             except Exception:
-                continue  # a broken sensor never stops a job; None never triggers
+                continue  # a failing check never stops a job by itself; only a real reading or a lost sensor does
 
     def _cancel_watch(self, container: str, output_dir: str, stop: "threading.Event", cancel_event: "threading.Event",
                       cancelled: list[bool]) -> None:
@@ -1117,6 +1131,7 @@ class DockerExecutor(Executor):
         run_result: Optional[DockerRunResult] = None
         stop_event = threading.Event()
         thermal_tripped: list[float] = []
+        sensor_lost: list[float] = []
         cancelled: list[bool] = []
         cancel_watchdog = None
         interrupted: list[bool] = []
@@ -1140,7 +1155,7 @@ class DockerExecutor(Executor):
             if self._thermal_guard is not None:
                 watchdog = threading.Thread(
                     target=self._thermal_watch,
-                    args=(container_name, output_dir, stop_event, thermal_tripped),
+                    args=(container_name, output_dir, stop_event, thermal_tripped, sensor_lost),
                     daemon=True,
                 )
                 watchdog.start()
@@ -1186,6 +1201,18 @@ class DockerExecutor(Executor):
                 logs=logs + [f"[thermal] GPU reached {thermal_tripped[0]:.0f} C (hard stop); container stopped"],
                 output_schema_valid=False,
                 error={"code": "thermal_shutdown", "message": f"GPU temperature {thermal_tripped[0]:.0f} C reached the hard stop"},
+            )
+
+        if sensor_lost:
+            # The temperature sensor went quiet mid-job: running a GPU nobody can watch is not safe, so the job is stopped
+            # and reported as a thermal stop (the host's doing: no charge to the customer, and it re-runs elsewhere).
+            return ExecutionResult(
+                status="failed",
+                execution_mode=self.execution_mode,
+                metrics={"duration_seconds": round(duration, 6), "max_memory_mb": None, "gpu_util_pct": None},
+                logs=logs + [f"[thermal] GPU temperature unreadable for {sensor_lost[0]:.0f} s; container stopped"],
+                output_schema_valid=False,
+                error={"code": "thermal_shutdown", "message": "the GPU temperature sensor stopped answering; container stopped"},
             )
 
         if cancelled:

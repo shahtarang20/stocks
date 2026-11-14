@@ -109,3 +109,25 @@ def test_capabilities_empty_and_no_new_privs(run_probe):
         "bad=[k for k in ('CapEff','CapPrm','CapBnd') if int(st.get(k,'0').strip(),16)!=0]\n"
         "if st.get('NoNewPrivs','1').strip()!='1': bad.append('NoNewPrivs')\n"
         "print('ESCAPED', bad) if bad else print('BLOCKED')\n"))
+
+
+def test_core_dumps_are_off(run_probe):
+    """A crashing job must not be able to write its memory (the customer's data) to disk."""
+    assert_blocked(run_probe(
+        "import resource\n"
+        "soft, hard = resource.getrlimit(resource.RLIMIT_CORE)\n"
+        "print('ESCAPED core limit', soft, hard) if (soft, hard) != (0, 0) else print('BLOCKED')\n"))
+
+
+def test_cannot_use_more_memory_than_the_limit_by_swapping(run_probe):
+    """memory-swap equal to memory: the kernel kills the job instead of swapping out the host's own programs."""
+    assert_blocked(run_probe(
+        "import os\n"
+        "paths=('/sys/fs/cgroup/memory.swap.max','/sys/fs/cgroup/memory/memory.memsw.limit_in_bytes')\n"
+        "found=[p for p in paths if os.path.exists(p)]\n"
+        "if not found:\n    print('BLOCKED')  # a sandbox that hides cgroups: nothing to swap with\n"
+        "else:\n"
+        "    v=open(found[0]).read().strip()\n"
+        "    mem=open('/sys/fs/cgroup/memory.max').read().strip() if os.path.exists('/sys/fs/cgroup/memory.max') else ''\n"
+        "    ok = v=='0' or (mem.isdigit() and v.isdigit() and int(v)<=int(mem))\n"
+        "    print('BLOCKED') if ok else print('ESCAPED swap', v, mem)\n"))

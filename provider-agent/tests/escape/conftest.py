@@ -1,4 +1,5 @@
-"""BYOC escape tests (U8.3). Opt in with COMPUTECOIN_ESCAPE_TESTS=1. Written, never run in the change that added them.
+"""Container escape tests (U8.3), against the ordinary container tier AND the gVisor / microVM tiers. Opt in with
+COMPUTECOIN_ESCAPE_TESTS=1 (``scripts/run_escape_tests.sh`` checks the host first). Written, NOT yet run on a real host.
 
 Needs: docker, a probe image pinned by digest in COMPUTECOIN_ESCAPE_IMAGE (any image with ``python3`` on PATH, for example
 ``python@sha256:...``; it is pulled by docker as usual), and runsc (gVisor) and/or Kata for the tiers under test.
@@ -33,7 +34,8 @@ def pytest_collection_modifyitems(config, items):  # skip everything in this dir
 
 
 def _tiers():
-    out = []
+    """"container" is the tier ordinary jobs run in, so it is attacked too: it is the one most customers' work uses."""
+    out = ["container"]
     if not ENABLED or probe_gvisor():
         out.append("gvisor")
     if ENABLED and probe_microvm():
@@ -41,7 +43,7 @@ def _tiers():
     return out
 
 
-@pytest.fixture(params=_tiers() or ["gvisor"])
+@pytest.fixture(params=_tiers())
 def isolation(request):
     return request.param
 
@@ -58,6 +60,18 @@ def run_probe(isolation):
         outdir = tempfile.mkdtemp(prefix="ccoin-escape-")
         os.chmod(outdir, 0o777)
         try:
+            if isolation == "container":
+                # An ordinary job: the same hardened flags every platform-built Kit gets, running the probe as its command.
+                spec = JobSpec(
+                    job_id="escape-test", workload_type="kit", model="probe", input={}, execution_mode="hardware",
+                    image_digest=IMAGE, isolation_tier="container",
+                    limits={"gpu_count": 0, "memory_mb": 256, "cpus": "1", "pids_limit": 64},
+                )
+                prefix, image, suffix = DockerExecutor().build_argv_parts(spec, outdir)
+                argv = [*prefix, image, "python3", "-c", code, *suffix]
+                proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 30,
+                                      env={**os.environ, "COMPUTECOIN_MACHINE_SECRET": "host-canary-secret"})
+                return proc.returncode, proc.stdout, proc.stderr
             spec = JobSpec(
                 job_id="escape-test", workload_type="byoc", model="byoc", input={}, execution_mode="hardware",
                 image_digest=IMAGE, isolation_tier="container",

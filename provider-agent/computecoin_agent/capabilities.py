@@ -95,7 +95,8 @@ def compute_capabilities(
         flags.add("thermal_cap")  # the thermal guard reads NVML / amdsmi telemetry, which exists exactly when a GPU is detected
 
     limit_w = getattr(cfg, "gpu_power_limit_w", None)
-    if limit_w is not None and limit_w > 0:
+    pct = getattr(cfg, "gpu_power_limit_percent", None)
+    if (limit_w is not None and limit_w > 0) or (limit_w is None and isinstance(pct, (int, float)) and 50 <= pct < 100):
         try:
             if plat.gpu.power_limit_supported():
                 flags.add("power_limit")

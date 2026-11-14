@@ -115,6 +115,21 @@ class AgentConfig(BaseSettings):
     tee_snp_product: Optional[str] = None  # AMD KDS product: Milan | Genoa | Turin
     tee_cache_dir: Optional[str] = None  # cached VCEK/ASK or Intel collateral files
 
+    @field_validator("gpu_power_limit_percent")
+    @classmethod
+    def _check_power_percent(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and not (50.0 <= value <= 100.0):
+            raise ValueError("gpu_power_limit_percent must be between 50 and 100 (or unset to turn it off)")
+        return value
+
+    @field_validator("gpu_sensor_lost_seconds")
+    @classmethod
+    def _check_sensor_lost_seconds(cls, value: float) -> float:
+        # Too short and a one-off driver hiccup stops a job; too long and a blind GPU runs unwatched.
+        if not (10.0 <= value <= 3600.0):
+            raise ValueError("gpu_sensor_lost_seconds must be between 10 and 3600")
+        return value
+
     @field_validator("tee_cpu", mode="before")
     @classmethod
     def _check_tee_cpu(cls, value: Any) -> Optional[str]:
@@ -130,8 +145,17 @@ class AgentConfig(BaseSettings):
     gpu_temp_cap_c: float = 85.0
     gpu_temp_resume_c: float = 80.0
     gpu_temp_hard_stop_c: float = 95.0
+    # A temperature sensor that worked and then went quiet for this many seconds counts as lost: no new jobs, and a
+    # running job is stopped (thermal_shutdown). A computer that never had a sensor is not affected.
+    gpu_sensor_lost_seconds: float = 120.0
+    # Linux: keep a separate heat watchdog process running next to the agent (see watchdog.py). On by default.
+    heat_watchdog_enabled: bool = True
     # Optional board power limit in watts, applied only when the agent is permitted to (never fails enrolment).
     gpu_power_limit_w: Optional[float] = None
+    # Default: run NVIDIA cards at this percentage of THEIR OWN default power limit (cooler, quieter, kinder to the card),
+    # put back when the agent stops. Applied only when permitted (root). A limit the owner already set lower is kept.
+    # `gpu_power_limit_w`, when set, wins. None or 100 turns it off.
+    gpu_power_limit_percent: Optional[float] = 90.0
     # ---- B5 egress proxy image, pinned by digest (repo/name@sha256:...). Unset = jobs with a
     # network_policy are refused on this host (no network is never silently widened).
     egress_proxy_image: Optional[str] = None

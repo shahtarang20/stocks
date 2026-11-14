@@ -54,5 +54,5 @@ def test_hysteresis_and_none():
     assert g.check() == OK
     t[0] = 95.0
     assert g.check() == HARD_STOP
-    t[0] = None
-    assert g.check() == OK and g.availability() == "online"
+    # A sensor that has NEVER worked is left alone (see test_thermal_sensor_failsafe for one that worked and went quiet).
+    assert _guard([None]).check() == OK and _guard([None]).availability() == "online"

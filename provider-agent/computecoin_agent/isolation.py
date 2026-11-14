@@ -5,7 +5,7 @@ Implements the isolation tier hierarchy defined in ADR-0003:
                     seccomp, dropped caps. Shares host kernel.
 2. "gvisor"       - Application kernel sandbox (runsc). Intercepts and implements
                     syscalls in userspace, shielding host kernel from 0-days.
-3. "microvm"      - Lightweight virtual machine (Kata Containers / Firecracker).
+3. "microvm"      - Lightweight virtual machine (Kata Containers).
                     Dedicated guest kernel per workload.
 4. "confidential" - Hardware-encrypted memory & CPU state (AMD SEV-SNP / Intel TDX /
                     NVIDIA CC) with remote cryptographic attestation proving the
@@ -18,6 +18,10 @@ rather than silently falling back to a weaker tier.
 
 from __future__ import annotations
 
+import json
+import subprocess
+import threading
+import time
 from enum import Enum
 from shutil import which
 from typing import Callable, Optional
@@ -54,18 +58,83 @@ ALL_ISOLATION_TIERS = (
 )
 
 
-def probe_gvisor() -> bool:
-    """Check if gVisor (runsc) is available as an installed binary or runtime."""
-    return which("runsc") is not None
+# Docker only runs a container under a sandbox runtime it has been TOLD about (daemon.json). The program being on the disk is
+# not enough: advertising a sandbox that Docker cannot use would get sandboxed jobs sent here that then fail.
+_RUNTIME_CACHE_SECONDS = 60.0
+_RUNTIME_FAILURE_CACHE_SECONDS = 5.0  # a failed question (daemon busy, timeout) is asked again soon, not held for a minute
+_runtime_lock = threading.Lock()
+_runtime_cache: "tuple[float, frozenset[str], float] | None" = None  # (when, names, how long to keep)
 
 
-def probe_microvm() -> bool:
-    """Check if a microVM runtime (Kata Containers or Firecracker) is present."""
-    return (
-        which("kata-runtime") is not None
-        or which("kata-qemu") is not None
-        or which("firecracker") is not None
-    )
+def _ask_docker_runtimes() -> Optional[str]:
+    try:
+        done = subprocess.run(["docker", "info", "--format", "{{json .Runtimes}}"], capture_output=True, text=True,
+                              timeout=10, check=False, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def docker_runtimes(
+    ask: Optional[Callable[[], Optional[str]]] = None, *, now: Callable[[], float] = time.monotonic
+) -> frozenset:
+    """Names of the runtimes Docker has registered ("runc", "runsc", "kata-qemu" ...). Empty when Docker cannot be asked.
+    A good answer is kept for a minute (the heartbeat asks on every pulse); a failed one only for a few seconds."""
+    global _runtime_cache
+    if ask is None:
+        with _runtime_lock:
+            cached = _runtime_cache
+        if cached is not None and now() - cached[0] < cached[2]:
+            return cached[1]
+    text = (ask or _ask_docker_runtimes)()  # not under the lock: a slow docker must not make other callers queue
+    names: frozenset = frozenset()
+    try:
+        parsed = json.loads(text) if text else None
+        if isinstance(parsed, dict):
+            names = frozenset(str(k) for k in parsed)
+    except ValueError:
+        names = frozenset()
+    if ask is None:
+        keep = _RUNTIME_CACHE_SECONDS if names else _RUNTIME_FAILURE_CACHE_SECONDS
+        with _runtime_lock:
+            _runtime_cache = (now(), names, keep)
+    return names
+
+
+def _forget_docker_runtimes() -> None:
+    """Drop the kept answer (tests, and after the host changes its Docker setup)."""
+    global _runtime_cache
+    with _runtime_lock:
+        _runtime_cache = None
+
+
+def probe_gvisor(*, runtimes: Optional[frozenset] = None, have_binary: Optional[bool] = None) -> bool:
+    """True when gVisor (``runsc``) is installed AND registered with Docker as the ``runsc`` runtime."""
+    binary = (which("runsc") is not None) if have_binary is None else have_binary
+    return binary and "runsc" in (docker_runtimes() if runtimes is None else runtimes)
+
+
+def probe_microvm(*, runtimes: Optional[frozenset] = None, have_binary: Optional[bool] = None) -> bool:
+    """True when Kata Containers is installed AND registered with Docker as the ``kata-qemu`` runtime (the one the agent
+    asks for). A bare Firecracker install is not enough: the agent does not start jobs through it."""
+    binary = (which("kata-runtime") is not None or which("kata-qemu") is not None) if have_binary is None else have_binary
+    return binary and "kata-qemu" in (docker_runtimes() if runtimes is None else runtimes)
+
+
+def sandbox_hint(*, gvisor_ready: Optional[bool] = None, binary: Optional[bool] = None, runtimes: Optional[frozenset] = None) -> str:
+    """One plain sentence for the host about the optional sandbox, saying exactly what is missing. No jargon."""
+    rts = docker_runtimes() if runtimes is None else runtimes
+    have = (which("runsc") is not None) if binary is None else binary
+    ready = probe_gvisor(runtimes=rts, have_binary=have) if gvisor_ready is None else gvisor_ready
+    if ready:
+        return "Sandbox (gVisor) is ready: this computer can also take sandboxed jobs."
+    if have and rts:
+        return ("gVisor is installed but Docker does not know about it, so sandboxed jobs are not offered. "
+                "Run `sudo runsc install` and restart Docker.")
+    if not rts:
+        return "Sandbox (gVisor) is not set up (Docker could not be asked, or it has no sandbox). Ordinary jobs only."
+    return ("Sandbox (gVisor) is not installed: this computer takes ordinary jobs only. Installing gVisor and registering "
+            "it with Docker lets it also take sandboxed jobs.")
 
 
 def probe_confidential_computing() -> bool:

@@ -498,7 +498,7 @@ class Supervisor:
                 causes.setdefault("yielding", "availability_source_error")
                 logger.warning("availability source failed: %s", type(exc).__name__)
         thermal = self._thermal_check()
-        if thermal in ("throttled", "hard_stop"):
+        if thermal in ("throttled", "hard_stop", "sensor_lost"):
             causes["throttled"] = "gpu_" + thermal
         if self._update_gate is not None:
             try:

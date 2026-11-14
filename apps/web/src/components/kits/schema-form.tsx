@@ -1,6 +1,7 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FieldErrors, FieldSpec, RawValues } from "@/lib/schema-form";
@@ -130,12 +131,23 @@ export function SchemaForm({
   onChange: (name: string, v: string | boolean) => void;
   disabled?: boolean;
 }) {
+  const required = fields.filter((f) => f.required);
+  const optional = fields.filter((f) => !f.required);
+  // When nothing is required the optional settings ARE the form, so they start open. Otherwise they start folded, and
+  // a problem inside them opens them so the message is never hidden.
+  const [optionalOpen, setOptionalOpen] = useState(required.length === 0);
+  const optionalHasError = optional.some((f) => Boolean(errors[f.name]));
+  useEffect(() => {
+    if (optionalHasError) setOptionalOpen(true);
+  }, [optionalHasError]);
+
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">This Kit has no settings. Just upload your files and start.</p>;
   }
-  return (
+
+  const grid = (list: FieldSpec[]) => (
     <div className="grid gap-5 sm:grid-cols-2">
-      {fields.map((f) => (
+      {list.map((f) => (
         <div key={f.name} className={f.kind === "array" || f.kind === "json" ? "sm:col-span-2" : undefined}>
           <SchemaFormField
             field={f}
@@ -146,6 +158,30 @@ export function SchemaForm({
           />
         </div>
       ))}
+    </div>
+  );
+
+  if (required.length === 0 || optional.length === 0) return grid(fields);
+
+  return (
+    <div className="space-y-5">
+      {grid(required)}
+      <details
+        className="group rounded-md border border-border"
+        open={optionalOpen}
+        onToggle={(e) => setOptionalOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-md px-3 py-2 text-sm font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <span>
+            Optional settings{" "}
+            <span className="font-normal text-muted-foreground">
+              ({optional.length}). The defaults are fine for most people.
+            </span>
+          </span>
+          <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-border p-3">{grid(optional)}</div>
+      </details>
     </div>
   );
 }

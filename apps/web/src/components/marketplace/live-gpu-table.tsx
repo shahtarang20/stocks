@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   AlertCircle,
+  ChevronDown,
   RefreshCw,
   Server,
   SlidersHorizontal,
@@ -37,6 +38,20 @@ const selectClass =
 
 const PAGE_SIZE = 20;
 
+/**
+ * "At least N GB of graphics card memory", in the MB the API filters on. Each threshold sits a little BELOW the
+ * marketed size, because cards report slightly less than their label (a "24 GB" card reports about 24 564 MB and an
+ * "80 GB" card about 81 559 MB), so asking for exactly 24 576 MB would hide real 24 GB cards.
+ */
+export const MEMORY_CHOICES: { label: string; mb: number }[] = [
+  { label: "8 GB or more", mb: 7680 },
+  { label: "12 GB or more", mb: 11264 },
+  { label: "16 GB or more", mb: 15360 },
+  { label: "24 GB or more", mb: 23040 },
+  { label: "48 GB or more", mb: 46080 },
+  { label: "80 GB or more", mb: 76800 },
+];
+
 /** Honest reliability text — never fabricate a rating. */
 function reliabilityText(m: MarketplaceMachine): string {
   const { completed_jobs, success_rate } = m.reliability;
@@ -54,7 +69,7 @@ export function LiveGpuTable() {
   const [maxPrice, setMaxPrice] = useState("");
   const [region, setRegion] = useState("");
   const [workload, setWorkload] = useState("");
-  const [verification, setVerification] = useState("");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [hostKind, setHostKind] = useState("");
   const [page, setPage] = useState(1);
 
@@ -72,10 +87,9 @@ export function LiveGpuTable() {
     if (maxPrice.trim()) p.max_price_per_hour = maxPrice.trim();
     if (region.trim()) p.region = region.trim();
     if (workload.trim()) p.workload = workload.trim();
-    if (verification) p.verification_status = verification;
     if (hostKind === "dedicated" || hostKind === "shared") p.host_kind = hostKind;
     return p;
-  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, verification, hostKind, page]);
+  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, hostKind, page]);
 
   const query = useQuery({
     queryKey: ["marketplace", "machines", params],
@@ -96,10 +110,12 @@ export function LiveGpuTable() {
     setMaxPrice("");
     setRegion("");
     setWorkload("");
-    setVerification("");
     setHostKind("");
     setPage(1);
   }
+
+  // Filters that live in the folded section: show how many are on, so a hidden filter never goes unnoticed.
+  const moreFiltersOn = [gpuVendor, gpuRuntime, region.trim(), workload.trim()].filter(Boolean).length;
 
   function openQuote(m: MarketplaceMachine) {
     setQuoteTarget(m);
@@ -110,10 +126,10 @@ export function LiveGpuTable() {
     <div className="space-y-5">
       {/* Filters */}
       <div className="rounded-lg border border-border bg-surface p-4">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-            Filters
+            Find a computer
           </div>
           <Button
             variant="outline"
@@ -125,9 +141,9 @@ export function LiveGpuTable() {
             Refresh
           </Button>
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
           <div className="space-y-1.5">
-            <Label htmlFor="f-model">Graphics card (GPU) model</Label>
+            <Label htmlFor="f-model">Graphics card (GPU)</Label>
             <Input
               id="f-model"
               placeholder="For example: RTX 4090"
@@ -139,53 +155,26 @@ export function LiveGpuTable() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-vendor">GPU brand</Label>
+            <Label htmlFor="f-vram">Graphics card memory</Label>
             <select
-              id="f-vendor"
-              className={selectClass}
-              value={gpuVendor}
-              onChange={(e) => {
-                setGpuVendor(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">Any brand</option>
-              <option value="nvidia">NVIDIA</option>
-              <option value="amd">AMD</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="f-runtime">GPU software (CUDA or ROCm)</Label>
-            <select
-              id="f-runtime"
-              className={selectClass}
-              value={gpuRuntime}
-              onChange={(e) => {
-                setGpuRuntime(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">Any</option>
-              <option value="cuda">CUDA</option>
-              <option value="rocm">ROCm</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="f-vram">Least GPU memory (MB)</Label>
-            <Input
               id="f-vram"
-              type="number"
-              min={0}
-              placeholder="For example: 24576"
-              value={minVram}
+              className={selectClass}
+              value={minVram === "" ? "" : String(minVram)}
               onChange={(e) => {
                 setMinVram(e.target.value === "" ? "" : Number(e.target.value));
                 setPage(1);
               }}
-            />
+            >
+              <option value="">Any amount</option>
+              {MEMORY_CHOICES.map((c) => (
+                <option key={c.mb} value={c.mb}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="f-price">Highest price per hour</Label>
+            <Label htmlFor="f-price">Highest price per hour (credits)</Label>
             <Input
               id="f-price"
               inputMode="decimal"
@@ -196,45 +185,6 @@ export function LiveGpuTable() {
                 setPage(1);
               }}
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="f-region">Region</Label>
-            <Input
-              id="f-region"
-              placeholder="For example: us-east"
-              value={region}
-              onChange={(e) => {
-                setRegion(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="f-workload">Type of job</Label>
-            <Input
-              id="f-workload"
-              placeholder="For example: text-generation"
-              value={workload}
-              onChange={(e) => {
-                setWorkload(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="f-verif">Hardware check</Label>
-            <select
-              id="f-verif"
-              className={selectClass}
-              value={verification}
-              onChange={(e) => {
-                setVerification(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">Any</option>
-              <option value="detected">Reported by the computer</option>
-            </select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="f-kind">Kind of computer</Label>
@@ -253,8 +203,85 @@ export function LiveGpuTable() {
             </select>
           </div>
         </div>
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
+
+        <details
+          className="group mt-4 rounded-md border border-border"
+          open={moreOpen}
+          onToggle={(e) => setMoreOpen((e.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-md px-3 py-2 text-sm font-medium hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <span>
+              More filters
+              {moreFiltersOn > 0 ? (
+                <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  {moreFiltersOn} on
+                </span>
+              ) : null}
+            </span>
+            <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="grid gap-3 border-t border-border p-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="f-vendor">Graphics card brand</Label>
+              <select
+                id="f-vendor"
+                className={selectClass}
+                value={gpuVendor}
+                onChange={(e) => {
+                  setGpuVendor(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">Any brand</option>
+                <option value="nvidia">NVIDIA</option>
+                <option value="amd">AMD</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="f-runtime">Graphics card software</Label>
+              <select
+                id="f-runtime"
+                className={selectClass}
+                value={gpuRuntime}
+                onChange={(e) => {
+                  setGpuRuntime(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">Any</option>
+                <option value="cuda">CUDA (used by NVIDIA)</option>
+                <option value="rocm">ROCm (used by AMD)</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="f-region">Region</Label>
+              <Input
+                id="f-region"
+                placeholder="For example: us-east"
+                value={region}
+                onChange={(e) => {
+                  setRegion(e.target.value);
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="f-workload">Type of job</Label>
+              <Input
+                id="f-workload"
+                placeholder="For example: text-generation"
+                value={workload}
+                onChange={(e) => {
+                  setWorkload(e.target.value);
+                  setPage(1);
+                }}
+              />
+            </div>
+          </div>
+        </details>
+
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground" aria-live="polite">
             {query.isLoading
               ? "Looking for computers…"
               : query.isError
@@ -318,26 +345,25 @@ export function LiveGpuTable() {
           </CardContent>
         </Card>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        <div className="overflow-x-auto rounded-lg border border-border bg-surface">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Graphics card (GPU) and its memory</TableHead>
-                <TableHead>Processor and memory</TableHead>
-                <TableHead>Region</TableHead>
+                <TableHead>Graphics card (GPU)</TableHead>
+                <TableHead>Computer</TableHead>
                 <TableHead className="text-right">Price per hour</TableHead>
-                <TableHead>Hardware check</TableHead>
-                <TableHead className="text-right">Free spots</TableHead>
-                <TableHead>Past jobs</TableHead>
-                <TableHead>Last seen</TableHead>
-                <TableHead className="text-right">Action</TableHead>
+                <TableHead>Free now</TableHead>
+                <TableHead>Track record</TableHead>
+                <TableHead className="text-right">
+                  <span className="sr-only">Action</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((m) => (
                 <TableRow key={m.machine_id}>
                   <TableCell>
-                    <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="font-medium">
                         {m.gpu_model ?? "CPU-only"}
                         {m.gpu_count > 1 ? ` ×${m.gpu_count}` : ""}
@@ -345,6 +371,7 @@ export function LiveGpuTable() {
                       {m.gpu_vendor ? (
                         <Badge
                           variant="neutral"
+                          title={m.gpu_runtime ? `Uses ${m.gpu_runtime.toUpperCase()} software` : undefined}
                           className={
                             m.gpu_vendor === "amd"
                               ? "border-red-600/30 text-red-700 bg-red-500/10 dark:border-red-500/30 dark:text-red-400 text-[10px] uppercase font-mono px-1.5 py-0"
@@ -352,14 +379,6 @@ export function LiveGpuTable() {
                           }
                         >
                           {m.gpu_vendor}
-                        </Badge>
-                      ) : null}
-                      {m.gpu_runtime ? (
-                        <Badge
-                          variant="neutral"
-                          className="border-primary/30 text-primary bg-primary/10 text-[10px] uppercase font-mono px-1.5 py-0"
-                        >
-                          {m.gpu_runtime}
                         </Badge>
                       ) : null}
                       {m.host_kind === "dedicated" || m.host_kind === "shared" ? (
@@ -377,7 +396,7 @@ export function LiveGpuTable() {
                       ) : null}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {m.gpu_model ? `${formatMbAsGb(m.vram_mb)} GPU memory` : "—"}
+                      {m.gpu_model ? `${formatMbAsGb(m.vram_mb)} memory` : "—"}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -385,44 +404,25 @@ export function LiveGpuTable() {
                     <div className="text-xs text-muted-foreground">
                       {m.cpu_cores ? `${m.cpu_cores} CPU cores · ` : ""}
                       {formatMbAsGb(m.ram_mb)} memory
+                      {m.region ? ` · ${m.region}` : ""}
                     </div>
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {m.region ?? "—"}
-                    </span>
                   </TableCell>
                   <TableCell className="text-right">
                     {/* Decimal string, shown verbatim — never parseFloat. */}
-                    <div className="font-mono tabular-nums">
-                      {m.price_per_hour}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {CREDITS_LABEL}
-                    </div>
+                    <div className="font-mono tabular-nums">{m.price_per_hour}</div>
+                    <div className="text-[11px] text-muted-foreground">{CREDITS_LABEL}</div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="neutral" title="The computer reported this itself. ComputeCoin has not checked it.">
-                      {m.verification_status === "detected"
-                        ? "Reported by the computer"
-                        : m.verification_status}
-                    </Badge>
+                    <div className="text-sm tabular-nums">
+                      {m.available_slots} of {m.max_concurrent_jobs}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Seen {formatRelativeTime(m.last_heartbeat_at)}
+                    </div>
                   </TableCell>
-                  <TableCell className="text-right font-mono text-sm tabular-nums">
-                    {m.available_slots} / {m.max_concurrent_jobs}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {reliabilityText(m)}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {formatRelativeTime(m.last_heartbeat_at)}
-                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{reliabilityText(m)}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => openQuote(m)}
-                    >
+                    <Button variant="outline" size="sm" onClick={() => openQuote(m)}>
                       Get a price quote
                     </Button>
                   </TableCell>
@@ -463,7 +463,7 @@ export function LiveGpuTable() {
       <p className="text-xs text-muted-foreground">
         These computers are shared by hosts. Prices are in {CREDITS_LABEL}, not
         real money. Each computer reports its own hardware, and ComputeCoin has
-        not checked it yet. Free spots shows how many jobs a computer can take
+        not checked it yet. &quot;Free now&quot; shows how many jobs a computer can take
         at the same time.
       </p>
 

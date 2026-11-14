@@ -498,6 +498,27 @@ app's settings (the page then says it has no readings).
 
 ---
 
+## 2.3b Keeping your hardware safe (Linux)
+
+The Computecoin app protects your graphics card in layers. What each one does, and what it cannot do:
+
+| Safeguard | What it does | Setting |
+|---|---|---|
+| **Heat limit** | At 85 °C it stops taking new jobs. At 95 °C it stops the running job. The customer is not charged and the job re-runs elsewhere | `gpu_temp_cap_c`, `gpu_temp_hard_stop_c` |
+| **Lost sensor** | If the temperature reading worked and then goes silent for 2 minutes, it stops taking jobs and stops the running one. A computer that never had a reading is left alone | `gpu_sensor_lost_seconds` (10 to 3600) |
+| **Power cap** | Runs NVIDIA cards at 90% of their own default power limit and puts the old limit back when the app stops. It never raises a limit you set lower yourself. Needs the app to run as root | `gpu_power_limit_percent` (50 to 100; unset or 100 turns it off), or an exact `gpu_power_limit_w` |
+| **Heat watchdog** | A separate small process. If the card stays over the heat limit (or the sensor stays silent) for 30 seconds longer than the app needs to react, it removes the customer containers. It covers a crashed or frozen app | `heat_watchdog_enabled` |
+| **Clean start** | When the app starts it removes customer containers an earlier run left behind | always on |
+| **No swap, no core dumps** | A job over its memory limit is stopped instead of pushing your own programs into swap, and a crashing job cannot write its memory to disk | always on |
+
+**Run the watchdog as its own service.** The app starts the watchdog for you, but under systemd a process started by the app's own service is stopped with it. To keep it running when the app crashes, run `computecoin-agent watchdog --print-unit`, save the output as `/etc/systemd/system/computecoin-watchdog.service`, then `sudo systemctl enable --now computecoin-watchdog`.
+
+**What this cannot do.** Software cannot promise a card never overheats. The card's own firmware still throttles and shuts down on its own, and that is the real last line of defence. If the app crashes and the watchdog is not running, a customer container can keep the card busy until the app is restarted, which clears it.
+
+**Sandboxed jobs (optional).** Customers can ask for an extra sandbox (gVisor). A computer offers it only when gVisor is installed **and** registered with Docker (`sudo runsc install`, then restart Docker). The app says on start whether it is ready, and "My computers" shows "Sandbox ready" or "Ordinary jobs only". Support for graphics cards inside gVisor is still limited.
+
+---
+
 ## 2.4 Earnings — `/provider/earnings`
 
 > *Live accrued earnings from the double-entry ledger as jobs settle.*

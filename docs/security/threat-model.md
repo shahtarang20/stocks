@@ -120,6 +120,8 @@ new double-spend surface; design the reconciliation carefully before shipping.
 | S | Multi-vendor host spoofing / driver confusion | D2 strict single-vendor policy: dual-vendor detection without explicit `gpu_vendor` config refuses enrollment. |
 | E | MicroVM / sandbox escape via unverified VFIO paths | D5 container-only policy for AMD GPU jobs in v1. Non-container isolation requests are rejected at submit (422) and executor (IsolationUnavailableError). |
 
+**Host hardware safeguards (added after the first audit):** a lost temperature sensor stops work (`gpu_sensor_lost_seconds`); an independent heat watchdog process removes customer containers if the agent is gone and the card stays over the hard limit; the agent removes leftover containers at start; NVIDIA cards run at 90% of their default power limit by default (restored on stop); no swap and no core dumps for any job; a sandbox tier is advertised only if Docker has the runtime registered. **Still residual:** the watchdog is only as independent as the way it is run (use its own systemd unit); the container escape tests (`scripts/run_escape_tests.sh`) are written but have NOT been run on a real host; the ordinary tier still shares the host kernel.
+
 **Residual risk:** AMD GPU compute nodes `/dev/kfd` and render nodes share kernel-mode driver surfaces (amdgpu). A vulnerability in the amdgpu kernel driver could lead to container escape or host denial of service. Dedicated hardware allocation per tenant and memory clearing between jobs are required.
 
 ---

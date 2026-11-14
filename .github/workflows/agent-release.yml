@@ -24,6 +24,15 @@ on:
   push:
     tags:
       - "agent-v*"
+    # A push to main that touches the agent or this job does a BUILD-ONLY dry run (nothing is published), so the whole
+    # pipeline is proven before a release tag is pushed.
+    branches:
+      - main
+    paths:
+      - ".github/workflows/agent-release.yml"
+      - "provider-agent/**"
+      - "apps/web/public/install.sh"
+      - "scripts/annotate_failures.py"
 
 permissions:
   contents: write  # to create the releases; nothing else
@@ -42,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: The tag must match the package version
+      - name: The tag must match the package version (a dry run on main only reads the version)
         run: |
           python -m pip install -q packaging
           # Compared as Python versions, so a tag like agent-v1.0.0-rc1 matches version 1.0.0rc1 (which is what the wheel is named).
@@ -52,12 +61,13 @@ jobs:
 
           tag = os.environ["GITHUB_REF_NAME"]
           version = tomllib.load(open("provider-agent/pyproject.toml", "rb"))["project"]["version"]
-          try:
-              same = tag.startswith("agent-v") and Version(tag[len("agent-v"):]) == Version(version)
-          except InvalidVersion:
-              same = False
-          if not same:
-              sys.exit(f"Tag {tag} does not match version {version} in provider-agent/pyproject.toml")
+          if os.environ.get("GITHUB_REF_TYPE") == "tag":
+              try:
+                  same = tag.startswith("agent-v") and Version(tag[len("agent-v"):]) == Version(version)
+              except InvalidVersion:
+                  same = False
+              if not same:
+                  sys.exit(f"Tag {tag} does not match version {version} in provider-agent/pyproject.toml")
           with open(os.environ["GITHUB_ENV"], "a") as env:
               env.write(f"VERSION={version}\n")
           PY
@@ -67,7 +77,15 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -e ".[dev]"
-          pytest -q
+          set +e
+          pytest -q --tb=short -rf 2>&1 | tee "${RUNNER_TEMP}/pytest.out"
+          code="${PIPESTATUS[0]}"
+          set -e
+          if [ "${code}" != "0" ]; then
+            # Job logs need a login to read; annotations do not. Put the failures where they can be read.
+            python "${GITHUB_WORKSPACE}/scripts/annotate_failures.py" "${RUNNER_TEMP}/pytest.out" "Agent tests" || true
+          fi
+          exit "${code}"
 
       - name: Build the package and its hash-locked dependency list
         run: |
@@ -110,6 +128,7 @@ jobs:
           done
 
       - name: Publish the release for this tag
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -118,6 +137,7 @@ jobs:
             --notes "Computecoin provider agent ${VERSION}. Hosts install it with the one-line command on the setup page."
 
       - name: Move the agent-latest release to the new files
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

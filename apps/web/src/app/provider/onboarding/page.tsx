@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   useMutation,
@@ -63,6 +63,7 @@ import { useAuth } from "@/lib/auth-context";
 import { RelativeTime } from "@/components/console/bits";
 import { useToast } from "@/components/console/toast";
 import { formatDateTime } from "@/lib/format";
+import { buildInstallCommand, buildUnattendedInstallCommand, uninstallCommand } from "@/lib/install-command";
 
 const TOKEN_STATUS_VARIANT: Record<
   EnrollmentTokenStatus,
@@ -213,6 +214,22 @@ export default function ProviderOnboardingPage() {
   const machines = machinesQuery.data ?? [];
   const onlineCount = machines.filter((m) => m.status === "online").length;
   const activeTokenValue = newToken?.enrollment_token ?? "PASTE_YOUR_TOKEN_HERE";
+  // The address of this website, known only in the browser: it is what the one-line install downloads its script from.
+  const [origin, setOrigin] = useState<string | null>(null);
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+  const commandInput = {
+    origin,
+    server: API_BASE_URL,
+    token: newToken?.enrollment_token,
+    packageBase: process.env.NEXT_PUBLIC_AGENT_PACKAGE_BASE,
+  };
+  // The pasted line has no token in it: the installer asks for it with typing hidden, so it never shows in the list of
+  // running programs. The unattended form (token inside) is only for scripts that cannot answer a prompt.
+  const installCommand = buildInstallCommand(commandInput);
+  const unattendedCommand = buildUnattendedInstallCommand(commandInput);
+  const removeCommand = uninstallCommand(origin);
 
   return (
     <>
@@ -402,9 +419,17 @@ export default function ProviderOnboardingPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 sm:pl-11">
+            <p className="rounded-md bg-surface-2/50 px-3 py-2 text-sm text-muted-foreground">
+              <strong className="font-medium text-foreground">You can skip this step.</strong> The one-line install in
+              step 3c installs the agent for you and keeps it running. Use the commands below only if you would rather
+              install it yourself.
+            </p>
+            <details className="rounded-md border border-border px-4 py-3 text-sm">
+              <summary className="cursor-pointer font-medium">Install by hand (advanced)</summary>
+            <div className="mt-3 space-y-4">
             <p className="text-sm text-muted-foreground">
-              The agent is not on a public download site yet. Get the <Code>provider-agent</Code> folder
-              from the ComputeCoin team, then open a terminal inside it.
+              A manual install needs the <Code>provider-agent</Code> folder from the ComputeCoin team. Open a terminal
+              inside it.
             </p>
             <CopyField
               label="A. Install the agent (Linux)"
@@ -434,6 +459,8 @@ pip install -e .`}
               is empty, see the fixes in step 4. Each time you open a new terminal, run{" "}
               <Code>source .venv/bin/activate</Code> in the folder first.
             </p>
+            </div>
+            </details>
             <details className="rounded-md border border-border px-4 py-3 text-sm">
               <summary className="cursor-pointer font-medium">
                 Set up Docker and your graphics card for real jobs
@@ -595,7 +622,56 @@ sudo usermod -aG render,video $USER`}
 
             {/* 3c: run enroll */}
             <div className="space-y-3">
-              <h3 className="text-sm font-semibold">3c. Connect and start the agent</h3>
+              <h3 className="text-sm font-semibold">3c. Install and connect (one line)</h3>
+              <p className="text-sm text-muted-foreground">
+                Open a terminal on the computer you want to share and paste this one line. It asks for your password
+                (sudo). It checks the computer, installs the agent, connects the computer to your account, and starts
+                the agent and its heat watchdog so they keep running after a restart.
+              </p>
+              {installCommand ? (
+                <CopyField label="Install and connect (Linux)" value={installCommand} />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  The one-line command is not available right now (this website&apos;s address could not be read). Use the
+                  manual commands below.
+                </p>
+              )}
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">
+                  It will ask for your setup token (your typing is hidden). Paste this when asked:
+                </p>
+                <CopyField label="Your setup token" value={activeTokenValue} />
+                {!newToken ? (
+                  <p className="text-xs text-muted-foreground">
+                    Create a token in step 3b first. Until then <Code>PASTE_YOUR_TOKEN_HERE</Code> is a placeholder.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    The token works once and expires. Docker and your graphics driver must already be installed (step 1);
+                    the installer tells you plainly if something is missing.
+                  </p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                When it finishes, open <strong className="font-medium text-foreground">My computers</strong>: your
+                computer should show as online within a minute. To remove it later, run{" "}
+                {removeCommand ? <Code>{removeCommand}</Code> : <Code>install.sh --uninstall</Code>}.
+              </p>
+              {unattendedCommand ? (
+                <details className="rounded-md border border-border px-4 py-3 text-sm">
+                  <summary className="cursor-pointer font-medium">Install without a prompt (for scripts)</summary>
+                  <div className="mt-3 space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      For automation that cannot type. The token is part of the command, so other people using that
+                      computer could read it while the install runs. Cancel the token afterwards if the computer is shared.
+                    </p>
+                    <CopyField label="Install and connect, no prompt" value={unattendedCommand} />
+                  </div>
+                </details>
+              ) : null}
+              <details className="rounded-md border border-border px-4 py-3 text-sm">
+                <summary className="cursor-pointer font-medium">Connect by hand (if you installed it yourself)</summary>
+                <div className="mt-3 space-y-3">
               <p className="text-sm text-muted-foreground">
                 Run these in the terminal where you installed the agent. Server address:{" "}
                 <code className="break-all font-mono text-xs">{API_BASE_URL}</code>
@@ -622,6 +698,8 @@ sudo usermod -aG render,video $USER`}
               <p className="text-xs text-muted-foreground">
                 Leave this terminal open. Press Ctrl+C to stop sharing your computer at any time.
               </p>
+                </div>
+              </details>
             </div>
 
             {/* Existing tokens list. */}
@@ -768,6 +846,34 @@ sudo usermod -aG render,video $USER`}
                 <p>
                   The token was already used, has expired (they last about 1 hour), was cancelled, or was
                   copied with a typo. Create a new token in step 3b and run the connect command again.
+                </p>
+              </Fix>
+              <Fix problem="The one-line install stopped and printed a reason">
+                <p>
+                  It stops before changing anything when something it needs is missing: Docker, a running Docker
+                  service, systemd, or enough rights (run it with <Code>sudo</Code>). It says exactly which one and what
+                  to do. Fix that, then paste the same line again. It is safe to run more than once.
+                </p>
+              </Fix>
+              <Fix problem="The installer says this computer has a saved connection the server no longer accepts">
+                <p>
+                  This happens if you removed the computer on the website and are adding it again. Create a new token in
+                  step 3b and add <Code>--reenroll</Code> to the end of the one-line command. The old connection is kept
+                  aside, not deleted.
+                </p>
+              </Fix>
+              <Fix problem="The installer says a customer job is running">
+                <p>
+                  Upgrading or removing the agent would stop that job. Wait for it to finish, or add{" "}
+                  <Code>--force</Code> to the command: the job is stopped, the customer is not charged, and it runs again
+                  on another computer.
+                </p>
+              </Fix>
+              <Fix problem="The installer finished but the computer does not show as online">
+                <p>
+                  Look at the agent&apos;s log with <Code>journalctl -u computecoin-agent -n 50 --no-pager</Code>. The
+                  most common causes are Docker not running, the graphics driver, or a setup token that already expired.
+                  Create a new token in step 3b and run the line again.
                 </p>
               </Fix>
               <Fix problem="It says computecoin-agent: command not found">

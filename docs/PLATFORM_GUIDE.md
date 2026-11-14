@@ -406,6 +406,31 @@ Set `host_kind` in `~/.computecoin/agent.toml` (Windows hosts always report `sha
 
 This is self-declared: say `dedicated` only if it is true. If a job is ended by the host (the machine goes to sleep, overheats, or is stopped), the platform re-runs it on another machine for free, the customer is not charged for the lost attempt, and the host earns nothing for it. Repeated losses count against the host's reputation.
 
+#### Laptops and desktops you also use: step aside when you are busy (Linux)
+Add `governance_enabled = true` to `~/.computecoin/agent.toml`, then start the agent with `computecoin-agent start`. It is **off by
+default**, so a server keeps taking jobs exactly as before.
+
+While it is on:
+
+- **No new jobs** are taken while you use the computer (keyboard or mouse in the last 5 minutes), while another program is using
+  the GPU (a game, a video editor), while you are on battery, or while GPU memory is short. The machine shows as "throttled" so
+  customers' jobs go elsewhere.
+- **A job already running is not killed.** It finishes. Its customer's work comes first.
+- **`computecoin-agent pause`** stops hosting right now: the running job is stopped cleanly and re-run on another computer, the
+  customer is not charged for it, and nothing new is taken until **`computecoin-agent resume`**.
+- It goes back online only after the computer has been quiet for a minute (`governance_resume_clear_seconds`).
+
+Settings (all optional): `governance_idle_threshold_seconds`, `governance_allow_on_battery`, `governance_vram_reserve_mb`,
+`governance_schedule` (allowed hours), `governance_ignored_processes` (programs that never count as "you using the GPU"), and
+`governance_headless = true` for a server with no desktop (keeps battery and schedule rules, ignores "is somebody at the keyboard").
+
+What Linux cannot see, so it never blocks on it: a full-screen app and a pending reboot. GPU use by other programs is read for
+NVIDIA cards only. Idle time comes from systemd-logind, so a desktop that does not report idle shows as "unknown", which on a
+desktop means "be careful" (no new jobs). This was tested against sample tool output, not on a real laptop.
+
+If another program was on the same GPU while a job ran, the agent tells the platform that (a yes and a count, never the program's
+name) and the customer's job page says so. No signal means "not seen", not "alone on the card".
+
 #### Windows hosts (planned, not available yet)
 A Windows 10 or 11 PC with an NVIDIA card is meant to be able to host later: a native Windows service plus a managed WSL2 distro that runs the same Linux agent
 (cross-platform plan W2 to W7). **Limits:** container tier only (no private tiers, BYOC, gVisor, microVM or multi-node jobs), NVIDIA only (AMD on Windows is a recorded
@@ -443,6 +468,33 @@ network problem.
 **If your machine dies mid-job**, the platform fails the job over to another
 machine. The customer is charged exactly once. You are not paid for work you did
 not complete.
+
+---
+
+## 2.3a Usage — `/provider/usage`
+
+What your computer is doing **right now**, and how its time was used over the last
+24 hours, 7 days or 14 days. Only your own computers are shown.
+
+| Section | What it shows |
+|---|---|
+| **Right now** | For each graphics card: how busy it is, memory in use, temperature, power. Refreshes about every 10 seconds while the page is open |
+| **Last hour** | How busy the graphics card was, minute by minute |
+| **How your computer's time was used** | Running customer jobs / ready and waiting / not reporting |
+| **What happened to the jobs** | Finished, did not finish, stopped on your computer, lost contact, ran out of time, cancelled |
+
+**Where the numbers come from.** The Computecoin app on your computer reads the
+graphics card about every 30 seconds and sends the readings about once a minute.
+This is on by default; to turn it off set `telemetry_enabled` to `false` in the
+app's settings (the page then says it has no readings).
+
+**What the page will not do.**
+- It never shows old numbers as live. With no reading in the last 10 minutes it says so.
+- It never invents a split. If the computer sent no readings in the period, only
+  the time spent on customer jobs is shown, with a note.
+- It never shows customers' names, files or what a job was doing, and the app
+  never sends the names of your own programs.
+- "Ready and waiting" is an estimate from the readings, not a promise of earnings.
 
 ---
 

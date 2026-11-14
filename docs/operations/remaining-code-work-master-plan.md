@@ -6,7 +6,78 @@ TypeScript SDK 22, guardian + witness 28, e2e 10, web 22, contracts 33)._
 
 > **Implementation note (2026-11-05).** Most items below now have code in the working tree (uncommitted). Statically reviewed only: no checklist item in this plan is ticked, because a tick needs its proof (a passing test run, or for **(hardware)** items a recorded file from a real machine, R8) and none of that has been attached yet. Hardware, live-chain and GPU paths have not been run. Read the checklists below as the acceptance list still to be proven, not as a record of what exists. The text of the plan is kept as written at the baseline; where it says "today" or "not built", it describes the baseline.
 
-This is the **single list of everything that is code, planned, and not built yet** (verified
+> **Read the status table below first.** The rest of this document is the plan as it was written on 2026-10-29, when every
+> item was "not built". That is no longer true: see "Status on 2026-11-14".
+
+## Status on 2026-11-14 (checked against the code, not against this document)
+
+"Code exists" means the files are in the repository and their tests pass. It does **not** mean the item has been run on real
+hardware, deployed, or switched on: most of what is left is built-but-unproven, not unwritten.
+
+| Item | Code exists | What is still open |
+|---|---|---|
+| A1 Stake sync | yes (`stake_sync.py`) | off by default (`STAKE_SYNC_ENABLED`); never run against a real chain |
+| A2 Revocation, TDX, signed reference measurements | yes (`hardware_attestation/`) | synthetic evidence only; needs real hardware |
+| A3 Real model images and the real inference path | code yes | **images are not built**: `workloads/digests.json` holds `null` digests, so jobs run in practice mode |
+| A4 Agent collects TPM / TEE evidence | yes (`tpm.py`, `tee.py`, `nvidia_eat.py`) | never run on real hardware |
+| A5 Sealed OS image build | pipeline yes (`os/sealed/`) | **image never built** |
+| A6 AMD in the Sealed tiers | yes, opt-in (default off) | never tried on a real AMD card; owner decision D5 pending |
+| B1 Token withdrawals | yes | off by default (`WITHDRAWALS_ENABLED`); owner decisions in ADR-0004 section 5 still open |
+| B2 Streaming chat | yes (`stream_relay.py`) | needs real tokens from A3 |
+| B3 Postgres CI and concurrency tests | yes (`ci.yml`, `test_b3_postgres_concurrency.py`) | the 53 Postgres-only tests skip locally; not run on a real Postgres here |
+| B4 Load tests | yes (`tests/load/`) | no baseline recorded on a real deployment |
+| B5 Per-job network allowlist (egress proxy) | yes | proxy image digest must be pinned; never run in a real distro |
+| B6 GPU thermal capping | yes (`thermal.py`) | never run on a real GPU |
+| B7 Website accessibility | yes (axe checks in `apps/web/src/a11y`) | no manual screen-reader pass |
+| U1 Job Spec v2 and Kit registry | yes | `KIT_SIGNING_PUBLIC_KEY` must be set, or no Kit can be published |
+| U2 Data plane | yes | off by default (`DATA_PLANE_ENABLED`); needs a real object store |
+| U3 Agent runtime v2 | yes | never run on a real host |
+| U4 Fan-out | yes | needs the data plane and real Kits |
+| U5 / U12 Kits | all 15 written | **no Kit image built**: every `kit.json` still says `sha256:PENDING`, which the registry refuses on purpose |
+| U6 Verification plug-ins | yes | needs real Kit outputs |
+| U7 Scheduler v2 | yes | |
+| U8 Bring-your-own-container | yes | needs gVisor or microVM on a real host |
+| U9 Pipelines | yes | |
+| U10 Interactive sessions | yes | never run on real hardware (see U10 design note) |
+| U11 Services | yes | off by default (`SERVICES_ENABLED`) |
+| U13 Multi-GPU and multi-node | yes | multi-node off by default; needs a closed datacenter network |
+| U14 Windows VM tier | yes (`vm_runner.py`, `vm/guest`) | default off; owner go/no-go; Linux hosts only; never run |
+| U15 Pricing units and quotes | yes | off by default (`PRICING_UNITS_ENABLED`) |
+| U16 Acceptable use, abuse, content safety | yes | `AUP_REQUIRED` off by default; legal review pending |
+| U17 Web experience | yes | |
+| U18 Privacy across all modes | yes | needs real attestation hardware to be honest about it |
+| U19 Observability | yes | the Windows alert key names are now checked against what the agent really sends |
+
+### Added after this plan was written (2026-11-14)
+
+All have code and tests. None was run on real hardware.
+
+* **Host-caused losses are free to retry.** A lost lease, an overheating stop, or a stop forced by the host's owner
+  (`host_interrupted`) is re-run on another computer without charging the customer (`HOST_FAILURE_FREE_RETRIES`).
+* **The agent reports `host_interrupted`.** A stop forced by the owner now stops the container cleanly and reports it; the
+  Windows supervisor asks the runner politely first and kills it only if that fails. Private jobs still use the older
+  lease-expiry fallback.
+* **Dedicated or shared computers.** Hosts declare `host_kind`; customers can require dedicated computers on plain jobs
+  and on Kit, v2 and fan-out jobs (not yet on pipelines or services).
+* **Admin job view.** `GET /v1/admin/jobs/{id}` and `/admin/jobs/[jobId]` show a job's state, host, cost, retries,
+  timeline and attempts, never the customer's input or output; every view is audit-logged.
+* **Linux "step aside when the owner is busy".** Reuses the Windows rules engine with Linux probes (logind idle time,
+  battery, other programs on an NVIDIA GPU) and a `pause` / `resume` command. Off unless `governance_enabled = true`.
+  Full-screen apps and pending reboots cannot be read on Linux and never block.
+* **A measured "this GPU was shared" signal.** The agent notes whether another program used the GPU while a job ran
+  (a yes and a count, never a name) and the customer's job page says so. NVIDIA cards on Linux hosts only; no signal
+  means "not seen", never "alone on the card".
+* **Max runtime is enforced on the server** (`JOB_RUNTIME_GRACE_SECONDS`), and a settlement confirmation is checked
+  against the chain when `CHAIN_RPC_URL` is set.
+
+### Not built, and not planned as code
+
+SSH into a container, persistent session storage, cloud gaming, Windows hosts for private jobs, gVisor or multi-node on
+Windows hosts (the PC's owner can read the VM's memory; see W12 and W13), Mac hosts, and ARM Windows.
+
+---
+
+This is the **single list of everything that was code, planned, and not built yet when this plan was written** (verified
 against the repository on 2026-10-29). It leaves out what is not code: hardware test runs,
 approvals, accounts, deployment, audit and legal work. Those appear only where they gate a
 code item.

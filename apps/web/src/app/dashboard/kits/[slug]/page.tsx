@@ -13,10 +13,11 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SchemaForm } from "@/components/kits/schema-form";
 import { FileUpload } from "@/components/kits/file-upload";
+import { DedicatedHostOption } from "@/components/jobs/dedicated-host-option";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import {
-  estimateMinutes, formatDuration, kitsApi, kitSubmitErrorMessage, tryQuote, verificationLabel,
+  buildJobV2Input, estimateMinutes, formatDuration, kitsApi, kitSubmitErrorMessage, tryQuote, verificationLabel,
   type DataFile, type JobSpecV2, type KitDetail, type KitQuote,
 } from "@/lib/kits";
 import {
@@ -62,6 +63,7 @@ function Wizard() {
   const [maxCost, setMaxCost] = useState("");
   const [quote, setQuote] = useState<KitQuote | null>(null);
   const [quoteTried, setQuoteTried] = useState(false);
+  const [dedicatedOnly, setDedicatedOnly] = useState(false);
   const idemKey = useRef<string>(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now()));
 
   const manifest = kit?.manifest;
@@ -128,11 +130,7 @@ function Wizard() {
     mutationFn: async () => {
       const spec = buildSpec();
       if (!spec) throw new Error("invalid_form");
-      return kitsApi.createJobV2(
-        token,
-        { spec, isolation_tier: "container" },
-        idemKey.current,
-      );
+      return kitsApi.createJobV2(token, buildJobV2Input(spec, dedicatedOnly), idemKey.current);
     },
     onSuccess: (job) => router.push(`/dashboard/jobs/${job.job_id ?? job.id}`),
     onError: (err) => {
@@ -341,9 +339,12 @@ function Wizard() {
 
               <Button type="button" variant="outline" onClick={() => void refreshQuote()}>Get a price estimate</Button>
 
+              <DedicatedHostOption id="dedicated-only" checked={dedicatedOnly} onChange={setDedicatedOnly} disabled={submit.isPending} />
+
               <h2 className="text-lg font-semibold">Summary</h2>
               <dl className="grid gap-3 text-sm sm:grid-cols-2">
                 <div><dt className="text-muted-foreground">Kit</dt><dd className="font-medium">{kit.name} v{kit.version}</dd></div>
+                <div><dt className="text-muted-foreground">Computers</dt><dd className="font-medium">{dedicatedOnly ? "Dedicated computers only" : "Any computer that fits"}</dd></div>
                 <div><dt className="text-muted-foreground">How the result is checked</dt><dd className="font-medium">{verificationLabel(manifest.verification?.method)}</dd></div>
                 {kitInputs.map((i) => (
                   <div key={i.name}><dt className="text-muted-foreground">{humanizeInput(i.name)}</dt><dd className="font-medium break-words">{files[i.name] ? `${files[i.name]!.name} (${formatBytes(files[i.name]!.size_bytes)})` : "no file"}</dd></div>

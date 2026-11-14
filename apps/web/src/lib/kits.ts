@@ -66,6 +66,13 @@ export interface JobV2CreateInput {
   project_id?: string | null;
   isolation_tier?: "container" | "open";
   required_gpu_runtime?: "cuda" | "rocm" | "any";
+  /** Only place the job on a host that declares itself dedicated (a server nobody else uses). */
+  require_dedicated_host?: boolean;
+}
+
+/** The request for starting a Kit job. The dedicated-computers field is sent only when it is ticked. */
+export function buildJobV2Input(spec: JobSpecV2, dedicatedOnly: boolean): JobV2CreateInput {
+  return { spec, isolation_tier: "container", ...(dedicatedOnly ? { require_dedicated_host: true } : {}) };
 }
 
 export interface JobV2 extends Job {

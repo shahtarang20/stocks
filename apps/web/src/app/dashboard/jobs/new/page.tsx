@@ -31,6 +31,7 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import { HelpTip } from "@/components/ui/help-tip";
 import { cn } from "@/lib/utils";
+import { DEDICATED_HELP, DEDICATED_LABEL } from "@/lib/host-kind";
 import { createJobErrorMessage } from "@/lib/jobs";
 import { checkGuardianPin, preparePrivateJob } from "@/lib/ccpp";
 
@@ -750,14 +751,8 @@ export default function NewJobPage() {
                       {...register("require_dedicated_host")}
                     />
                     <div className="space-y-0.5">
-                      <Label htmlFor="require_dedicated_host">
-                        Only use dedicated computers (recommended for important work)
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        A dedicated computer is a server that only runs ComputeCoin jobs. A shared PC (a laptop or
-                        gaming computer) is also used by its owner, so your job may run slower or be moved. Fewer
-                        computers qualify, so your job may wait longer. The computer&apos;s owner declares this.
-                      </p>
+                      <Label htmlFor="require_dedicated_host">{DEDICATED_LABEL}</Label>
+                      <p className="text-xs text-muted-foreground">{DEDICATED_HELP}</p>
                     </div>
                   </div>
                 </OptionGroup>

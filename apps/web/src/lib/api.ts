@@ -155,6 +155,56 @@ export interface MachineReliability {
 }
 
 /** A single machine as exposed by the PUBLIC marketplace search. */
+export interface GpuReading {
+  gpu_index: number;
+  gpu_util_pct: number | null;
+  mem_used_mb: number | null;
+  mem_total_mb: number | null;
+  temp_c: number | null;
+  power_w: number | null;
+}
+
+export interface UtilizationPoint {
+  timestamp: string;
+  avg_gpu_util_pct: number | null;
+  max_temp_c: number | null;
+}
+
+/** GET /provider/machines/{id}/live — what the host's own computer is doing right now. */
+export interface MachineLive {
+  machine_id: string;
+  hostname: string;
+  status: string;
+  availability: string;
+  host_kind: string;
+  last_heartbeat_at: string | null;
+  last_reading_at: string | null;
+  /** False when no real GPU reading arrived in the last 10 minutes: never show old numbers as live. */
+  readings_recent: boolean;
+  running_jobs: number;
+  gpus: GpuReading[];
+  utilization_last_hour: UtilizationPoint[];
+}
+
+export interface UsageSeconds {
+  window: number;
+  running: number;
+  /** null when the computer sent no readings: idle and "not reporting" cannot be told apart then. */
+  idle: number | null;
+  not_reporting: number | null;
+}
+
+/** GET /provider/machines/{id}/usage?days= — how the computer's time was used. */
+export interface MachineUsage {
+  machine_id: string;
+  days: number;
+  window_start: string;
+  window_end: string;
+  telemetry_available: boolean;
+  seconds: UsageSeconds;
+  attempts: Record<string, number>;
+}
+
 export interface MarketplaceMachine {
   machine_id: string;
   gpu_model: string | null;
@@ -345,8 +395,10 @@ export interface Job {
   data_policy?: Record<string, unknown> | null;
   /** Job detail only: the kind of host the job is on (declared by the host). */
   host_kind?: "dedicated" | "shared" | "unspecified" | string | null;
-  /** Job detail only: a plain-language note for the customer (shared PC, or the job was re-run), or null. */
+  /** Job detail only: a plain-language note for the customer (shared PC, a shared graphics card, or the job was re-run), or null. */
   risk_note?: string | null;
+  /** Job detail only: true when the host's agent MEASURED another program on the same graphics card while the job ran. null = not seen (not the same as alone). */
+  gpu_shared?: boolean | null;
   encrypted_output?: Record<string, unknown> | null;
   value_at_risk?: string | null;
   match_explanation?: JobMatchExplanation | null;
@@ -794,6 +846,64 @@ export interface AdminJob {
   final_cost?: string | null;
   error_code?: string | null;
   [key: string]: unknown;
+}
+
+export interface AdminJobEvent {
+  seq: number;
+  from_state?: string | null;
+  to_state: string;
+  reason?: string | null;
+  actor: string;
+  created_at: string;
+}
+
+export interface AdminJobAttempt {
+  attempt_number: number;
+  machine_id?: string | null;
+  status: string;
+  error_code?: string | null;
+  started_at: string;
+  finished_at?: string | null;
+}
+
+/** One job as an administrator sees it: operational facts only, never the customer's input or output. */
+export interface AdminJobDetail {
+  job_id: string;
+  customer_id: string;
+  customer_email?: string | null;
+  workload_type: string;
+  model: string;
+  kit_id?: string | null;
+  kit_version?: string | null;
+  status: JobStatus;
+  execution_mode: string;
+  isolation_tier?: string;
+  required_gpu_runtime?: string;
+  gpu_count: number;
+  estimated_minutes: number;
+  max_cost?: string | null;
+  final_cost?: string | null;
+  max_runtime_seconds: number;
+  retry_policy: { max_retries?: number } & Record<string, unknown>;
+  attempts_made: number;
+  cancel_requested: boolean;
+  machine_id?: string | null;
+  machine_hostname?: string | null;
+  host_kind?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  verification_valid?: boolean | null;
+  verification_reason?: string | null;
+  /** Measured by the host's agent: another program used the same graphics card while the job ran. null = not seen. */
+  gpu_shared?: boolean | null;
+  gpu_other_processes?: number | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  lease_expires_at?: string | null;
+  events: AdminJobEvent[];
+  attempts: AdminJobAttempt[];
 }
 
 export interface AdminPlatformStats {
@@ -1457,6 +1567,22 @@ export const api = {
     });
   },
 
+  /** GET /provider/machines/{id}/live — live readings for the host's own computer. */
+  getMachineLive(accessToken: string, id: string): Promise<MachineLive> {
+    return request<MachineLive>(`/provider/machines/${id}/live`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  /** GET /provider/machines/{id}/usage — how the computer's time was used over 1–14 days. */
+  getMachineUsage(accessToken: string, id: string, days = 7): Promise<MachineUsage> {
+    return request<MachineUsage>(`/provider/machines/${id}/usage?days=${days}`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
   /** GET /provider/machines — list the provider's own machines. */
   listMachines(accessToken: string): Promise<Machine[]> {
     return request<Machine[]>("/provider/machines", {
@@ -1960,6 +2086,13 @@ export const api = {
 
   listAllAdminJobs(accessToken: string, limit: number = 50): Promise<AdminJob[]> {
     return request<AdminJob[]>(`/v1/admin/jobs?limit=${limit}`, {
+      method: "GET",
+      token: accessToken,
+    });
+  },
+
+  getAdminJob(accessToken: string, jobId: string): Promise<AdminJobDetail> {
+    return request<AdminJobDetail>(`/v1/admin/jobs/${encodeURIComponent(jobId)}`, {
       method: "GET",
       token: accessToken,
     });

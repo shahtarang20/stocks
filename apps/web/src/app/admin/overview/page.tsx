@@ -173,7 +173,7 @@ export default function AdminOverviewPage() {
                       <TableRow key={id}>
                         <TableCell>
                           <Link
-                            href={`/dashboard/jobs/${id}`}
+                            href={`/admin/jobs/${id}`}
                             className="font-mono text-xs text-primary hover:underline"
                           >
                             {id.slice(0, 8)}…

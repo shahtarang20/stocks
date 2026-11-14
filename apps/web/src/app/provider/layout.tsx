@@ -7,6 +7,7 @@ import {
   Wallet,
   WalletCards,
   Banknote,
+  Activity,
   ArrowLeft,
 } from "lucide-react";
 import { AuthGuard } from "@/components/console/auth-guard";
@@ -20,6 +21,7 @@ const SECTIONS: NavSection[] = [
       { href: "/provider/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/provider/onboarding", label: "Add my computer", icon: Rocket },
       { href: "/provider/hardware", label: "My computers", icon: Cpu },
+      { href: "/provider/usage", label: "Usage", icon: Activity },
       { href: "/provider/earnings", label: "Earnings", icon: Wallet },
       { href: "/provider/payouts", label: "Payouts", icon: Banknote },
       { href: "/dashboard/wallet", label: "Crypto wallet", icon: WalletCards },

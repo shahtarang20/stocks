@@ -97,7 +97,7 @@ export default function AdminJobsPage() {
                   <TableRow key={id}>
                     <TableCell>
                       <Link
-                        href={`/dashboard/jobs/${id}`}
+                        href={`/admin/jobs/${id}`}
                         title={id}
                         className="font-mono text-xs text-primary hover:underline"
                       >

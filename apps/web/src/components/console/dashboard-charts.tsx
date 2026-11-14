@@ -115,9 +115,15 @@ export function ComputeHoursChart({ data }: { data: DayPoint[] }) {
   );
 }
 
-export function JobStatusChart({ data }: { data: StatusSlice[] }) {
+export function JobStatusChart({
+  data,
+  label = "Donut chart of your jobs by status; the list below gives the exact counts",
+}: {
+  data: StatusSlice[];
+  label?: string;
+}) {
   return (
-    <div role="group" aria-label="Donut chart of your jobs by status; the list below gives the exact counts">
+    <div role="group" aria-label={label}>
     <ResponsiveContainer width="100%" height={220}>
       <PieChart>
         <Pie
@@ -136,6 +142,47 @@ export function JobStatusChart({ data }: { data: StatusSlice[] }) {
         <Tooltip content={<ChartTooltip />} />
       </PieChart>
     </ResponsiveContainer>
+    </div>
+  );
+}
+
+export interface UtilizationDatum {
+  time: string;
+  util: number;
+}
+
+/** GPU busy-ness over the last hour, 0–100 %. */
+export function GpuUtilizationChart({ data }: { data: UtilizationDatum[] }) {
+  return (
+    <div role="group" aria-label="Area chart of how busy the graphics card was over the last hour">
+      <ResponsiveContainer width="100%" height={180}>
+        <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="gpuUtilFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.4} />
+              <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={axisStyle} minTickGap={32} />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            tick={axisStyle}
+            width={44}
+            domain={[0, 100]}
+            tickFormatter={(v) => `${v}%`}
+          />
+          <Tooltip content={<ChartTooltip />} />
+          <Area
+            type="monotone"
+            dataKey="util"
+            name="Busy (%)"
+            stroke="hsl(var(--primary))"
+            strokeWidth={2}
+            fill="url(#gpuUtilFill)"
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }

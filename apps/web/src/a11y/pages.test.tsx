@@ -55,6 +55,7 @@ describe("axe: zero serious or critical violations", () => {
   it("job page", () => check(() => import("@/app/dashboard/jobs/[jobId]/page")));
   it("marketplace", () => check(() => import("@/app/(marketing)/marketplace/gpus/page")));
   it("provider hardware", () => check(() => import("@/app/provider/hardware/page")));
+  it("provider usage", () => check(() => import("@/app/provider/usage/page")));
   it("provider setup guide", () => check(() => import("@/app/provider/onboarding/page")));
   it("help and glossary", () => check(() => import("@/app/(marketing)/help/page")));
   it("become a host (marketing)", () => check(() => import("@/app/(marketing)/providers/page")));

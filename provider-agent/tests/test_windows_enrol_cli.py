@@ -126,11 +126,18 @@ def test_service_commands_are_not_registered_on_other_platforms():
     assert "service" not in {g.name for g in cli.app.registered_groups} and not names
 
 
+def _plain(text: str) -> str:
+    """The help text without terminal colour codes: CI machines turn colour on, which splits an option name into styled pieces."""
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def test_work_command_has_the_control_options():
     result = CliRunner().invoke(cli.app, ["work", "--help"])
     assert result.exit_code == 0
     for opt in ("--control-socket", "--control-token-file", "--control-allow-private"):
-        assert opt in result.output
+        assert opt in _plain(result.output)
 
 
 class FakeManager:

@@ -34,7 +34,7 @@ from app.schemas.jobs import (
 )
 from app.schemas.marketplace import money_str
 from app.services import billing
-from app.services.capability_flags import job_risk_note, machine_host_kind
+from app.services.capability_flags import job_gpu_shared, job_risk_note, machine_host_kind
 from app.services import job_fsm as fsm
 from app.services.audit import record_audit
 from app.services.key_guardians import validate_sealed_shares
@@ -343,13 +343,16 @@ async def get_job(
             await recover_expired_leases(db, now)
             await db.refresh(job)
     out = shape_job(job)
+    shared = job_gpu_shared(job.metrics)
+    if shared:
+        out.gpu_shared = True
     if job.machine_id is not None:
         machine = await db.get(ProviderMachine, job.machine_id)
         if machine is not None:
             out.host_kind = machine_host_kind(machine)
-            out.risk_note = job_risk_note(out.host_kind, job.status, job.attempts_made)
-    elif job.attempts_made > 0:
-        out.risk_note = job_risk_note("unspecified", job.status, job.attempts_made)
+            out.risk_note = job_risk_note(out.host_kind, job.status, job.attempts_made, shared)
+    elif job.attempts_made > 0 or shared:
+        out.risk_note = job_risk_note("unspecified", job.status, job.attempts_made, shared)
     return out
 
 

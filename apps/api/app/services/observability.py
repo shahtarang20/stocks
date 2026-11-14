@@ -172,8 +172,10 @@ def platform_signals(health: object) -> dict[str, bool]:
     * ``health["update"]["rolled_back"]``: the last update was rolled back.
     * ``health["availability_detail"]["state"] == "yielding"``: the owner has the machine (policy.py heartbeat_health).
 
-    TODO(contract): confirm these key names against the supervisor and updater once they report them; until then the
-    series simply read 0 (nothing reported), they never invent a failure."""
+    The key names were checked against what the agent really sends: ``windows/supervisor_wiring.py`` (``RuntimeHealthCache``
+    and the updater's ``health()``) and ``windows/governance/policy.py`` (``Decision.heartbeat_health``). The test
+    ``tests/e2e/test_platform_signals_contract.py`` feeds the agent's own output through this function, so the two
+    cannot drift apart unnoticed. A host that reports nothing reads 0: nothing is ever invented as a failure."""
     detail = health.get("availability_detail") if isinstance(health, dict) else None
     return {
         "distro_unhealthy": _health_flag(health, "runtime", "distro_ok") is False,

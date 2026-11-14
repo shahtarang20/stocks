@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.schemas.attestation import (
     AttestationVerifyResponse,
 )
 from app.schemas.auth import CurrentUser
+from app.schemas.machine_usage import MachineLiveOut, MachineUsageOut
 from app.schemas.provider import (
     EnrollmentTokenCreate,
     EnrollmentTokenCreatedOut,
@@ -45,6 +46,7 @@ from app.services.attestation_nonce import (
 )
 from app.services.attestation_verifier import AttestationVerifierError, verify_machine_evidence
 from app.services.audit import record_audit
+from app.services.machine_usage import machine_live, machine_usage
 from app.services.provider_pricing import PricingPolicyError, validate_asking_price
 from app.services.provider import (
     get_owned_machine,
@@ -259,6 +261,35 @@ async def get_machine(
     if machine is None:
         raise _MACHINE_NOT_FOUND
     return shape_machine_detail(machine)
+
+
+@router.get("/machines/{machine_id}/live", response_model=MachineLiveOut)
+async def get_machine_live(
+    machine_id: uuid.UUID,
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MachineLiveOut:
+    """The host's own live view of one computer: latest real GPU readings, jobs running now, the last hour. Owner only."""
+    provider = await _require_provider(db, current)
+    machine = await get_owned_machine(db, provider.id, machine_id)
+    if machine is None:
+        raise _MACHINE_NOT_FOUND
+    return await machine_live(db, machine)
+
+
+@router.get("/machines/{machine_id}/usage", response_model=MachineUsageOut)
+async def get_machine_usage(
+    machine_id: uuid.UUID,
+    days: int = Query(default=7, ge=1, le=14),
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MachineUsageOut:
+    """How the last few days of one computer were spent: running jobs, idle, not reporting; and job outcomes. Owner only."""
+    provider = await _require_provider(db, current)
+    machine = await get_owned_machine(db, provider.id, machine_id)
+    if machine is None:
+        raise _MACHINE_NOT_FOUND
+    return await machine_usage(db, machine, days)
 
 
 @router.patch("/machines/{machine_id}", response_model=MachineDetailOut)

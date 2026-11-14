@@ -28,12 +28,15 @@ from app.models.billing import (
     Refund,
 )
 from app.models.enums import UserStatus
-from app.models.jobs import Job
+from app.models.jobs import Job, JobAttempt, JobEvent
 from app.models.provider import ProviderMachine
 from app.models.system import AuditLog
 from app.models.user import User
 from app.schemas.admin import (
     AdminAuditLogOut,
+    AdminJobAttemptOut,
+    AdminJobDetailOut,
+    AdminJobEventOut,
     AdminJobOut,
     AdminPlatformStatsOut,
     AdminUserActionResponse,
@@ -55,6 +58,7 @@ from app.services import ledger
 from app.services import reputation as reputation_svc
 from app.services.provider import _machine_query, shape_machine
 from app.services.audit import record_audit
+from app.services.capability_flags import job_gpu_other_processes, job_gpu_shared, machine_host_kind
 from app.services.hooks import safe_hook
 
 logger = logging.getLogger(__name__)
@@ -479,6 +483,91 @@ async def list_admin_jobs(
         )
         for j in jobs
     ]
+
+
+@money_router.get("/jobs/{job_id}", response_model=AdminJobDetailOut)
+async def get_admin_job(
+    job_id: uuid.UUID,
+    request: Request,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AdminJobDetailOut:
+    """One job, for support and operations: its state, host, cost, retries, errors, timeline and attempts.
+
+    ``GET /v1/jobs/{id}`` only answers for the job's own customer, so an administrator got "not found" for everybody
+    else's job. This route answers for any job, but it returns operational facts only: never the customer's input,
+    output, encrypted payloads or data policy. Each view is written to the audit log."""
+    job = await db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    customer = await db.get(User, job.customer_id)
+    machine = await db.get(ProviderMachine, job.machine_id) if job.machine_id is not None else None
+    events = (
+        await db.execute(select(JobEvent).where(JobEvent.job_id == job.id).order_by(JobEvent.seq))
+    ).scalars().all()
+    attempts = (
+        await db.execute(select(JobAttempt).where(JobAttempt.job_id == job.id).order_by(JobAttempt.attempt_number))
+    ).scalars().all()
+    verification = job.verification if isinstance(job.verification, dict) else {}
+    valid = verification.get("valid")
+    reason = verification.get("reason")
+
+    await record_audit(
+        db, action="admin.job.view", outcome="success", actor_user_id=current.id,
+        ip=client_ip(request), resource_type="job", resource_id=str(job.id),
+    )
+    return AdminJobDetailOut(
+        job_id=job.id,
+        customer_id=job.customer_id,
+        customer_email=customer.email if customer is not None else None,
+        project_id=job.project_id,
+        workload_type=job.workload_type,
+        model=job.model,
+        kit_id=job.kit_id,
+        kit_version=job.kit_version,
+        status=job.status,
+        execution_mode=job.execution_mode,
+        isolation_tier=job.isolation_tier or "container",
+        required_gpu_runtime=job.required_gpu_runtime or "cuda",
+        gpu_count=job.gpu_count,
+        estimated_minutes=job.estimated_minutes,
+        max_cost=money_str(job.max_cost),
+        final_cost=money_str(job.final_cost),
+        max_runtime_seconds=job.max_runtime_seconds,
+        retry_policy=job.retry_policy or {},
+        attempts_made=job.attempts_made,
+        priority=job.priority,
+        cancel_requested=job.cancel_requested,
+        machine_id=job.machine_id,
+        machine_hostname=machine.hostname if machine is not None else None,
+        host_kind=machine_host_kind(machine) if machine is not None else None,
+        error_code=job.error_code,
+        error_message=job.error_message,
+        verification_valid=valid if isinstance(valid, bool) else None,
+        verification_reason=reason if isinstance(reason, str) else None,
+        gpu_shared=True if job_gpu_shared(job.metrics) else None,
+        gpu_other_processes=job_gpu_other_processes(job.metrics),
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        lease_expires_at=job.lease_expires_at,
+        events=[
+            AdminJobEventOut(
+                seq=e.seq, from_state=e.from_state, to_state=e.to_state, reason=e.reason, actor=e.actor,
+                created_at=e.created_at,
+            )
+            for e in events
+        ],
+        attempts=[
+            AdminJobAttemptOut(
+                attempt_number=a.attempt_number, machine_id=a.machine_id, status=a.status, error_code=a.error_code,
+                started_at=a.started_at, finished_at=a.finished_at,
+            )
+            for a in attempts
+        ],
+    )
 
 
 @money_router.get("/machines", response_model=list[MachineOut])

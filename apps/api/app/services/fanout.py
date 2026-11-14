@@ -205,6 +205,7 @@ async def submit_fanout(
     required_gpu_runtime: str,
     idempotency_key: str | None,
     private_parts: Any = None,
+    require_dedicated_host: bool = False,
 ) -> tuple[Job, FanoutGroup]:
     """Validate, plan and persist a fan-out: parent job (RUNNING), group and part rows. No child job yet.
 
@@ -279,7 +280,8 @@ async def submit_fanout(
         max_cost=spec.billing.max_cost, max_runtime_seconds=settings.JOB_MAX_RUNTIME_DEFAULT,
         retry_policy={"max_retries": 0}, priority=priority, execution_mode="hardware", isolation_tier=isolation_tier,
         required_gpu_runtime=required_gpu_runtime.lower(), network_policy=None,
-        data_policy={"fanout": True}, idempotency_key=idempotency_key, machine_id=machine_id,
+        data_policy={"fanout": True, **({"require_dedicated_host": True} if require_dedicated_host else {})},
+        idempotency_key=idempotency_key, machine_id=machine_id,
         spec_v2={"spec": base_spec, "effective_resources": eff, "kit_manifest_sha256": kit.manifest_sha256,
                  "kit_image": kit.image_digest},
         kit_id=kit.slug, kit_version=kit.version,
@@ -314,6 +316,27 @@ async def submit_fanout(
 # ---------------------------------------------------------------------------------------------
 # Child jobs
 # ---------------------------------------------------------------------------------------------
+def part_data_policy(parent: Job, v2_plan: dict, private_keys: dict | None) -> dict:
+    """The ``data_policy`` of one part (or one straggler copy) of a fan-out.
+
+    * A PRIVATE part (``private_keys`` given, U18) carries only the Kit and the output names/paths (from the signed
+      manifest). No input, asset, egress or checkpoint entry: inputs travel inside ``encrypted_input`` and a private job
+      never gets network.
+    * Otherwise it carries the full plan.
+    * If the customer asked for dedicated computers only, the parent records it and EVERY part and straggler copy
+      honours it (a part must never land on a shared PC the customer ruled out)."""
+    if private_keys is not None:
+        policy: dict = {
+            "result_public_key": private_keys["result_public_key"], "private_fanout": True,
+            "v2_plan": {"kit": v2_plan["kit"], "outputs": v2_plan["outputs"]},
+        }
+    else:
+        policy = {"v2_plan": v2_plan}
+    if (parent.data_policy or {}).get("require_dedicated_host") is True:
+        policy["require_dedicated_host"] = True
+    return policy
+
+
 async def _spawn_run(db: AsyncSession, group: FanoutGroup, parent: Job, part: FanoutPart, kind: str) -> FanoutPartRun:
     """Create one ordinary v2 child job for ``part`` (QUEUED; the existing recovery sweep schedules and holds it)."""
     from app.api.routers.jobs_v2 import build_v2_plan
@@ -334,13 +357,7 @@ async def _spawn_run(db: AsyncSession, group: FanoutGroup, parent: Job, part: Fa
         retry_policy={"max_retries": 0 if private else max(0, int(settings.FANOUT_CHILD_MAX_RETRIES))},
         priority=parent.priority, execution_mode="hardware", isolation_tier=parent.isolation_tier,
         required_gpu_runtime=parent.required_gpu_runtime, network_policy=None,
-        data_policy=(
-            # U18: a private part carries only the Kit and the output names/paths (from the signed manifest). No input, asset,
-            # egress or checkpoint entry: inputs travel inside encrypted_input and a private job never gets network.
-            {"result_public_key": pkeys["result_public_key"], "private_fanout": True,
-             "v2_plan": {"kit": v2_plan["kit"], "outputs": v2_plan["outputs"]}}
-            if private else {"v2_plan": v2_plan}
-        ),
+        data_policy=part_data_policy(parent, v2_plan, pkeys if private else None),
         encrypted_input=pkeys["encrypted_input"] if private else None,
         dk_shares=pkeys["dk_shares"] if private else None, idempotency_key=None,
         machine_id=None,  # a straggler copy must be free to land on a different host than the slow one

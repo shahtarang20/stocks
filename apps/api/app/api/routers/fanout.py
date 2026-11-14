@@ -150,7 +150,7 @@ async def create_fanout(
             db, customer_id=current.id, spec_raw=body.spec, project_id=body.project_id, machine_id=body.machine_id,
             priority=body.priority, isolation_tier=body.isolation_tier,
             required_gpu_runtime=body.required_gpu_runtime, idempotency_key=idempotency_key,
-            private_parts=body.private_parts,
+            private_parts=body.private_parts, require_dedicated_host=body.require_dedicated_host,
         )
     except (svc.FanoutError, KitError) as exc:
         raise HTTPException(status_code=exc.http_status, detail={"errors": exc.errors})

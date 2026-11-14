@@ -141,6 +141,9 @@ class JobOut(BaseModel):
     # Set on the job detail endpoint only: what kind of host the job is on, and a note for the customer when it matters.
     host_kind: str | None = None
     risk_note: str | None = None
+    # True when the host's agent measured another program using the same GPU while this job ran. None = not seen (which is
+    # not the same as "alone on the GPU").
+    gpu_shared: bool | None = None
 
 
 class JobEventOut(BaseModel):

@@ -126,6 +126,9 @@ class JobV2Create(BaseModel):
     # Privacy tiers are refused for Kit jobs in this slice (they need encrypted_input / dk_shares); see design note.
     isolation_tier: str = Field(default="container", pattern="^(container|open|gvisor|microvm|sealed|sealed_pro|confidential)$")
     required_gpu_runtime: str = Field(default="cuda", pattern="^(cuda|rocm|any)$")
+    # Only place the job on a host that declares itself dedicated (a server nobody else uses). A shared PC is refused.
+    # Stored in data_policy next to the plan, where the scheduler's capability gate reads it.
+    require_dedicated_host: bool = False
 
 
 class JobV2Out(JobOut):
@@ -217,7 +220,7 @@ async def create_job_v2(
         isolation_tier=body.isolation_tier,
         required_gpu_runtime=body.required_gpu_runtime.lower(),
         network_policy=None,
-        data_policy={"v2_plan": v2_plan},
+        data_policy={"v2_plan": v2_plan, **({"require_dedicated_host": True} if body.require_dedicated_host else {})},
         idempotency_key=idempotency_key,
         machine_id=body.machine_id,
         spec_v2={

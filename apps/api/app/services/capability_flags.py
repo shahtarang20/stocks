@@ -150,15 +150,37 @@ def machine_host_kind(machine: Any) -> str:
 _ACTIVE_JOB_STATES = ("queued", "reserved", "running")
 
 
-def job_risk_note(host_kind: str, job_status: str, attempts_made: int) -> str | None:
+def job_gpu_shared(metrics: Any) -> bool:
+    """True only if the host's agent MEASURED another program on the same GPU while the job ran (``metrics.gpu_shared``).
+
+    Absence means "not seen", never "alone on the GPU": an agent that cannot look (an AMD card, a runtime that cannot see
+    the owner's programs) reports nothing. Only a real boolean ``True`` counts."""
+    return isinstance(metrics, dict) and metrics.get("gpu_shared") is True
+
+
+def job_gpu_other_processes(metrics: Any) -> int | None:
+    """How many other programs were seen on the GPU at the most (0..64), or None when it was not reported."""
+    if not job_gpu_shared(metrics):
+        return None
+    n = metrics.get("gpu_other_processes")
+    return max(0, min(int(n), 64)) if isinstance(n, int) and not isinstance(n, bool) else None
+
+
+def job_risk_note(host_kind: str, job_status: str, attempts_made: int, gpu_shared: bool = False) -> str | None:
     """A plain-language note for the customer about the host their job is on, or None when there is nothing to say.
 
-    Honest about what is known: ``host_kind`` is declared by the host. Never says the job WILL be interrupted."""
+    Honest about what is known: ``host_kind`` is declared by the host, and ``gpu_shared`` is what the agent measured.
+    Never says the job WILL be interrupted."""
     notes: list[str] = []
     if attempts_made > 0:
         notes.append(
             "This job was re-run on another host after the previous host stopped it. You are not charged for the "
             "earlier attempt."
+        )
+    if gpu_shared:
+        notes.append(
+            "While your job ran, another program on the host's computer was also using the same graphics card, so the "
+            "job may have run slower than usual."
         )
     if host_kind == "shared" and job_status in _ACTIVE_JOB_STATES:
         notes.append(

@@ -47,6 +47,7 @@ import { api, ApiError, type Machine } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatMbAsGb } from "@/lib/utils";
 import { capitalize } from "@/lib/format";
+import { sandboxHelp, sandboxLabel, sandboxState } from "@/lib/host-sandbox";
 
 function hardwareSummary(m: Machine): string {
   const hw = m.hardware;
@@ -193,6 +194,17 @@ export default function ProviderHardwarePage() {
                         : ""}
                       {formatMbAsGb(m.hardware.ram_mb)} memory
                     </div>
+                    {sandboxState(m) !== "unknown" ? (
+                      <div className="mt-1">
+                        <Badge
+                          variant={sandboxState(m) === "ready" ? "success" : "neutral"}
+                          title={sandboxHelp(sandboxState(m))}
+                          className="px-1.5 py-0 text-[10px]"
+                        >
+                          {sandboxLabel(sandboxState(m))}
+                        </Badge>
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="hidden xl:table-cell">
                     <Badge variant="neutral" title="Reported by the agent on your computer. Not checked by ComputeCoin yet.">

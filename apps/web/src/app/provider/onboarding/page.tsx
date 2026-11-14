@@ -341,6 +341,27 @@ export default function ProviderOnboardingPage() {
 
             <details className="rounded-md border border-border px-4 py-3 text-sm">
               <summary className="cursor-pointer font-medium">
+                Optional: take sandboxed jobs (gVisor)
+              </summary>
+              <p className="mt-2 text-muted-foreground">
+                A sandbox puts an extra wall between a customer&apos;s job and your computer. Customers can ask for it,
+                and a computer that offers it can take those jobs. You do not need it to start.
+              </p>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-muted-foreground">
+                <li>Install gVisor (its program is called <Code>runsc</Code>) from gVisor&apos;s own website.</li>
+                <li>
+                  Register it with Docker: <Code>sudo runsc install</Code>, then restart Docker.
+                </li>
+                <li>Restart the Computecoin app. It says on start whether the sandbox is ready.</li>
+              </ol>
+              <p className="mt-2 text-muted-foreground">
+                Support for graphics cards inside gVisor is still limited, so check gVisor&apos;s own notes for your card.
+                The &ldquo;My computers&rdquo; page shows &ldquo;Sandbox ready&rdquo; once it works.
+              </p>
+            </details>
+
+            <details className="rounded-md border border-border px-4 py-3 text-sm">
+              <summary className="cursor-pointer font-medium">
                 Optional: private jobs need special hardware
               </summary>
               <p className="mt-2 text-muted-foreground">

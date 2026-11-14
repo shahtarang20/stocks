@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/table";
 import { api, ApiError, type Machine } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { formatMbAsGb, formatUsd } from "@/lib/utils";
+import { formatMbAsGb } from "@/lib/utils";
 import { capitalize } from "@/lib/format";
 
 function hardwareSummary(m: Machine): string {
@@ -208,9 +208,7 @@ export default function ProviderHardwarePage() {
                     <RelativeTime iso={m.last_heartbeat_at} empty="never" />
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {m.asking_price_per_hour
-                      ? formatUsd(Number(m.asking_price_per_hour))
-                      : "—"}
+                    {m.asking_price_per_hour ? `${m.asking_price_per_hour} credits` : "—"}
                   </TableCell>
                   <TableCell className="hidden text-right font-mono text-sm lg:table-cell">
                     {m.max_concurrent_jobs}

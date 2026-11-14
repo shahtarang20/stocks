@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,12 +25,23 @@ import { plainAuthError } from "./auth-errors";
 // U16: must match the API's AUP_CURRENT_VERSION. The API only requires acceptance when AUP_REQUIRED is on.
 const AUP_VERSION = process.env.NEXT_PUBLIC_AUP_VERSION || "draft-0";
 
-const schema = z.object({
-  email: z.string().min(1, "Enter your email address.").email("That does not look like an email address. Check it and try again."),
+const emailField = z
+  .string()
+  .min(1, "Enter your email address.")
+  .email("That does not look like an email address. Check it and try again.");
+
+// The 8-character rule belongs to CHOOSING a password. When logging in, the server decides: an older account may have
+// a shorter password, and refusing it here would lock that person out of a correct login.
+const registerSchema = z.object({
+  email: emailField,
   password: z.string().min(8, "That password is too short. Use at least 8 characters."),
 });
+const loginSchema = z.object({
+  email: emailField,
+  password: z.string().min(1, "Enter your password."),
+});
 
-type FormValues = z.infer<typeof schema>;
+type FormValues = z.infer<typeof registerSchema>;
 
 /**
  * Where to go after signing in. The auth guard sends signed-out visitors to
@@ -55,6 +66,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [intent, setIntent] = useState<"customer" | "host">("customer");
   const [serverError, setServerError] = useState<string | null>(null);
   const [changedNotice, setChangedNotice] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [acceptAup, setAcceptAup] = useState(false);
   const [aupError, setAupError] = useState(false);
 
@@ -64,7 +76,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(mode === "login" ? loginSchema : registerSchema),
     defaultValues: { email: "", password: "" },
   });
 
@@ -214,15 +226,27 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
 
           <div className="space-y-1.5">
             <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              autoComplete={isLogin ? "current-password" : "new-password"}
-              placeholder="••••••••"
-              aria-invalid={Boolean(errors.password)}
-              aria-describedby={errors.password ? "password-error" : undefined}
-              {...register("password")}
-            />
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete={isLogin ? "current-password" : "new-password"}
+                placeholder="••••••••"
+                className="pr-11"
+                aria-invalid={Boolean(errors.password)}
+                aria-describedby={errors.password ? "password-error" : undefined}
+                {...register("password")}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-pressed={showPassword}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+              </button>
+            </div>
             {errors.password ? (
               <p id="password-error" role="alert" className="text-xs text-danger">{errors.password.message}</p>
             ) : isLogin ? (

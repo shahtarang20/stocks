@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiErrorCode } from "@/lib/api";
 import { sessionsApi, type SessionInfo } from "@/lib/sessions";
+import { kitsApi, type KitSummary } from "@/lib/kits";
+import { kitBlurb } from "@/lib/kit-blurbs";
 import { newClientKey, storeClientKey } from "@/lib/session-crypto";
 import { capitalize } from "@/lib/format";
 import { HelpTip } from "@/components/ui/help-tip";
@@ -77,6 +79,17 @@ export default function SessionsPage() {
   const [maxMin, setMaxMin] = useState("60");
   const [idleMin, setIdleMin] = useState("15");
   const list = useQuery({ queryKey: ["sessions"], queryFn: sessionsApi.list, refetchInterval: 5000 });
+  // The Kits that can run as a session, so a person picks one instead of typing "name@version" from memory.
+  const kitsQuery = useQuery<KitSummary[]>({ queryKey: ["kits"], queryFn: () => kitsApi.listKits() });
+  const sessionKits = (kitsQuery.data ?? []).filter((k) => k.mode === "session");
+  const sessionKitRefs = sessionKits.map((k) => `${k.slug}@${k.version}`);
+  const pickedKit = sessionKits.find((k) => `${k.slug}@${k.version}` === kit);
+  const pickedBlurb = pickedKit ? kitBlurb(pickedKit.slug) : null;
+  // With a list to choose from, start on the first Kit unless the link already named one.
+  useEffect(() => {
+    if (!kit && sessionKitRefs.length > 0) setKit(sessionKitRefs[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKitRefs.join("|")]);
   const create = useMutation({
     mutationFn: async () => {
       const key = newClientKey();
@@ -117,20 +130,64 @@ export default function SessionsPage() {
           >
             <div className="space-y-1.5 sm:col-span-4">
               <Label htmlFor="kit">Which Kit to run</Label>
-              <Input id="kit" value={kit} onChange={(e) => setKit(e.target.value)} placeholder="terminal-gpu@1.0.0" autoComplete="off" required aria-describedby="kit-d" />
-              <p id="kit-d" className="text-xs text-muted-foreground">Type the Kit name, then @ and its version, like terminal-gpu@1.0.0. You can find Kit names on the Kits page.</p>
+              {sessionKits.length > 0 ? (
+                <>
+                  <select
+                    id="kit"
+                    value={kit}
+                    onChange={(e) => setKit(e.target.value)}
+                    aria-describedby="kit-d"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base text-foreground shadow-sm sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
+                    {/* A link from the Kits page may name a Kit that is not in the list: keep it selectable. */}
+                    {kit && !sessionKitRefs.includes(kit) ? <option value={kit}>{kit}</option> : null}
+                    {sessionKits.map((k) => (
+                      <option key={`${k.slug}@${k.version}`} value={`${k.slug}@${k.version}`}>
+                        {k.name} (version {k.version})
+                      </option>
+                    ))}
+                  </select>
+                  <p id="kit-d" className="text-xs text-muted-foreground">
+                    {pickedBlurb ? pickedBlurb.does : "Pick the Kit you want to open."}
+                  </p>
+                </>
+              ) : kitsQuery.isLoading ? (
+                <>
+                  {/* Same shape as the finished dropdown, so the form does not jump when the list arrives. */}
+                  <select
+                    id="kit"
+                    disabled
+                    value=""
+                    aria-describedby="kit-d"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base text-muted-foreground shadow-sm sm:text-sm"
+                  >
+                    <option value="">Loading Kits…</option>
+                  </select>
+                  <p id="kit-d" className="text-xs text-muted-foreground">Loading the list of Kits…</p>
+                </>
+              ) : (
+                <>
+                  <Input id="kit" value={kit} onChange={(e) => setKit(e.target.value)} placeholder="notebooks@1.0.0" autoComplete="off" required aria-describedby="kit-d" />
+                  <p id="kit-d" className="text-xs text-muted-foreground">
+                    Type the Kit name, then @ and its version, like notebooks@1.0.0. You can find Kit names on the Kits page.
+                  </p>
+                </>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="p">Most you will pay per hour (credits)</Label>
-              <Input id="p" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
+              <Input id="p" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} aria-describedby="p-d" />
+              <p id="p-d" className="text-xs text-muted-foreground">We set aside enough for the longest run and give back what you do not use.</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="m">Longest it can run (minutes)</Label>
-              <Input id="m" inputMode="numeric" value={maxMin} onChange={(e) => setMaxMin(e.target.value)} />
+              <Input id="m" inputMode="numeric" value={maxMin} onChange={(e) => setMaxMin(e.target.value)} aria-describedby="m-d" />
+              <p id="m-d" className="text-xs text-muted-foreground">The session always stops after this long.</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="i">Stop if idle for (minutes)</Label>
-              <Input id="i" inputMode="numeric" value={idleMin} onChange={(e) => setIdleMin(e.target.value)} />
+              <Input id="i" inputMode="numeric" value={idleMin} onChange={(e) => setIdleMin(e.target.value)} aria-describedby="i-d" />
+              <p id="i-d" className="text-xs text-muted-foreground">It stops by itself if you do nothing for this long.</p>
             </div>
             <div className="flex items-end">
               <Button type="submit" className="w-full sm:w-auto" disabled={!kit.trim() || create.isPending}>
@@ -155,7 +212,7 @@ export default function SessionsPage() {
         />
       ) : sessions.length === 0 ? (
         <EmptyState icon={Terminal} title="You have no sessions yet">
-          Type a Kit name above and press Start session. Your command window opens on a host&apos;s computer.
+          Pick a Kit above and press Start session. Your command window opens on a host&apos;s computer.
         </EmptyState>
       ) : (
         <ul className="space-y-2">

@@ -152,7 +152,7 @@ export function EditMachineDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="asking_price_per_hour">
-              Price per hour (USD)
+              Price per hour (credits)
             </Label>
             <Input
               id="asking_price_per_hour"
@@ -168,7 +168,7 @@ export function EditMachineDialog({
               </p>
             ) : (
               <p id="asking_price_help" className="text-xs text-muted-foreground">
-                Customers see this price. A computer with no price gets no jobs.
+                Customers see this price in credits. In this preview credits are test credits, not real money. A computer with no price gets no jobs.
               </p>
             )}
           </div>

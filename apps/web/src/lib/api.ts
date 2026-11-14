@@ -1726,10 +1726,16 @@ export const api = {
   },
 
   /** GET /v1/billing/ledger — the customer's own ledger entries (array or {items}/{entries}). */
-  async getLedger(accessToken: string): Promise<LedgerEntry[]> {
+  async getLedger(
+    accessToken: string,
+    paging: { page?: number; page_size?: number } = {},
+  ): Promise<LedgerEntry[]> {
+    const qs = new URLSearchParams();
+    if (paging.page != null) qs.set("page", String(paging.page));
+    if (paging.page_size != null) qs.set("page_size", String(paging.page_size));
     const data = await request<
       LedgerEntry[] | { items?: LedgerEntry[]; entries?: LedgerEntry[] }
-    >("/v1/billing/ledger", { method: "GET", token: accessToken });
+    >(`/v1/billing/ledger${qs.toString() ? `?${qs.toString()}` : ""}`, { method: "GET", token: accessToken });
     if (Array.isArray(data)) return data;
     return data?.items ?? data?.entries ?? [];
   },

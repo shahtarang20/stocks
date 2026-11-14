@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   CheckCircle2,
@@ -60,6 +60,9 @@ const amountSchema = z.object({
 });
 
 type AmountValues = z.infer<typeof amountSchema>;
+
+/** How many history entries are read at a time (the server allows up to 200). */
+const LEDGER_PAGE_SIZE = 50;
 
 const LEDGER_KIND_TEXT: Record<string, string> = {
   credit_purchase: "Credits added",
@@ -235,14 +238,18 @@ export default function BillingPage() {
     queryFn: () => api.getBillingAccount(token),
   });
 
-  const ledgerQuery = useQuery<LedgerEntry[]>({
+  // The history is read a page at a time, so an older entry is never out of reach.
+  const ledgerQuery = useInfiniteQuery({
     queryKey: ["billing-ledger"],
     enabled: Boolean(accessToken),
-    queryFn: () => api.getLedger(token),
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => api.getLedger(token, { page: pageParam, page_size: LEDGER_PAGE_SIZE }),
+    // A full page means there may be more; a shorter one is the end.
+    getNextPageParam: (lastPage, allPages) => (lastPage.length >= LEDGER_PAGE_SIZE ? allPages.length + 1 : undefined),
   });
 
   const account = accountQuery.data;
-  const ledger = ledgerQuery.data ?? [];
+  const ledger: LedgerEntry[] = ledgerQuery.data?.pages.flat() ?? [];
 
   return (
     <>
@@ -402,6 +409,17 @@ export default function BillingPage() {
                 </TableBody>
               </Table>
             )}
+            {ledgerQuery.hasNextPage ? (
+              <div className="mt-4 flex justify-center">
+                <Button
+                  variant="outline"
+                  onClick={() => void ledgerQuery.fetchNextPage()}
+                  disabled={ledgerQuery.isFetchingNextPage}
+                >
+                  {ledgerQuery.isFetchingNextPage ? "Loading…" : "Show older entries"}
+                </Button>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       </div>

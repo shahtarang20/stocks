@@ -61,6 +61,8 @@ describe("axe: zero serious or critical violations", () => {
   it("what you can do", () => check(() => import("@/app/(marketing)/what-you-can-do/page")));
   it("share a Windows PC", () => check(() => import("@/app/(marketing)/share/windows/page")));
   it("kit catalogue", () => check(() => import("@/app/dashboard/kits/page")));
+  it("sessions", () => check(() => import("@/app/dashboard/sessions/page")));
+  it("billing", () => check(() => import("@/app/dashboard/billing/page")));
   it("kit job wizard", () => check(() => import("@/app/dashboard/kits/[slug]/page")));
   it("kit job panel", async () => {
     const { KitJobPanel } = await import("@/components/kits/kit-job-panel");

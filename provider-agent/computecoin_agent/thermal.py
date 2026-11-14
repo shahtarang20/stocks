@@ -326,3 +326,48 @@ def power_cap_from_json(text: str) -> PowerCapResult:
     except Exception:
         return PowerCapResult()
     return PowerCapResult(changed=changed)
+
+
+def undo_leftover_power_cap(state_file: Any, emit: Optional[Callable[[str], None]] = None) -> int:
+    """Put back the limits a run that never got to restore left behind (read from ``state_file``), then forget them.
+
+    Only cards still at the cap that run set are touched (see :func:`restore_power_limits`). Never raises; returns how many
+    cards were restored."""
+    n = 0
+    try:
+        leftover = power_cap_from_json(state_file.read_text()) if state_file.exists() else None
+    except OSError:
+        leftover = None
+    if leftover is not None and leftover.changed:
+        n = restore_power_limits(leftover)
+        if emit:
+            emit(f"[power] put back the power limit an earlier run left on {n} card(s)")
+    try:
+        state_file.unlink()
+    except OSError:
+        pass
+    return n
+
+
+def record_power_cap(state_file: Any, result: PowerCapResult) -> bool:
+    """Write what was changed, so a later run can undo it if this one cannot. True when it was written."""
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(power_cap_to_json(result))
+        return True
+    except OSError:
+        return False
+
+
+def restore_recorded_power_cap(state_file: Any) -> int:
+    """Undo the cap recorded in ``state_file`` (used by the separate power-cap service when it stops). Never raises."""
+    try:
+        recorded = power_cap_from_json(state_file.read_text()) if state_file.exists() else None
+    except OSError:
+        recorded = None
+    n = restore_power_limits(recorded) if recorded is not None and recorded.changed else 0
+    try:
+        state_file.unlink()
+    except OSError:
+        pass
+    return n

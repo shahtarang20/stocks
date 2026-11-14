@@ -39,9 +39,32 @@ def detect() -> None:
     typer.echo(json.dumps(report.model_dump(mode="json"), indent=2))
 
 
+def _resolve_enrollment_token(token: Optional[str], token_file: Optional[str]) -> str:
+    """The token from ``--token`` or from the first line of ``--token-file``. Exactly one must be given."""
+    if bool(token) == bool(token_file):
+        typer.echo("Give the enrollment token with exactly one of --token or --token-file.")
+        raise typer.Exit(code=2)
+    if token:
+        return token
+    try:
+        with open(str(token_file), encoding="utf-8") as fh:
+            value = fh.readline().strip()
+    except OSError as exc:
+        typer.echo(f"Could not read the token file: {type(exc).__name__}")
+        raise typer.Exit(code=2)
+    if not value:
+        typer.echo("The token file is empty.")
+        raise typer.Exit(code=2)
+    return value
+
+
 @app.command()
 def enroll(
-    token: str = typer.Option(..., "--token", help="Enrollment token (enr_...)."),
+    token: Optional[str] = typer.Option(None, "--token", help="Enrollment token (enr_...)."),
+    token_file: Optional[str] = typer.Option(
+        None, "--token-file",
+        help="Read the enrollment token from this file instead (it then never appears on a command line other users can see).",
+    ),
     server: Optional[str] = typer.Option(
         None, "--server", help="Backend base URL. Hits the real enroll endpoint when set."
     ),
@@ -52,6 +75,7 @@ def enroll(
     Phase 2 contract and stores the returned machine credential (0600). Without
     it, the Phase 1 offline path mints a local signing secret instead.
     """
+    token = _resolve_enrollment_token(token, token_file)
     config = AgentConfig.load()
     if check_dual_gpu_vendor_conflict(config.gpu_vendor):
         typer.echo(
@@ -295,9 +319,9 @@ def watchdog(
 
     Run it as its own service (use --print-unit) so it keeps running if the agent crashes."""
     if print_unit:
-        from .watchdog import systemd_unit
+        from .watchdog import agent_command, systemd_unit
 
-        typer.echo(systemd_unit(sys.argv[0] if sys.argv and sys.argv[0] else "computecoin-agent"), nl=False)
+        typer.echo(systemd_unit(agent_command()), nl=False)
         return
     from .thermal import ThermalGuard
     from .watchdog import run_forever
@@ -310,6 +334,47 @@ def watchdog(
         run_forever(guard, stop, poll_seconds=poll_seconds, grace_seconds=grace_seconds)
     except (KeyboardInterrupt, SystemExit):
         stop.set()
+
+
+@app.command("power-cap")
+def power_cap(
+    action: str = typer.Argument(..., help="apply: lower the graphics-card power limit now. restore: put the old limits back."),
+) -> None:
+    """Apply or undo the default graphics-card power cap. Needs root.
+
+    This is what the computecoin-powercap service runs, so that only these few lines have root and the agent itself does not."""
+    if action not in ("apply", "restore"):
+        typer.echo("Say 'apply' or 'restore'.")
+        raise typer.Exit(code=2)
+    from .platform import get_platform
+
+    if not get_platform().gpu.power_limit_supported():
+        typer.echo("Changing the power limit needs root and the NVIDIA library (pip install 'computecoin-agent[gpu]').")
+        raise typer.Exit(code=1)
+    from .thermal import apply_power_percent, record_power_cap, restore_recorded_power_cap, undo_leftover_power_cap
+
+    state_file = _power_state_file()
+    if action == "restore":
+        n = restore_recorded_power_cap(state_file)
+        typer.echo(f"[power] power limit put back on {n} card(s)")
+        return
+    config = AgentConfig.load()
+    if config.gpu_power_limit_w is not None:
+        # This runs as root but reads the settings file of the agent's own (unprivileged) account, so an exact value from there is
+        # not trusted: only the percentage (bounded 50 to 100) is. An exact limit is applied by an agent that itself runs as root.
+        typer.echo("[power] gpu_power_limit_w is set: an exact limit is applied only by an agent running as root. Not changing anything here.")
+        return
+    undo_leftover_power_cap(state_file, typer.echo)
+    result = apply_power_percent(config.gpu_power_limit_percent)
+    if result.changed:
+        record_power_cap(state_file, result)
+        typer.echo(f"[power] limited {len(result.changed)} card(s) to {config.gpu_power_limit_percent:g}% of the default power limit")
+    elif result.reason and result.reason != "off":
+        typer.echo(f"[power] not applied: {result.reason}")
+        if result.reason.startswith(("NVML unavailable", "no NVIDIA library")):
+            # The driver may simply not be ready yet (boot): fail, so the service tries again, instead of looking "done".
+            raise typer.Exit(code=1)
+        # Any other reason (for example a card that does not allow the change) is final: not an error, no retry.
 
 
 @app.command()
@@ -434,8 +499,14 @@ def start(
 
 
 def _power_state_file():
+    """Where the power-cap record lives. The root-only power-cap service points this at a root-owned folder
+    (``COMPUTECOIN_POWER_STATE_FILE``) that the agent's own account cannot write to."""
+    import os
     from pathlib import Path
 
+    override = os.environ.get("COMPUTECOIN_POWER_STATE_FILE")
+    if override:
+        return Path(override)
     from .platform import get_platform
 
     return Path(get_platform().paths.data_dir()) / "power_cap_state.json"
@@ -458,31 +529,27 @@ def _apply_default_power_cap(config: "AgentConfig", emit: Callable[[str], None])
             return nothing
         import atexit
 
-        from .thermal import (apply_power_percent, power_cap_from_json, power_cap_to_json, restore_power_limits)
+        from .platform import get_platform
+        from .thermal import apply_power_percent, record_power_cap, restore_power_limits, undo_leftover_power_cap
+
+        if not get_platform().gpu.power_limit_supported():
+            # Not root (or no graphics library): changing a power limit is not allowed from here. The separate
+            # computecoin-powercap service (root, installed by the one-line installer) does it for an unprivileged agent.
+            pct = config.gpu_power_limit_percent
+            if pct is not None and pct < 100:
+                emit("[power] this process cannot change the power limit (it is not root); the computecoin-powercap service "
+                     "does it when installed with the one-line installer")
+            return nothing
 
         state_file = _power_state_file()
-        try:  # undo what a run that never got to restore left behind
-            leftover = power_cap_from_json(state_file.read_text()) if state_file.exists() else None
-        except OSError:
-            leftover = None
-        if leftover is not None and leftover.changed:
-            n = restore_power_limits(leftover)
-            emit(f"[power] put back the power limit an earlier run left on {n} card(s)")
-        try:
-            state_file.unlink()
-        except OSError:
-            pass
+        undo_leftover_power_cap(state_file, emit)  # undo what a run that never got to restore left behind
 
         result = apply_power_percent(config.gpu_power_limit_percent)
         if not result.changed:
             if result.reason and result.reason not in ("off",):
                 emit(f"[power] default power cap not applied: {result.reason}")
             return nothing
-        try:
-            state_file.parent.mkdir(parents=True, exist_ok=True)
-            state_file.write_text(power_cap_to_json(result))
-        except OSError:
-            pass  # without the file a crash is not recoverable by the next run; the normal stop still restores
+        record_power_cap(state_file, result)  # without the file a crash is not recoverable by the next run
         emit(f"[power] graphics card power limited to {config.gpu_power_limit_percent:g}% of its default "
              f"({len(result.changed)} card(s)); restored when the agent stops. Set gpu_power_limit_percent to 100 to turn this off")
 

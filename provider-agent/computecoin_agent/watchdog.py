@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -206,7 +207,7 @@ def spawn_detached() -> bool:
     """Start ``computecoin-agent watchdog`` as its own process (own session, no terminal). True when it was started."""
     try:
         subprocess.Popen(
-            [sys.executable, "-c", "from computecoin_agent.cli import app; app()", "watchdog"],
+            [sys.executable, "-m", "computecoin_agent", "watchdog"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         return True
@@ -249,6 +250,18 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 """
+
+
+def agent_command(argv0: Optional[str] = None, python: Optional[str] = None) -> str:
+    """The command that starts this agent, as an ABSOLUTE path a systemd unit accepts.
+
+    The installed ``computecoin-agent`` program when that is what was run; otherwise this Python running the package
+    (``python -m computecoin_agent``). ``sys.argv[0]`` alone is not usable: it can be ``-c`` or a bare name."""
+    name = sys.argv[0] if argv0 is None and sys.argv else (argv0 or "")
+    found = shutil.which(name) if name and not name.startswith("-") else None
+    if found and os.path.basename(found) == "computecoin-agent":
+        return os.path.abspath(found)
+    return f"{python or sys.executable} -m computecoin_agent"
 
 
 def systemd_unit(exe: str) -> str:

@@ -146,7 +146,7 @@ class Signals:
         self.restored += 1
 
 
-def _stub(monkeypatch, tmp_path, result, leftover_restore=None):
+def _stub(monkeypatch, tmp_path, result, can_change=True):
     """Replace NVML, the platform and the state file (never the real home directory) and capture atexit."""
     from computecoin_agent import platform as plat
     from computecoin_agent import thermal
@@ -155,7 +155,8 @@ def _stub(monkeypatch, tmp_path, result, leftover_restore=None):
     restored = []
     monkeypatch.setattr(thermal, "restore_power_limits", lambda r: restored.append(r) or len(r.changed))
     signals = Signals()
-    monkeypatch.setattr(plat, "get_platform", lambda: SimpleNamespace(signals=signals))
+    gpu = SimpleNamespace(power_limit_supported=lambda: can_change)
+    monkeypatch.setattr(plat, "get_platform", lambda: SimpleNamespace(signals=signals, gpu=gpu))
     state = tmp_path / "power_cap_state.json"
     monkeypatch.setattr(cli, "_power_state_file", lambda: state)
     exits = []
@@ -297,3 +298,130 @@ def test_the_default_sampler_gives_no_reading_when_nothing_is_readable(monkeypat
     assert thermal._default_sampler() == []
     assert ThermalGuard().read_max_temp() is None  # a driver that stopped answering is NOT a cool 48.5 C
     assert ThermalGuard().has_sensor() is False
+
+
+# ---- an agent that is not root leaves the cap to the separate service and never touches its state ---------------------------
+def test_a_non_root_agent_does_not_touch_the_power_limit_or_the_state_file_and_says_who_does(monkeypatch, tmp_path):
+    result = PowerCapResult(changed={0: (300_000, 270_000)})
+    restored, signals, state, exits = _stub(monkeypatch, tmp_path, result, can_change=False)
+    state.write_text(power_cap_to_json(PowerCapResult(changed={0: (300_000, 270_000)})))  # written by the root service
+    said = []
+    cli._apply_default_power_cap(AgentConfig(), said.append)()
+    assert restored == [] and signals.handler is None and exits == []  # nothing restored, no handler, nothing at exit
+    assert state.exists()  # the root service's record is NOT deleted by the agent
+    assert any("computecoin-powercap" in m for m in said)
+
+
+def test_a_non_root_agent_with_the_cap_turned_off_is_silent(monkeypatch, tmp_path):
+    _stub(monkeypatch, tmp_path, PowerCapResult(), can_change=False)
+    said = []
+    cli._apply_default_power_cap(AgentConfig(gpu_power_limit_percent=None), said.append)()
+    cli._apply_default_power_cap(AgentConfig(gpu_power_limit_percent=100), said.append)()
+    assert said == []
+
+
+# ---- the command the root service runs ---------------------------------------------------------------------------------------
+def _cli_env(monkeypatch, tmp_path, result, can_change=True):
+    from computecoin_agent import platform as plat
+    from computecoin_agent import thermal
+
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(cli, "_power_state_file", lambda: state)
+    monkeypatch.setattr(plat, "get_platform", lambda: SimpleNamespace(gpu=SimpleNamespace(power_limit_supported=lambda: can_change)))
+    calls = {"restore": []}
+    monkeypatch.setattr(thermal, "apply_power_percent", lambda pct: result)
+    monkeypatch.setattr(thermal, "restore_power_limits", lambda r: calls["restore"].append(r) or len(r.changed))
+    monkeypatch.setattr(cli.AgentConfig, "load", classmethod(lambda cls, path=None: AgentConfig()))
+    return state, calls
+
+
+def test_the_power_cap_command_applies_and_records(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    result = PowerCapResult(changed={0: (300_000, 270_000), 1: (300_000, 270_000)})
+    state, calls = _cli_env(monkeypatch, tmp_path, result)
+    out = CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    assert out.exit_code == 0 and "limited 2 card(s) to 90%" in out.output
+    assert power_cap_from_json(state.read_text()).changed == result.changed
+
+
+def test_the_power_cap_command_restores_what_it_recorded_and_forgets_it(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    result = PowerCapResult(changed={0: (300_000, 270_000)})
+    state, calls = _cli_env(monkeypatch, tmp_path, result)
+    CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    out = CliRunner().invoke(cli.app, ["power-cap", "restore"])
+    assert out.exit_code == 0 and "put back on 1 card(s)" in out.output
+    assert calls["restore"][-1].changed == result.changed and not state.exists()
+
+
+def test_applying_again_first_undoes_what_the_last_run_left(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    state, calls = _cli_env(monkeypatch, tmp_path, PowerCapResult(changed={0: (300_000, 270_000)}))
+    state.write_text(power_cap_to_json(PowerCapResult(changed={0: (280_000, 252_000)})))
+    out = CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    assert calls["restore"][0].changed == {0: (280_000, 252_000)} and "earlier run left" in out.output
+
+
+def test_restoring_with_nothing_recorded_is_harmless(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    _cli_env(monkeypatch, tmp_path, PowerCapResult())
+    out = CliRunner().invoke(cli.app, ["power-cap", "restore"])
+    assert out.exit_code == 0 and "put back on 0 card(s)" in out.output
+
+
+def test_a_card_that_does_not_allow_the_cap_is_reported_not_an_error(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    _cli_env(monkeypatch, tmp_path, PowerCapResult(reason="not permitted: PermissionError"))
+    out = CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    assert out.exit_code == 0 and "not applied" in out.output  # the service must not fail and restart-loop over this
+
+
+def test_the_power_cap_command_refuses_without_root_and_with_a_wrong_word(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    _cli_env(monkeypatch, tmp_path, PowerCapResult(), can_change=False)
+    no = CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    assert no.exit_code == 1 and "needs root" in no.output
+    assert CliRunner().invoke(cli.app, ["power-cap", "dance"]).exit_code == 2
+
+
+def test_the_root_command_does_not_trust_an_exact_watt_value_from_the_agents_own_settings_file(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+    from computecoin_agent import thermal
+
+    state, _ = _cli_env(monkeypatch, tmp_path, PowerCapResult(changed={0: (300_000, 270_000)}))
+    monkeypatch.setattr(cli.AgentConfig, "load", classmethod(lambda cls, path=None: AgentConfig(gpu_power_limit_w=200)))
+    seen = []
+    monkeypatch.setattr(thermal, "apply_power_limit", lambda w: seen.append(w) or True)
+    out = CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    assert seen == [] and out.exit_code == 0 and not state.exists()  # nothing applied, nothing recorded
+    assert "only by an agent running as root" in out.output
+
+
+@pytest.mark.parametrize("reason", ["NVML unavailable: NVMLError", "no NVIDIA library"])
+def test_a_driver_that_is_not_ready_makes_the_service_fail_so_it_is_tried_again(monkeypatch, tmp_path, reason):
+    from typer.testing import CliRunner
+
+    _cli_env(monkeypatch, tmp_path, PowerCapResult(reason=reason))
+    out = CliRunner().invoke(cli.app, ["power-cap", "apply"])
+    assert out.exit_code == 1 and "not applied" in out.output  # systemd restarts it after a pause
+
+
+@pytest.mark.parametrize("reason", ["not permitted: PermissionError", "off"])
+def test_a_card_that_says_no_is_final_not_retried_forever(monkeypatch, tmp_path, reason):
+    from typer.testing import CliRunner
+
+    _cli_env(monkeypatch, tmp_path, PowerCapResult(reason=reason))
+    assert CliRunner().invoke(cli.app, ["power-cap", "apply"]).exit_code == 0
+
+
+def test_the_state_file_can_be_moved_to_a_root_owned_folder(monkeypatch, tmp_path):
+    monkeypatch.setenv("COMPUTECOIN_POWER_STATE_FILE", str(tmp_path / "root-owned" / "state.json"))
+    assert str(cli._power_state_file()) == str(tmp_path / "root-owned" / "state.json")
+    monkeypatch.delenv("COMPUTECOIN_POWER_STATE_FILE")
+    assert cli._power_state_file().name == "power_cap_state.json"

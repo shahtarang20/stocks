@@ -371,3 +371,39 @@ def test_start_keeps_the_watchdog_alive_with_a_background_thread(monkeypatch):
     while not started and _t.time() < deadline:
         _t.sleep(0.01)
     assert started == [1]
+
+
+# ---- the unit must name an absolute command ------------------------------------------------------------------------------
+def test_the_unit_command_is_always_absolute(tmp_path, monkeypatch):
+    prog = tmp_path / "computecoin-agent"
+    prog.write_text("#!/bin/sh\n")
+    prog.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert watchdog.agent_command("computecoin-agent", "/py/python") == str(prog)  # a bare name is resolved
+    assert watchdog.agent_command(str(prog), "/py/python") == str(prog)
+    for odd in ("-c", "", "-m", "something-else", "nonexistent-program"):
+        assert watchdog.agent_command(odd, "/py/python") == "/py/python -m computecoin_agent", odd
+
+
+def test_the_printed_unit_never_has_a_relative_or_odd_command():
+    from typer.testing import CliRunner
+
+    out = CliRunner().invoke(cli.app, ["watchdog", "--print-unit"]).output
+    line = next(line for line in out.splitlines() if line.startswith("ExecStart="))
+    assert line.startswith("ExecStart=/") and line.endswith(" watchdog"), line
+
+
+def test_the_agent_can_be_run_as_a_module():
+    import subprocess
+    import sys
+
+    done = subprocess.run([sys.executable, "-m", "computecoin_agent", "--help"], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0 and "watchdog" in done.stdout
+
+
+def test_the_background_watchdog_is_started_the_same_way(monkeypatch):
+    seen = []
+    monkeypatch.setattr(watchdog.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw)))
+    assert watchdog.spawn_detached() is True
+    argv, kw = seen[0]
+    assert argv[1:] == ["-m", "computecoin_agent", "watchdog"] and kw["start_new_session"] is True

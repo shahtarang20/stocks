@@ -43,6 +43,23 @@ async def _user(db) -> uuid.UUID:
     return u.id
 
 
+async def _real_machine(db) -> uuid.UUID:
+    """A real machine row (Postgres enforces the link from jobs.machine_id)."""
+    from app.models.provider import Provider, ProviderMachine
+
+    owner = User(email=f"u11-host-{uuid.uuid4().hex[:8]}@example.com", password_hash="pw", email_verified=True)
+    db.add(owner)
+    await db.flush()
+    provider = Provider(user_id=owner.id, display_name="u11-host")
+    db.add(provider)
+    await db.flush()
+    machine = ProviderMachine(provider_id=provider.id, hostname="u11-box", status="registered", availability="online",
+                              asking_price_per_hour=D("1.00"), max_concurrent_jobs=1, signing_key="k", secret_hash="h")
+    db.add(machine)
+    await db.flush()
+    return machine.id
+
+
 async def _service(db, uid, *, status=SERVICE_ACTIVE) -> Service:
     svc = Service(customer_id=uid, name="svc", status=status, spec={}, kit_ref="k@1", min_replicas=1, max_replicas=2,
                   max_total_cost=D("50.00"), request_timeout_seconds=60, max_concurrency=2)
@@ -310,7 +327,6 @@ async def test_start_timeout_kills_replica_cancels_job_releases_hold_and_replace
 
     monkeypatch.setattr(leases, "release_job_reservation", fake_release_reservation)
     monkeypatch.setattr(settings, "SERVICE_REPLICA_START_TIMEOUT_SECONDS", 600)
-    bad_machine = uuid.uuid4()
     started: list[set] = []
 
     async def fake_start(db, service, now):
@@ -319,6 +335,7 @@ async def test_start_timeout_kills_replica_cancels_job_releases_hold_and_replace
 
     async with get_sessionmaker()() as db:
         svc = await _service(db, await _user(db))
+        bad_machine = await _real_machine(db)
         now = utcnow()
         rep, job = await _replica(db, svc, job_status=fsm.RUNNING, rstatus=REPLICA_STARTING, machine=bad_machine,
                                   created=now - dt.timedelta(seconds=700))

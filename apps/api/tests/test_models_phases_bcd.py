@@ -421,7 +421,8 @@ async def test_dispute_evidence_requires_an_existing_dispute(client) -> None:
     """Evidence is anchored to a dispute — a dangling row would be unauditable."""
     sm = get_sessionmaker()
     async with sm() as s:
-        await s.execute(sa.text("PRAGMA foreign_keys=ON"))
+        if s.get_bind().dialect.name == "sqlite":  # SQLite checks foreign keys only when asked; Postgres always does
+            await s.execute(sa.text("PRAGMA foreign_keys=ON"))
         s.add(
             DisputeEvidence(
                 dispute_id=uuid.uuid4(),

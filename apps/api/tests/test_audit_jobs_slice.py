@@ -144,11 +144,12 @@ async def test_verify_output_still_rejects_unknown_workload():
 # --------------------------------------------------------------------------------------------
 # session claim eligibility
 # --------------------------------------------------------------------------------------------
-def _pending_session(**over):
+async def _pending_session(s, **over):
     from app.models.sessions import SESSION_PENDING, ComputeSession
+    from tests.helpers import add_user_row
 
     base = dict(
-        customer_id=uuid.uuid4(), status=SESSION_PENDING, image_digest="x@sha256:" + "a" * 64, mode="pty",
+        customer_id=(await add_user_row(s, "sess-cust")).id, status=SESSION_PENDING, image_digest="x@sha256:" + "a" * 64, mode="pty",
         gpu_count=0, isolation_tier="container", max_duration_seconds=3600, idle_timeout_seconds=900,
         max_price_per_gpu_hour=1000, held_minor=0, client_pubkey="ab" * 32,
     )
@@ -171,7 +172,7 @@ async def test_session_claim_refused_for_banned_or_out_of_service_machine(client
     await create_listable_machine(client, f"p-sess-{field}-{value}@x.com", hostname=f"s-{field}-{value}")
     async with get_sessionmaker()() as s:
         machine = await _latest_machine(s)
-        row = _pending_session()
+        row = await _pending_session(s)
         s.add(row)
         await s.flush()
         setattr(machine, field, value)
@@ -192,7 +193,7 @@ async def test_session_claim_refused_for_suspended_provider(client):
         machine = await _latest_machine(s)
         provider = await s.get(Provider, machine.provider_id)
         (await s.get(User, provider.user_id)).status = UserStatus.suspended
-        s.add(_pending_session())
+        s.add(await _pending_session(s))
         await s.flush()
         assert await svc.claim_next(s, machine, host_pubkey="cd" * 32, machine_gpus=1) is None
 

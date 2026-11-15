@@ -58,12 +58,24 @@ async def test_report_requires_login_and_validates_input(client):
 
 async def test_any_user_can_report_and_it_is_stored_open(client):
     h = await _user(client, "abuse-rep-b@example.com")
-    r = await client.post("/v1/abuse/report", headers=h, json={"category": "mining", "description": DESC, "job_id": str(uuid.uuid4())})
+    await _user(client, "abuse-rep-b-owner@example.com")  # a third party's job: a reporter need not own it
+    jid = await _job(await get_user_id("abuse-rep-b-owner@example.com"))
+    r = await client.post("/v1/abuse/report", headers=h, json={"category": "mining", "description": DESC, "job_id": str(jid)})
     assert r.status_code == 201, r.text
     assert r.json()["status"] == "open"
     async with get_sessionmaker()() as db:
         rep = await db.get(AbuseReport, uuid.UUID(r.json()["report_id"]))
         assert rep.category == "mining" and rep.reporter_id == await get_user_id("abuse-rep-b@example.com")
+
+
+async def test_a_report_about_a_job_that_does_not_exist_is_a_clean_404_not_a_server_error(client):
+    h = await _user(client, "abuse-rep-c@example.com")
+    r = await client.post("/v1/abuse/report", headers=h, json={"category": "mining", "description": DESC, "job_id": str(uuid.uuid4())})
+    assert r.status_code == 404 and r.json()["detail"] == "job_not_found"
+    async with get_sessionmaker()() as db:
+        assert (await db.execute(select(AbuseReport))).scalars().first() is None  # nothing was stored
+    ok = await client.post("/v1/abuse/report", headers=h, json={"category": "mining", "description": DESC})  # a report with no job still works
+    assert ok.status_code == 201
 
 
 async def test_admin_routes_are_admin_only(client):

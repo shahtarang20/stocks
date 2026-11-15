@@ -112,8 +112,13 @@ async def test_two_concurrent_claims_yield_one_job(client, db_engine):
     assert len(running) == 1
 
 
-async def test_lease_recovery_with_skip_locked_never_double_recovers(client, db_engine):
+async def test_lease_recovery_with_skip_locked_never_double_recovers(client, db_engine, monkeypatch):
+    from app.core.config import settings as app_settings
     from tests.test_phase3_marketplace import create_listable_machine
+
+    # A lost lease normally earns a free re-dispatch (HOST_FAILURE_FREE_RETRIES). This test is about two sweepers never recovering the same
+    # job twice, so the free retry is off here and the outcome is the plain "retries exhausted, timed out".
+    monkeypatch.setattr(app_settings, "HOST_FAILURE_FREE_RETRIES", 0)
     from tests.test_phase4_jobs import _customer, claim, seed_echo_model, submit_job
 
     await seed_echo_model()

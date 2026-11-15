@@ -105,3 +105,14 @@ async def seed_hardware_model() -> None:
         )
         await s.commit()
 
+
+
+async def add_user_row(db, tag: str = "u"):
+    """A real, active user row for tests that insert rows directly. Postgres enforces the link to ``users``; SQLite does not, so a made-up
+    ``uuid.uuid4()`` customer id passes on SQLite and fails on Postgres."""
+    from app.models.enums import UserStatus
+
+    user = User(email=f"{tag}-{uuid.uuid4().hex[:10]}@example.com", password_hash="pw", email_verified=True, status=UserStatus.active)
+    db.add(user)
+    await db.flush()
+    return user

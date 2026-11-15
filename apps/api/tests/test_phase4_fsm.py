@@ -16,8 +16,10 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _make_job(s, **kw) -> Job:
+    from tests.helpers import add_user_row
+
     job = Job(
-        customer_id=uuid.uuid4(),
+        customer_id=(await add_user_row(s, "fsm")).id,
         workload_type="text-generation",
         model="echo-sim-v1",
         input={"prompt": "hi"},

@@ -472,10 +472,15 @@ async def test_project_limit_counts_every_members_spend(client, db_engine):
     """Alice's project cap must see Bob's jobs, and must apply to Bob."""
     alice = await _user(client, "fix-proj-alice@example.com")
     bob = await _user(client, "fix-proj-bob@example.com")
-    project_id = uuid.uuid4()
 
     sm = get_sessionmaker()
     async with sm() as s:
+        from app.models.org import Project
+
+        project = Project(owner_id=alice, name="shared project")  # a real project: Postgres enforces the link
+        s.add(project)
+        await s.flush()
+        project_id = project.id
         s.add(
             SpendLimit(
                 owner_id=alice,

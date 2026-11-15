@@ -64,6 +64,9 @@ async def report_abuse(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many requests, please try again later")
     # Any authenticated user may report; the job reference is not validated for ownership on
     # purpose (a reporter is usually a third party) and is never echoed back with job details.
+    # It must exist, though: a made-up or mistyped id would otherwise break the link to jobs and end as a 500 on Postgres.
+    if body.job_id is not None and await db.get(Job, body.job_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job_not_found")
     rep = AbuseReport(
         reporter_id=current.id, job_id=body.job_id, category=body.category, description=body.description
     )

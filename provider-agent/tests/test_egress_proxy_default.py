@@ -45,7 +45,7 @@ def test_an_unpinned_replacement_is_refused(bad):
 
 
 def test_the_host_reports_the_filter_flag_by_default_and_not_when_turned_off():
-    from tests.test_capabilities import cfg, compute, report
+    from test_capabilities import cfg, compute, report
     from computecoin_agent.platform.fake import make_fake_platform
 
     plat = make_fake_platform(docker_available=True)

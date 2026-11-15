@@ -68,6 +68,17 @@ from app.services.data_plane_store import (
 
 logger = logging.getLogger(__name__)
 
+
+def _store_error_text(exc: BaseException) -> str:
+    """One short line for the log saying what the object store answered (its error code and message). Log viewers cut long structured
+    fields, so this goes in the main message. An S3 error carries a code, a text and a request id, never a key. Never raises."""
+    try:
+        err = (getattr(exc, "response", None) or {}).get("Error", {}) or {}
+        code, text = str(err.get("Code") or type(exc).__name__), str(err.get("Message") or exc)
+    except Exception:  # noqa: BLE001 - a log helper must not add a failure
+        return type(exc).__name__
+    return f"{code}: {' '.join(text.split())}"[:400]
+
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _NAME_BAD = re.compile(r"[\x00-\x1f\x7f/\\]")
 
@@ -309,8 +320,8 @@ async def create_upload(
     staging = f"staging/{owner_id}/{upload_id}"
     try:
         store_upload_id = store.create_multipart(staging, content_type)
-    except Exception:
-        logger.exception("create_multipart failed")
+    except Exception as exc:
+        logger.exception("create_multipart failed: %s", _store_error_text(exc))
         raise DataPlaneError("store_unavailable", 503) from None
     up = DataUpload(
         id=upload_id, owner_id=owner_id, idempotency_key=idempotency_key, name=name, content_type=content_type,
@@ -373,8 +384,8 @@ async def issue_part_url(
     ttl = max(1, min(int(settings.DATA_PLANE_PART_URL_TTL_SECONDS), int((_aware(up.expires_at) - utcnow()).total_seconds())))
     try:
         url, headers = store.presign_upload_part(up.staging_key, up.store_upload_id, part_number, sha256, size_bytes, ttl)
-    except Exception:
-        logger.exception("presign part failed")
+    except Exception as exc:
+        logger.exception("presign part failed: %s", _store_error_text(exc))
         raise DataPlaneError("store_unavailable", 503) from None
     await db.flush()
     return {
@@ -395,8 +406,8 @@ async def confirm_part(db: AsyncSession, up: DataUpload, *, part_number: int) ->
         raise DataPlaneError("part_url_not_requested", 409)
     try:
         stored = {p.part_number: p for p in store.list_parts(up.staging_key, up.store_upload_id)}
-    except Exception:
-        logger.exception("list_parts failed")
+    except Exception as exc:
+        logger.exception("list_parts failed: %s", _store_error_text(exc))
         raise DataPlaneError("store_unavailable", 503) from None
     sp = stored.get(part_number)
     part.attempts += 1
@@ -454,8 +465,8 @@ async def complete_upload(db: AsyncSession, up: DataUpload, *, ip: str | None = 
             store.complete_multipart(up.staging_key, up.store_upload_id, [(p.part_number, p.etag) for p in parts])
         except DataPlaneError:
             raise
-        except Exception:
-            logger.exception("complete_multipart failed")
+        except Exception as exc:
+            logger.exception("complete_multipart failed: %s", _store_error_text(exc))
             raise DataPlaneError("store_unavailable", 503) from None
         up.status = UPLOAD_VERIFYING
         await db.flush()
@@ -703,8 +714,8 @@ async def create_download_link(
     ttl = max(1, min(ttl, int(settings.DATA_PLANE_DOWNLOAD_MAX_TTL_SECONDS)))
     try:
         url = store.presign_download(obj.storage_key, ttl, f.name, f.content_type)
-    except Exception:
-        logger.exception("presign download failed")
+    except Exception as exc:
+        logger.exception("presign download failed: %s", _store_error_text(exc))
         raise DataPlaneError("store_unavailable", 503) from None
     await record_audit(db, action="data.download.link", outcome="success", actor_user_id=owner_id,
                        resource_type="data_file", resource_id=str(f.id), ip=ip)

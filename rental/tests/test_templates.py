@@ -183,3 +183,35 @@ def test_the_real_template_list_matches_the_template_folders():
         assert (TEMPLATES / t["slug"] / "Dockerfile").is_file()
         assert t.get("digest") is None or re.fullmatch(r"[\w./:-]+@sha256:[0-9a-f]{64}", t["digest"])
         assert t["mode"] == "tcp" and t["tcp_port"] == 8888 and not t.get("command")  # the image's own entrypoint runs Jupyter
+
+
+# ---- what the website tells customers a template contains must be true ----------------------------------------------------
+API_TEMPLATES = ROOT / "apps" / "api" / "app" / "data" / "rental_templates.json"
+FROM_THE_BASE_IMAGE = {"torch", "torchvision", "torchaudio", "numpy"}  # pytorch/pytorch ships these; the templates do not reinstall them
+NOT_INSTALLED_ANYWHERE = {"insightface", "transformers", "datasets", "accelerate", "scikit-image", "librosa", "soundfile"}
+
+
+def _installed(slug: str) -> set[str]:
+    files = (TEMPLATES / slug / "requirements.txt").read_text() + "\n" + (TEMPLATES / slug / "Dockerfile").read_text()
+    names = {ln.split("==")[0].strip().lower() for ln in files.splitlines() if "==" in ln and not ln.lstrip().startswith("#")}
+    names |= {m.lower() for m in re.findall(r"pip install[^\n]*?\b([A-Za-z0-9_.-]+)==", files)}
+    return names
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+def test_every_library_the_website_lists_is_really_installed(slug):
+    listed = {t["slug"]: t for t in json.loads(API_TEMPLATES.read_text())["templates"]}[slug]["libraries"]
+    installed = _installed(slug) | FROM_THE_BASE_IMAGE | {"jupyterlab"}
+    missing = [lib for lib in listed if lib.lower() not in installed]
+    assert not missing, f"{slug}: the Rent page says it includes {missing}, but the image does not install them"
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+def test_the_description_does_not_name_a_library_the_image_lacks(slug):
+    entry = {t["slug"]: t for t in json.loads(API_TEMPLATES.read_text())["templates"]}[slug]
+    words = set(re.findall(r"[a-z][a-z0-9-]+", entry["description"].lower()))
+    lacking = words & NOT_INSTALLED_ANYWHERE
+    # "transformers" and "audio libraries" may appear only as things the customer installs themselves
+    if "you install yourself with pip" in entry["description"]:
+        lacking -= {"transformers"}
+    assert not lacking, f"{slug}: the description names {sorted(lacking)}, which the image does not contain"

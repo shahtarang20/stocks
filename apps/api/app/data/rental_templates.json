@@ -4,7 +4,7 @@
     {
       "slug": "pytorch-jupyter",
       "name": "PyTorch + JupyterLab",
-      "description": "A GPU PyTorch environment with JupyterLab and the common training libraries. Your files live in /workspace; put anything you want saved in /workspace/results.",
+      "description": "A GPU PyTorch environment with JupyterLab, pandas, scikit-learn, matplotlib, tensorboard and timm. Anything else (for example transformers or audio libraries) you install yourself with pip. Your files live in /workspace; put anything you want saved in /workspace/results.",
       "gpu_required": true,
       "mode": "tcp",
       "tcp_port": 8888,
@@ -28,17 +28,17 @@
         "pandas",
         "scikit-learn",
         "matplotlib",
-        "transformers",
-        "datasets",
-        "accelerate",
-        "tensorboard"
+        "seaborn",
+        "tensorboard",
+        "timm",
+        "tqdm"
       ],
       "digest": "ghcr.io/shahtarang20/rental-pytorch-jupyter@sha256:58b279d23c444496e52a50b7620356d6f2e1ee3cae03d50cb7fcbd64c59935d0"
     },
     {
       "slug": "vision-jupyter",
       "name": "Computer vision + JupyterLab (faces, detection, training)",
-      "description": "PyTorch with JupyterLab plus OpenCV, torchvision, timm, albumentations and face-recognition libraries (facenet-pytorch, insightface, onnxruntime-gpu). Your files live in /workspace; put anything you want saved in /workspace/results.",
+      "description": "PyTorch with JupyterLab plus OpenCV, timm, albumentations and face-recognition libraries (facenet-pytorch, onnxruntime-gpu). Anything else you install yourself with pip. Your files live in /workspace; put anything you want saved in /workspace/results.",
       "gpu_required": true,
       "mode": "tcp",
       "tcp_port": 8888,
@@ -61,10 +61,8 @@
         "opencv-python-headless",
         "albumentations",
         "facenet-pytorch",
-        "insightface",
         "onnxruntime-gpu",
         "scikit-learn",
-        "scikit-image",
         "pandas",
         "matplotlib",
         "jupyterlab"

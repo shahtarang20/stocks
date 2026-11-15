@@ -777,6 +777,31 @@ def test_the_thread_runs_the_loop_with_the_hosts_rental_settings_and_a_gate():
     assert agent.claim_gate() is True
 
 
+def test_the_scratch_folder_follows_the_work_dir_setting_and_defaults_to_tmp():
+    from computecoin_agent.platform import use_platform
+    from computecoin_agent.platform.fake import make_fake_platform
+
+    seen = []
+
+    def loop(api, executor, *, agent):
+        seen.append(agent.workdir)
+
+    with use_platform(make_fake_platform()):
+        for cfg in (_cfg(), _cfg(work_dir="/srv/shared/work"), _cfg(work_dir="")):
+            sa.start_background_sessions(cfg, engine_available=lambda: True, run_loop=loop, api=object(), executor=_ex()).join(5)
+    assert seen == ["/tmp", "/srv/shared/work", "/tmp"]
+
+
+def test_a_terminal_rental_keeps_its_container_open_but_web_rentals_and_kit_sessions_do_not(tmp_path):
+    run = _run_for(tmp_path)
+    terminal = sa.build_session_argv(_ex(), _claim(mode="pty", gpu_count=0), str(tmp_path / "o"), run)
+    assert terminal[terminal.index("-d") + 1:terminal.index("-d") + 3] == ["-i", "-t"]
+    web = sa.build_session_argv(_ex(), _claim(mode="tcp", tcp_port=8888, command=None), str(tmp_path / "o"), run)
+    assert "-i" not in web and "-t" not in web
+    kit = sa.build_session_argv(_ex(), _claim(mode="pty", rental=False, gpu_count=0), str(tmp_path / "o"))
+    assert "-i" not in kit and "-t" not in kit
+
+
 def test_the_gate_follows_heat_and_the_owner():
     from computecoin_agent.platform import use_platform
     from computecoin_agent.platform.fake import make_fake_platform

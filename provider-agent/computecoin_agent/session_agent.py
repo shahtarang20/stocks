@@ -255,7 +255,11 @@ def build_session_argv(executor: DockerExecutor, claim: dict[str, Any], workdir:
         raise SessionAgentError("unexpected executor argv")
     argv = list(prefix[3:])  # drop the `timeout` wrapper: the container is detached; this agent enforces the deadline
     i = argv.index("--rm") + 1
-    argv[i:i] = ["-d", "--name", container_name(spec.job_id)]
+    # A terminal rental on the customer's own image: keep stdin open with a terminal, so an image whose default command is a shell or a
+    # REPL (python, ubuntu, bash) stays up for the terminal to attach to instead of exiting at once. Kit sessions and web-page
+    # (tcp) rentals are unchanged.
+    keep_open = ["-i", "-t"] if claim.get("rental") and claim.get("mode") != "tcp" else []
+    argv[i:i] = ["-d", *keep_open, "--name", container_name(spec.job_id)]
     if any(a in ("-p", "--publish", "-P", "--network=host", "--privileged") for a in argv):
         raise SessionAgentError("session container must not publish ports")
     if run is not None:
@@ -866,7 +870,11 @@ def start_background_sessions(
             return False
         return True
 
-    agent = SessionAgent(api, executor, rental=RentalSettings.from_config(config), thermal_guard=thermal_guard, claim_gate=gate)
+    # The per-session scratch folder follows the host's `work_dir` setting (default /tmp). A container engine that runs in a virtual
+    # machine (Docker Desktop) cannot see /tmp, so its host points `work_dir` at a folder the engine can share.
+    work_dir = getattr(config, "work_dir", None)
+    agent = SessionAgent(api, executor, rental=RentalSettings.from_config(config), thermal_guard=thermal_guard, claim_gate=gate,
+                         workdir=work_dir if isinstance(work_dir, str) and work_dir else "/tmp")
     loop = run_loop or run_forever
 
     def target() -> None:

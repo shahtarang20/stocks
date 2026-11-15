@@ -52,9 +52,12 @@ The host must understand: a stranger's code runs on their computer in a locked c
 for allowed software sites, a private work folder that is deleted at the end). It is not a private environment, so it is for non-sensitive work.
 Disk: each rental gets at most `rental_max_workspace_gb` (default 50) of the host's disk while it runs.
 
-**Network filter.** A rental that asks for package sites (both templates do) needs the host's `egress_proxy_image` setting (an image pinned by
-`@sha256:`). A host without it reports no `egress_proxy` flag; the API then never hands it such a rental, and refuses one aimed at that machine
-(`machine_cannot_filter_network`). The check reports it as a warning.
+**Network filter.** A rental that asks for package sites (both templates do) needs a filtering proxy image on the host. Agent 0.2.0 has the
+project's own image built in (`DEFAULT_EGRESS_PROXY_IMAGE` in `provider-agent/computecoin_agent/config.py`, built by the **Workload images**
+workflow, job "Build egress proxy", pinned by digest), so a host needs **no setting**. A host may replace it (`egress_proxy_image` in `agent.toml`,
+or `COMPUTECOIN_EGRESS_PROXY_IMAGE`) or turn it off with an empty value; a host that turned it off reports no `egress_proxy` flag, the API never
+hands it such a rental, and refuses one aimed at that machine (`machine_cannot_filter_network`). `rental check` reports it as a warning.
+To change the image: rebuild it (needs the repository variable `PROXY_BASE_IMAGE`), put the new digest in `DEFAULT_EGRESS_PROXY_IMAGE`, and release a new agent.
 
 ## 5. First real test (you, on your GPU computer, with a test account)
 

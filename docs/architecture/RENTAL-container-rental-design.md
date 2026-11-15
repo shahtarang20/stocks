@@ -243,3 +243,6 @@ These follow from review and from looking for what would fail on the first real 
    workspace write). Exit code 1 on a failure. The agent version is 0.2.0, the first with `rental`; the host page shows older agents as "Update agent".
 7. **Web.** With no `NEXT_PUBLIC_SESSION_PROXY_ORIGIN` the Rent page hides the templates and the web-page option and offers a terminal on the
    customer's own image only.
+8. **Built-in network filter.** `AgentConfig.egress_proxy_image` now defaults to the project's published proxy image
+   (`ghcr.io/shahtarang20/computecoin-egress-proxy@sha256:47c0f842...`), so every host reports `egress_proxy` without a setting. An empty value turns
+   it off; an unpinned value is still refused.

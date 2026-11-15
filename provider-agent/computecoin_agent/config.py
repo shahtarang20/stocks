@@ -57,6 +57,13 @@ def update_config_file(updates: dict[str, Any], path: Optional[Path] = None) -> 
     return path
 
 
+# The network-filter image the project publishes (built by .github/workflows/workload-images.yml, job "Build egress proxy", from
+# workloads/egress-proxy). It is the default so a host needs no setting: jobs and rentals that ask for allowed internet sites work out of
+# the box. Pinned by digest, so a host always runs exactly these bytes. A host can replace it (``egress_proxy_image`` in agent.toml or
+# COMPUTECOIN_EGRESS_PROXY_IMAGE) or turn it off by setting it to an empty string. Rebuild the image, then change this line and release.
+DEFAULT_EGRESS_PROXY_IMAGE = "ghcr.io/shahtarang20/computecoin-egress-proxy@sha256:47c0f842361c7e6dce2d84ea9e021aca925ba1d110f246ca33b4ff08c66e2d22"
+
+
 def default_config_dir() -> Path:
     return get_platform().paths.config_dir()
 
@@ -213,9 +220,9 @@ class AgentConfig(BaseSettings):
     # put back when the agent stops. Applied only when permitted (root). A limit the owner already set lower is kept.
     # `gpu_power_limit_w`, when set, wins. None or 100 turns it off.
     gpu_power_limit_percent: Optional[float] = 90.0
-    # ---- B5 egress proxy image, pinned by digest (repo/name@sha256:...). Unset = jobs with a
-    # network_policy are refused on this host (no network is never silently widened).
-    egress_proxy_image: Optional[str] = None
+    # ---- B5 egress proxy image, pinned by digest (repo/name@sha256:...). Defaults to the project's published image. Set to "" to turn
+    # it off: jobs with a network_policy are then refused on this host (no network is never silently widened).
+    egress_proxy_image: Optional[str] = DEFAULT_EGRESS_PROXY_IMAGE
     # ---- U3 agent runtime v2 (OWNER DECISIONS: defaults are conservative, see U3 design note).
     # Per-kit read-only host cache of models/assets, content-addressed, LRU-evicted. 0 disables it.
     cache_dir: Optional[str] = None  # default ~/.computecoin/cache

@@ -1,0 +1,93 @@
+name: Rental templates
+
+# Builds the container-rental templates (rental/templates/*) and pushes them to GHCR. Run it by hand (Actions, Run workflow, tick "Build AND
+# push"). It prints each image's digest. Then, on a computer you control:
+#   python scripts/rental_fill_digests.py --slug <slug> --image ghcr.io/<owner>/rental-<slug>@sha256:<digest>
+# commit apps/api/app/data/rental_templates.json, and set each package to Public on GitHub (Packages, package settings, Change visibility) so a
+# host's Docker can pull it without logging in.
+# NEVER RUN YET. The base image is pinned by digest inside each Dockerfile; no repository variable is needed.
+
+on:
+  pull_request:
+    paths:
+      - "rental/**"
+      - "scripts/rental_fill_digests.py"
+      - ".github/workflows/rental-templates.yml"
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: "Build AND push images to GHCR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rental-templates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Offline checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Template tests
+        run: |
+          python -m pip install -U pip pytest==8.3.3
+          pytest -q rental/tests
+
+  build:
+    name: Build ${{ matrix.slug }}
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: [pytorch-jupyter, vision-jupyter]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image repository name (lowercase)
+        id: repo
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/rental-${{ matrix.slug }}" >> "$GITHUB_OUTPUT"
+      - name: Build (and push on dispatch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: rental/templates
+          file: rental/templates/${{ matrix.slug }}/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+          tags: ${{ steps.repo.outputs.name }}:${{ github.sha }}
+          provenance: true
+      - name: Print the pinned image reference
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+        run: |
+          echo "${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}" | tee "digest-${{ matrix.slug }}.txt"
+          {
+            echo "### ${{ matrix.slug }}"
+            echo '```'
+            echo "python scripts/rental_fill_digests.py --slug ${{ matrix.slug }} --image ${{ steps.repo.outputs.name }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images }}
+        with:
+          name: digest-${{ matrix.slug }}
+          path: digest-${{ matrix.slug }}.txt
+          if-no-files-found: error

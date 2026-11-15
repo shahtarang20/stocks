@@ -1,0 +1,75 @@
+{
+  "_comment": "Ready-made rental templates (docs/architecture/RENTAL-container-rental-design.md, section 9). `command` is null: the image's own ENTRYPOINT starts Jupyter and sets up /workspace, so the claim carries no command override. `digest` is the FULL pinned image reference (registry/name@sha256:...) or null until .github/workflows/rental-templates.yml has built the image and scripts/rental_fill_digests.py has written it here. A template without a digest, or whose registry is not allowed, is hidden and refused.",
+  "templates": [
+    {
+      "slug": "pytorch-jupyter",
+      "name": "PyTorch + JupyterLab",
+      "description": "A GPU PyTorch environment with JupyterLab and the common training libraries. Your files live in /workspace; put anything you want saved in /workspace/results.",
+      "gpu_required": true,
+      "mode": "tcp",
+      "tcp_port": 8888,
+      "command": null,
+      "default_egress": [
+        "pypi.org:443",
+        "files.pythonhosted.org:443",
+        "download.pytorch.org:443",
+        "huggingface.co:443",
+        "cdn-lfs.huggingface.co:443",
+        "cdn-lfs-us-1.huggingface.co:443",
+        "cdn.huggingface.co:443"
+      ],
+      "libraries": [
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "jupyterlab",
+        "numpy",
+        "scipy",
+        "pandas",
+        "scikit-learn",
+        "matplotlib",
+        "transformers",
+        "datasets",
+        "accelerate",
+        "tensorboard"
+      ],
+      "digest": null
+    },
+    {
+      "slug": "vision-jupyter",
+      "name": "Computer vision + JupyterLab (faces, detection, training)",
+      "description": "PyTorch with JupyterLab plus OpenCV, torchvision, timm, albumentations and face-recognition libraries (facenet-pytorch, insightface, onnxruntime-gpu). Your files live in /workspace; put anything you want saved in /workspace/results.",
+      "gpu_required": true,
+      "mode": "tcp",
+      "tcp_port": 8888,
+      "command": null,
+      "default_egress": [
+        "pypi.org:443",
+        "files.pythonhosted.org:443",
+        "download.pytorch.org:443",
+        "huggingface.co:443",
+        "cdn-lfs.huggingface.co:443",
+        "cdn-lfs-us-1.huggingface.co:443",
+        "cdn.huggingface.co:443",
+        "github.com:443",
+        "objects.githubusercontent.com:443"
+      ],
+      "libraries": [
+        "torch",
+        "torchvision",
+        "timm",
+        "opencv-python-headless",
+        "albumentations",
+        "facenet-pytorch",
+        "insightface",
+        "onnxruntime-gpu",
+        "scikit-learn",
+        "scikit-image",
+        "pandas",
+        "matplotlib",
+        "jupyterlab"
+      ],
+      "digest": null
+    }
+  ]
+}

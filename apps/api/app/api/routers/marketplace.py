@@ -36,6 +36,7 @@ async def search_machines(
     workload: str | None = Query(default=None),
     verification_status: str | None = Query(default=None),
     host_kind: str | None = Query(default=None, pattern="^(dedicated|shared|unspecified)$"),
+    container_rental: bool | None = Query(default=None),
     page: int = Query(default=1, ge=1, le=10_000_000),
     page_size: int | None = Query(default=None, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -53,6 +54,7 @@ async def search_machines(
         workload=workload,
         verification_status=verification_status,
         host_kind=host_kind,
+        container_rental=container_rental,
         page=page,
         page_size=size,
     )

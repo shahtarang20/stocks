@@ -347,6 +347,30 @@ refunded. Resolution is an admin action and every step is audit-logged.
 
 ---
 
+## 1.13 Rent a GPU (container rental) — `/dashboard/rent`
+
+> *Run your own code, such as training or fine-tuning a model, on a host's graphics card, with JupyterLab or a terminal.*
+
+This is a second way to use a GPU, beside Kits. You pick a computer from the list (only computers whose host chose to allow
+container rental appear), then either a **ready-made template** (PyTorch, or a vision stack with OpenCV and face-recognition
+libraries) or **your own public image**, accept the warning, and start. The session page opens JupyterLab or a terminal through the
+encrypted relay. You pay per second while it is active, the same way as any session; a rental that never starts costs nothing.
+
+* **Workspace.** A private folder (`/workspace`) on the host's disk, sized by you (up to the platform limit). It lasts only while the
+  rental runs and is deleted when it ends.
+* **Files in.** Choose files from your stored files; they are copied into the workspace before the rental starts, and that time is not charged.
+* **Results out.** Put finished files in `/workspace/results`. They are saved to your storage automatically every few minutes, when you press **Save results now**,
+  and when the rental ends, so if the host's computer dies you lose at most the last few minutes. Saved files appear on the session page and in your stored files.
+* **Internet.** Off by default. Tick only the package sites you need (for example pip).
+* **Custom images.** Public images only, from Docker Hub, ghcr.io, nvcr.io or quay.io, pinned by `@sha256:` digest.
+* **The warning.** The host can see your files and processes. This is for non-sensitive work: do not use it for secrets, private models you
+  cannot afford to expose, or personal data such as face images of real people without a legal basis. For that, use Kits, sandboxed hosts or the private tiers.
+
+Container rental is **off by default** on the platform and must also be on for the host. Nothing here has been run on a real GPU yet; see
+[container-rental-runbook.md](operations/container-rental-runbook.md).
+
+---
+
 # PART 2 — Host (Provider) guide
 
 How to rent out your GPU and get paid.
@@ -525,6 +549,23 @@ The Computecoin app protects your graphics card in layers. What each one does, a
 
 ---
 
+## 2.3c Container rental (opt-in) — `/provider/hardware`
+
+> *Let customers run their own code on your graphics card.*
+
+Off unless you turn it on. First run `computecoin-agent rental check`: it tests Docker, the graphics card and a locked-down test container and says
+what to fix. Then run `computecoin-agent rental on` on the computer (or install with `--allow-rental`), then restart the agent; `rental off`
+turns it off and `rental status` shows the setting. A running rental is allowed to finish; no new ones start. "My computers" shows
+"Container rental: on" after the next heartbeat, and customers can then find and pick that computer.
+
+A stranger's code runs on your computer in a locked container: no extra rights, no internet unless the customer asked for a short list of package
+sites, and only a private work folder it can write to, which is deleted at the end. Each rental is limited in disk (default 50 GB), memory and cores,
+and is stopped if the card overheats, your disk runs low, you pause the agent, you start using the computer, or its processes look like a cryptocurrency
+miner. While a rental runs the computer takes no normal job, and the other way round. A locked container is strong protection but not a perfect wall:
+use a computer that holds nothing you could not afford to lose. Windows hosts cannot enable this.
+
+---
+
 ## 2.4 Earnings — `/provider/earnings`
 
 > *Live accrued earnings from the double-entry ledger as jobs settle.*
@@ -573,9 +614,16 @@ first stop.
 |---|---|
 | **Suspend** | Account blocked immediately — their API calls start returning 401 |
 | **Reinstate** | Restores access |
+| **Confirm email** | Marks the account's email as confirmed by hand, for someone who cannot receive the confirmation email (for example while the platform's email sender is not yet set up for outside addresses). Needs a written reason of at least 5 characters, which is saved in the audit log |
 
 You **cannot suspend yourself** — this is enforced, not a UI nicety. Every action
 is audit-logged with actor, target, IP and outcome.
+
+**Confirm email, with care.** It skips the proof that the person owns the mailbox, and a confirmed email unlocks billing, the wallet,
+withdrawals, Stripe payout setup and running jobs. Use it only for people you know. It works at once (the person does not need to log in again),
+asking again for an already confirmed account changes nothing, it is refused for deleted accounts, and it does not lift a suspension. It is available to
+administrators only (an API key never carries this power). The proper fix is a verified sending domain in Resend; see
+[operations/launch-checklist.md](operations/launch-checklist.md) and the deploy runbook.
 
 ---
 
@@ -614,17 +662,10 @@ The most powerful page. Four tools:
 | **Authorize payout** | Approve a provider's payout request |
 | **Resolve dispute** | Judge a dispute and refund if upheld |
 
-| **Confirm email** | Marks the account's email as confirmed by hand, for someone who cannot receive the confirmation email (for example while the platform's email sender is not yet set up for outside addresses). Needs a written reason of at least 5 characters, which is saved in the audit log |
 **Guardrails you cannot bypass.** Refunds are capped at what was actually
 captured, cumulatively — you cannot refund the same job twice past its total.
 You cannot edit a balance directly; money only moves through a balanced, logged
 transaction. Dispute resolution is idempotent and locks the row, so a double
-**Confirm email, with care.** It skips the proof that the person owns the mailbox, and a confirmed email unlocks billing, the wallet,
-withdrawals, Stripe payout setup and running jobs. Use it only for people you know. It works at once (the person does not need to log in again),
-asking again for an already confirmed account changes nothing, it is refused for deleted accounts, and it does not lift a suspension. It is available to
-administrators only (an API key never carries this power). The proper fix is a verified sending domain in Resend; see
-[operations/launch-checklist.md](operations/launch-checklist.md) and the deploy runbook.
-
 click cannot double-refund.
 
 ---

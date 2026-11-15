@@ -51,6 +51,8 @@ class MarketplaceMachineOut(BaseModel):
     # "dedicated" (a server nobody else uses), "shared" (a PC its owner also uses: the job may slow down or be
     # interrupted) or "unspecified". Declared by the host; Windows hosts are always shared.
     host_kind: str = "unspecified"
+    # The host opted in to container rental (run your own container or a template with Jupyter) and the platform switch is on.
+    container_rental: bool = False
 
 
 class MarketplaceListOut(BaseModel):

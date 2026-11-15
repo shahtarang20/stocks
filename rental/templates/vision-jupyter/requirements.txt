@@ -1,0 +1,19 @@
+# Exact versions, each checked to exist on PyPI with a wheel for Python 3.11 (the PyTorch base image's Python) on 2026-11-15.
+# torch and torchvision come from the base image and are NOT reinstalled here.
+# numpy and Pillow are pinned below the versions facenet-pytorch's metadata allows (it is installed without its dependency list).
+numpy==1.26.4
+Pillow==10.4.0
+jupyterlab==4.3.4
+ipywidgets==8.1.5
+pandas==2.2.3
+scikit-learn==1.5.2
+scipy==1.14.1
+matplotlib==3.9.2
+seaborn==0.13.2
+tqdm==4.67.1
+tensorboard==2.18.0
+timm==1.0.11
+opencv-python-headless==4.10.0.84
+albumentations==1.4.21
+onnx==1.17.0
+onnxruntime-gpu==1.20.0

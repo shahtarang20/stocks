@@ -310,6 +310,56 @@ def sessions(
 
 
 @app.command()
+def rental(
+    action: str = typer.Argument("status", help="on: let customers run their own containers on this computer. off: stop. status: show. "
+                                                "check: test that this computer can host a rental (Docker, graphics card, workspace)."),
+    image: Optional[str] = typer.Option(None, "--image", help="For 'check': the public image to test with (default: a small NVIDIA CUDA image)."),
+) -> None:
+    """Turn container rental on or off for this computer (it is OFF unless you turn it on).
+
+    When it is on, a customer can rent this computer's GPU and run THEIR OWN container or a ready template in an ordinary hardened
+    container. That is less protected than Kits: it shares this computer's kernel. Use a computer that holds nothing you cannot afford
+    to lose, and tell nobody else to rely on it for private work. Restart the agent after changing it."""
+    if action not in ("on", "off", "status", "check"):
+        typer.echo("Say 'on', 'off', 'status' or 'check'.")
+        raise typer.Exit(code=2)
+    from .config import update_config_file
+
+    if action == "check":
+        from .rental import RentalSettings
+        from .rental_check import run_checks, summarize
+
+        if image is not None and (not image.strip() or image.startswith("-") or any(c.isspace() for c in image)):
+            typer.echo("That image name is not valid.")
+            raise typer.Exit(code=2)
+        config = AgentConfig.load()
+        settings = RentalSettings.from_config(config)
+        typer.echo("Checking this computer for container rental (the first run may pull a small image; this can take a few minutes)...\n")
+        code, text = summarize(run_checks(allowed=settings.allowed, root=settings.root, image=image,
+                                          egress_proxy_image=config.egress_proxy_image))
+        typer.echo(text)
+        raise typer.Exit(code=code)
+
+    if action == "status":
+        config = AgentConfig.load()
+        typer.echo(f"container rental: {'ON' if config.allow_container_rental is True else 'off'}"
+                   f" | serving interactive sessions: {'yes' if config.serve_sessions else 'no'}")
+        return
+    if action == "on":
+        typer.echo(
+            "Container rental lets customers run their OWN code in an ordinary hardened container on this computer.\n"
+            "It shares this computer's kernel, so it is weaker protection than Kits. Customers are told not to use private data, and the\n"
+            "workspace is deleted when a rental ends. Use a computer that holds nothing you cannot afford to lose."
+        )
+    try:
+        path = update_config_file({"allow_container_rental": action == "on"})
+    except ValueError as exc:
+        typer.echo(f"Could not change the setting: {exc}")
+        raise typer.Exit(code=1)
+    typer.echo(f"container rental is now {'ON' if action == 'on' else 'off'} (saved in {path}). Restart the agent for it to take effect.")
+
+
+@app.command()
 def watchdog(
     print_unit: bool = typer.Option(False, "--print-unit", help="Print a systemd unit that runs the watchdog on its own, then exit."),
     poll_seconds: float = typer.Option(5.0, "--poll-seconds", min=1.0, help="Seconds between looks at the GPU temperature."),
@@ -454,6 +504,15 @@ def start(
         from .telemetry_loop import build_telemetry_loop
 
         build_telemetry_loop(base_url, config.machine_id, config.machine_secret).start()
+
+    try:  # interactive sessions (Kit sessions and, for hosts that opted in, container rentals) in a background thread
+        from .session_agent import start_background_sessions
+
+        if start_background_sessions(config, thermal_guard=thermal_guard, owner=owner) is not None:
+            typer.echo("[sessions] serving interactive sessions"
+                       + (" (container rental is ON)" if config.allow_container_rental is True else ""))
+    except Exception as exc:  # noqa: BLE001 - never let this stop the job worker
+        typer.echo(f"[sessions] not started: {type(exc).__name__}")
 
     if config.netbench_enabled:  # U13: off by default; the responder binds ONLY to cluster_addr
         from .netbench import start_netbench

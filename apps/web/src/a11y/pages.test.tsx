@@ -63,6 +63,7 @@ describe("axe: zero serious or critical violations", () => {
   it("share a Windows PC", () => check(() => import("@/app/(marketing)/share/windows/page")));
   it("kit catalogue", () => check(() => import("@/app/dashboard/kits/page")));
   it("sessions", () => check(() => import("@/app/dashboard/sessions/page")));
+  it("rent a GPU", () => check(() => import("@/app/dashboard/rent/page")));
   it("billing", () => check(() => import("@/app/dashboard/billing/page")));
   it("kit job wizard", () => check(() => import("@/app/dashboard/kits/[slug]/page")));
   it("kit job panel", async () => {
@@ -73,6 +74,16 @@ describe("axe: zero serious or critical violations", () => {
       progress: 0.4, verification: { method: "redundant" },
     };
     const violations = await seriousViolations(<KitJobPanel job={job as never} token="t" />);
+    expect(violations, describeViolations(violations)).toEqual([]);
+  });
+  it("rental panel", async () => {
+    const { RentalPanel } = await import("@/components/sessions/rental-panel");
+    const session = {
+      id: "00000000-0000-0000-0000-000000000000", status: "active", rental: true, template: "pytorch-jupyter", workspace_gb: 10,
+      memory_mb: 16384, cpus: 4, requested_machine_id: null, export_state: "done",
+      inputs: [{ path: "faces.zip", size_bytes: 2048 }], exports: [{ name: "results/model.pt", size_bytes: 4096, file_id: "f1" }],
+    };
+    const violations = await seriousViolations(<RentalPanel session={session as never} />);
     expect(violations, describeViolations(violations)).toEqual([]);
   });
   it("file upload control", async () => {

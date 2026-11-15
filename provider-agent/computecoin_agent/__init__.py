@@ -13,4 +13,4 @@ It deliberately does NOT execute customer jobs yet. See the security notes in
 ``computecoin_agent.security``.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

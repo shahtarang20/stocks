@@ -229,6 +229,8 @@ export interface MarketplaceMachine {
   gpu_runtime_version?: string | null;
   /** "dedicated" (a server nobody else uses), "shared" (a PC its owner also uses) or "unspecified". Declared by the host. */
   host_kind?: "dedicated" | "shared" | "unspecified" | string;
+  /** True when the host has opted in to container rental (customers may bring their own code). Absent on older APIs. */
+  container_rental?: boolean;
   [key: string]: unknown;
 }
 
@@ -242,6 +244,8 @@ export interface MarketplaceSearchParams {
   workload?: string;
   verification_status?: string;
   host_kind?: "dedicated" | "shared" | "unspecified";
+  /** Only computers whose host allows container rental. */
+  container_rental?: boolean;
   page?: number;
   page_size?: number;
 }
@@ -1649,6 +1653,7 @@ export const api = {
     if (params.verification_status)
       qs.set("verification_status", params.verification_status);
     if (params.host_kind) qs.set("host_kind", params.host_kind);
+    if (params.container_rental) qs.set("container_rental", "true");
     if (params.page != null) qs.set("page", String(params.page));
     if (params.page_size != null) qs.set("page_size", String(params.page_size));
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
@@ -2067,6 +2072,15 @@ export const api = {
     return request<AdminUserAction>(`/v1/admin/users/${userId}/suspend`, {
       method: "POST",
       token: accessToken,
+    });
+  },
+
+  /** POST /v1/admin/users/{id}/verify-email — mark an email confirmed by hand. A written reason is required and audited. */
+  verifyUserEmail(accessToken: string, userId: string, reason: string): Promise<AdminUserAction> {
+    return request<AdminUserAction>(`/v1/admin/users/${userId}/verify-email`, {
+      method: "POST",
+      token: accessToken,
+      body: { reason },
     });
   },
 

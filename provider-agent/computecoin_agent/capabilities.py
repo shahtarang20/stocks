@@ -4,7 +4,7 @@ The heartbeat ``health`` block carries a ``platform`` object and a ``capabilitie
 places work that needs a flag on a host that reports it. A flag is added only when a probe says so; nothing is a default.
 
 Known flags (plan section 3.4): container_tier, nvidia_cuda, amd_rocm, gvisor, microvm, sealed, sealed_pro,
-confidential, vfio_gpu, multi_node, egress_proxy, thermal_cap, power_limit, multi_gpu, cpu_capable.
+confidential, vfio_gpu, multi_node, egress_proxy, thermal_cap, power_limit, multi_gpu, cpu_capable, container_rental.
 
 A Windows host reports ONLY the container-tier flags (X5): gvisor, microvm, sealed*, confidential, vfio_gpu and
 multi_node are never emitted on Windows even if a probe claimed them. The server enforces the same rule independently
@@ -33,12 +33,13 @@ KNOWN_CAPABILITY_FLAGS: tuple[str, ...] = (
     "power_limit",
     "multi_gpu",
     "cpu_capable",
+    "container_rental",
 )
 
 # Never advertised by a Windows host (X5): isolation beyond a container, privacy tiers, VM tier, multi-node.
 # amd_rocm: AMD on Windows is a default no-go (docs/architecture/W7-amd-on-windows-decision.md).
 WINDOWS_FORBIDDEN_FLAGS: frozenset[str] = frozenset(
-    {"gvisor", "microvm", "sealed", "sealed_pro", "confidential", "vfio_gpu", "multi_node", "amd_rocm"}
+    {"gvisor", "microvm", "sealed", "sealed_pro", "confidential", "vfio_gpu", "multi_node", "amd_rocm", "container_rental"}
 )
 
 _PRIVATE_TIERS = ("sealed", "sealed_pro", "confidential")
@@ -106,6 +107,10 @@ def compute_capabilities(
         flags.add("egress_proxy")
     if container and getattr(cfg, "cpu_only_kits_enabled", False):
         flags.add("cpu_capable")
+    # The host's own opt-in to run a customer's own container (container rental). Only a literal True counts, never a
+    # truthy look-alike, and never on Windows.
+    if container and not windows and getattr(cfg, "allow_container_rental", False) is True:
+        flags.add("container_rental")
 
     if not windows:
         runtimes = (isolation_runtimes_fn or _isolation_runtimes)()

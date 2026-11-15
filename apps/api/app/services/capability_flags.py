@@ -39,6 +39,7 @@ KNOWN_FLAGS: tuple[str, ...] = (
     "power_limit",
     "multi_gpu",
     "cpu_capable",
+    "container_rental",
 )
 _KNOWN = frozenset(KNOWN_FLAGS)
 MAX_FLAGS = len(KNOWN_FLAGS)
@@ -52,7 +53,7 @@ _PLATFORM_VALUE_RE = re.compile(r"^[A-Za-z0-9._+\-: ]{1,64}$")
 # Flags a Windows host is never granted (X5), even when it claims them.
 # amd_rocm: AMD on Windows is a default no-go (docs/architecture/W7-amd-on-windows-decision.md).
 WINDOWS_FORBIDDEN_FLAGS: frozenset[str] = frozenset(
-    {"gvisor", "microvm", "sealed", "sealed_pro", "confidential", "vfio_gpu", "multi_node", "amd_rocm"}
+    {"gvisor", "microvm", "sealed", "sealed_pro", "confidential", "vfio_gpu", "multi_node", "amd_rocm", "container_rental"}
 )
 PRIVATE_TIERS = ("sealed", "sealed_pro", "confidential")
 
@@ -124,6 +125,14 @@ def host_capabilities(machine: Any) -> HostCapabilities:
     if os_name == "windows":
         flags = flags - WINDOWS_FORBIDDEN_FLAGS
     return HostCapabilities(legacy=False, os=os_name, flags=flags, has_capabilities=bool(caps))
+
+
+def machine_offers_rental(machine: Any) -> bool:
+    """True when the host opted in to container rental (the ``container_rental`` flag) AND the platform switch is on, so the
+    marketplace never advertises something a new rental would be refused for."""
+    from app.core.config import settings
+
+    return bool(getattr(settings, "CONTAINER_RENTAL_ENABLED", False)) and "container_rental" in host_capabilities(machine).flags
 
 
 HOST_KINDS = ("dedicated", "shared")

@@ -11,7 +11,7 @@ import datetime as dt
 import decimal
 import uuid
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, Numeric, String, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -83,3 +83,16 @@ class ComputeSession(Base, TimestampMixin):
     last_host_heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_activity_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Container rental (docs/architecture/RENTAL-container-rental-design.md, section 6).
+    rental: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    template: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_machine_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    workspace_gb: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    memory_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cpus: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    inputs: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{"file_id","path","size_bytes","sha256"}]
+    terms_accepted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    export_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    export_state: Mapped[str | None] = mapped_column(String(16), nullable=True)  # requested | running | done | failed
+    exports: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{"name","size_bytes","sha256","file_id"}]

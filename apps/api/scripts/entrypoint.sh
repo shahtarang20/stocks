@@ -4,6 +4,8 @@ set -e
 echo "========================================================"
 echo " 🚀 ComputeCoin Production API Entrypoint"
 echo "========================================================"
+# Exported so the app can see how many workers it really runs (container rental refuses an in-memory relay when there is more than one).
+export WEB_CONCURRENCY="${WEB_CONCURRENCY:-2}"
 echo "Environment:  ${ENVIRONMENT:-production}"
 echo "Port:         ${PORT:-8000}"
 echo "Concurrency:  ${WEB_CONCURRENCY:-2} workers"

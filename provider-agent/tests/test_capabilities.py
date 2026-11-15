@@ -50,6 +50,7 @@ def test_flag_list_matches_the_plan():
     assert set(KNOWN) == {
         "container_tier", "nvidia_cuda", "amd_rocm", "gvisor", "microvm", "sealed", "sealed_pro", "confidential",
         "vfio_gpu", "multi_node", "egress_proxy", "thermal_cap", "power_limit", "multi_gpu", "cpu_capable",
+        "container_rental",  # the host's own opt-in to run a customer's container (container rental design note)
     }
     assert caps.WINDOWS_FORBIDDEN_FLAGS <= set(KNOWN)
 
@@ -73,8 +74,9 @@ def test_linux_nvidia_host_reports_what_it_detects_in_stable_order():
                    multinode_network="ccnet", multinode_network_firewalled=True),
         runtimes=["gvisor", "microvm"], vfio=True,
     )
-    assert out == [f for f in KNOWN if f != "amd_rocm"]  # every flag but ROCm, in KNOWN order
-    assert "amd_rocm" not in out
+    # every flag but ROCm and the rental opt-in (the config above does not opt in), in KNOWN order
+    assert out == [f for f in KNOWN if f not in ("amd_rocm", "container_rental")]
+    assert "amd_rocm" not in out and "container_rental" not in out
 
 
 def test_amd_flag_needs_the_gpu_the_kfd_device_and_a_container_engine():

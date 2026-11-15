@@ -15,7 +15,7 @@ import re
 import secrets
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -36,6 +36,7 @@ from app.models.sessions import (
     ComputeSession,
 )
 from app.services import billing, ledger
+from app.services import rental as rental_svc
 from app.services.network_policy import validate_network_policy
 from app.services.pricing import get_active_fee_rate
 from app.services.spend_limits import check_spend_allowed
@@ -90,8 +91,11 @@ def validate_request(
     network_policy: object,
     mode: str,
     tcp_port: int | None,
+    rental: bool = False,
 ) -> dict | None:
-    """Pure checks; returns the validated network policy. Raises SessionError."""
+    """Pure checks; returns the validated network policy. Raises SessionError. ``rental`` marks a container-rental session
+    (a template or a customer image on an opted-in host): it replaces the old "custom images are off" gate, which stays
+    for every non-rental request."""
     tier = (isolation_tier or "container").lower()
     if tier in PRIVATE_TIERS:
         raise SessionError("sessions_not_available_for_private_tiers")  # U18 adds them
@@ -100,7 +104,7 @@ def validate_request(
     if bool(kit_image) == bool(image_digest):
         raise SessionError("give_exactly_one_of_kit_ref_or_image_digest")
     if image_digest:
-        if not _cfg("SESSIONS_ALLOW_BYOC_IMAGE", False):
+        if not rental and not _cfg("SESSIONS_ALLOW_BYOC_IMAGE", False):
             raise SessionError("custom_images_not_enabled_for_sessions")
         if not IMAGE_RE.fullmatch(image_digest):
             raise SessionError("image_must_be_pinned_by_sha256_digest")
@@ -129,6 +133,92 @@ async def _price_parts(db: AsyncSession, price: decimal.Decimal, gpus: int, seco
     )
 
 
+def _prepare_rental(
+    *, template, kit_image, image_digest, isolation_tier, accept_rental_terms, network_policy, mode, tcp_port, command,
+):
+    """Rules 3 to 7 of section 7.1. Returns (network policy, image digest, mode, tcp port, command, template slug)."""
+    if template and (kit_image or image_digest):
+        raise SessionError("template_excludes_kit_ref_and_image_digest")
+    if template and not rental_svc.rental_enabled():
+        raise SessionError("container_rental_not_enabled")
+    if not accept_rental_terms:
+        raise SessionError("rental_terms_not_accepted")
+    if (isolation_tier or "container").lower() != "container":
+        raise SessionError("rental_requires_container_tier")
+    declared: list[str] | None = None
+    slug = None
+    if template:
+        tpl = rental_svc.get_template(template)
+        if tpl is None:
+            raise SessionError("template_not_found", 404)
+        slug, image_digest, mode, tcp_port = tpl["slug"], tpl["digest"], tpl["mode"], tpl["tcp_port"]
+        command = list(tpl["command"]) if tpl["command"] else None  # None: the image's ENTRYPOINT runs, no override
+        declared = list(tpl["default_egress"])
+    else:
+        if not rental_svc.IMAGE_RE.fullmatch(image_digest or ""):
+            raise SessionError("image_must_be_pinned_by_sha256_digest")
+        if not rental_svc.registry_allowed(image_digest):
+            raise SessionError("image_registry_not_allowed")
+        try:
+            command = rental_svc.clean_command(command)
+        except rental_svc.RentalError as exc:
+            raise SessionError(exc.code, exc.status) from exc
+    try:
+        asked_policy = validate_network_policy(network_policy, isolation_tier="container")
+    except Exception as exc:  # NetworkPolicyError
+        raise SessionError(f"network_policy_invalid:{exc}"[:120]) from exc
+    asked = list((asked_policy or {}).get("egress") or [])
+    if declared is not None:
+        if asked and not set(asked) <= set(declared):
+            raise SessionError("egress_not_declared_by_template")
+        final = sorted(set(asked or declared))
+    else:
+        final = sorted(set(asked))
+    allow = rental_svc.egress_allowlist()
+    if any(e not in allow for e in final):
+        raise SessionError("egress_not_allowed")
+    return ({"egress": final} if final else None), image_digest, mode, tcp_port, command, slug
+
+
+def _rental_limits(workspace_gb: int, memory_mb: int | None, cpus: int | None) -> tuple[int, int]:
+    """Rule 9. Returns the (memory_mb, cpus) to store. Booleans are not numbers here."""
+    memory_mb = rental_svc.DEFAULT_MEMORY_MB if memory_mb is None else memory_mb
+    cpus = rental_svc.DEFAULT_CPUS if cpus is None else cpus
+    for v in (workspace_gb, memory_mb, cpus):
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise SessionError("rental_limit_out_of_range")
+    if not 0 <= workspace_gb <= int(_cfg("RENTAL_WORKSPACE_MAX_GB", 100)):
+        raise SessionError("rental_limit_out_of_range")
+    if not rental_svc.MIN_MEMORY_MB <= memory_mb <= int(_cfg("RENTAL_MAX_MEMORY_MB", 262144)):
+        raise SessionError("rental_limit_out_of_range")
+    if not 1 <= cpus <= int(_cfg("RENTAL_MAX_CPUS", 64)):
+        raise SessionError("rental_limit_out_of_range")
+    return memory_mb, cpus
+
+
+async def machine_has_running_job(db: AsyncSession, machine_id: uuid.UUID) -> bool:
+    """A job is RUNNING on this machine (it holds the GPU). Used so a session is not claimed on top of it."""
+    from app.models.jobs import Job
+    from app.services import job_fsm as fsm
+
+    return (
+        await db.execute(select(Job.id).where(Job.machine_id == machine_id, Job.status == fsm.RUNNING).limit(1))
+    ).first() is not None
+
+
+async def machine_has_gpu_session(db: AsyncSession, machine_id: uuid.UUID) -> bool:
+    """A session that uses a GPU is starting or active on this machine. Used so a job is not claimed on top of it."""
+    return (
+        await db.execute(
+            select(ComputeSession.id).where(
+                ComputeSession.machine_id == machine_id,
+                ComputeSession.status.in_((SESSION_STARTING, SESSION_ACTIVE)),
+                ComputeSession.gpu_count > 0,
+            ).limit(1)
+        )
+    ).first() is not None
+
+
 async def create_session(
     db: AsyncSession,
     *,
@@ -148,10 +238,19 @@ async def create_session(
     mode: str = "pty",
     tcp_port: int | None = None,
     kit_egress: list[str] | None = None,
+    template: str | None = None,
+    machine_id: uuid.UUID | None = None,
+    workspace_gb: int = 0,
+    memory_mb: int | None = None,
+    cpus: int | None = None,
+    command: list | None = None,
+    inputs: list | None = None,
+    accept_rental_terms: bool = False,
 ) -> ComputeSession:
     # A kit's own session block (command, mode, port, idle cap) is authoritative over the request. It was validated
     # at publish; it is re-validated here (fail closed) because the manifest is data.
     ks = kit_session or {}
+    requested_command = command  # what the request asked for; only a rental may use it
     command = None
     if kit_image and kit_session is not None:
         from app.services.kits import validate_session_block
@@ -169,10 +268,44 @@ async def create_session(
         if asked and not set(asked) <= set(declared):
             raise SessionError("egress_not_declared_by_kit")
         network_policy = {"egress": sorted(set(asked)) if asked else declared} if (asked or declared) else None
+    is_rental = bool(template) or (bool(image_digest) and not kit_image and rental_svc.rental_enabled())
+    rental_inputs: list[dict] = []
+    if is_rental:
+        if rental_svc.relay_misconfigured():  # fail now, loudly, rather than start a rental nobody can connect to
+            raise SessionError("session_relay_not_ready", 503)
+        # docs/architecture/RENTAL-container-rental-design.md section 7.1, rules 3 to 10, in that order.
+        network_policy, image_digest, mode, tcp_port, command, template_slug = _prepare_rental(
+            template=template, kit_image=kit_image, image_digest=image_digest, isolation_tier=isolation_tier,
+            accept_rental_terms=accept_rental_terms, network_policy=network_policy, mode=mode, tcp_port=tcp_port,
+            command=requested_command,
+        )
+        memory_mb, cpus = _rental_limits(workspace_gb, memory_mb, cpus)
+        if machine_id is not None:
+            try:
+                await rental_svc.check_target_machine(db, machine_id, require_flag=True, needs_egress=bool(network_policy))
+            except rental_svc.RentalError as exc:
+                raise SessionError(exc.code, exc.status) from exc
+        try:
+            rental_inputs = await rental_svc.check_inputs(db, customer_id, inputs or [])
+        except rental_svc.RentalError as exc:
+            raise SessionError(exc.code, exc.status) from exc
+        if rental_inputs and workspace_gb < 1:
+            raise SessionError("workspace_required_for_inputs")
+    else:
+        template_slug = None
+        if template or workspace_gb != 0 or memory_mb is not None or cpus is not None:
+            raise SessionError("rental_limit_out_of_range")
+        if requested_command is not None or inputs:
+            raise SessionError("rental_fields_require_rental")
+        if machine_id is not None:
+            try:
+                await rental_svc.check_target_machine(db, machine_id, require_flag=False)
+            except rental_svc.RentalError as exc:
+                raise SessionError(exc.code, exc.status) from exc
     policy = validate_request(
         isolation_tier=isolation_tier, kit_image=kit_image, image_digest=image_digest, gpu_count=gpu_count,
         max_duration_seconds=max_duration_seconds, idle_timeout_seconds=idle_timeout_seconds,
-        client_pubkey=client_pubkey, network_policy=network_policy, mode=mode, tcp_port=tcp_port,
+        client_pubkey=client_pubkey, network_policy=network_policy, mode=mode, tcp_port=tcp_port, rental=is_rental,
     )
     if max_price_per_gpu_hour <= 0:
         raise SessionError("max_price_must_be_positive")
@@ -207,6 +340,10 @@ async def create_session(
         gpu_count=gpu_count, isolation_tier=isolation_tier.lower(), network_policy=policy,
         max_duration_seconds=max_duration_seconds, idle_timeout_seconds=idle_timeout_seconds,
         max_price_per_gpu_hour=max_price_per_gpu_hour, held_minor=held, client_pubkey=client_pubkey,
+        rental=is_rental, template=template_slug, requested_machine_id=machine_id,
+        workspace_gb=workspace_gb if is_rental else 0, memory_mb=memory_mb if is_rental else None,
+        cpus=cpus if is_rental else None, inputs=rental_inputs or None,
+        terms_accepted_at=utcnow() if is_rental else None,
     )
     db.add(row)
     await db.flush()
@@ -225,15 +362,27 @@ async def claim_next(db: AsyncSession, machine, *, host_pubkey: str, machine_gpu
 
     if await blocked_provider_ids(db, {machine.provider_id}):
         return None
-    rows = (
-        await db.execute(
-            select(ComputeSession).where(ComputeSession.status == SESSION_PENDING).order_by(ComputeSession.created_at).limit(20)
-        )
-    ).scalars().all()
+    from app.services.capability_flags import host_capabilities
+
+    stmt = select(ComputeSession).where(ComputeSession.status == SESSION_PENDING)
+    # A session the customer aimed at one machine is only that machine's; a rental only goes to a host that opted in.
+    stmt = stmt.where(or_(ComputeSession.requested_machine_id.is_(None), ComputeSession.requested_machine_id == machine.id))
+    if "container_rental" not in host_capabilities(machine).flags:
+        stmt = stmt.where(ComputeSession.rental.is_(False))
+    rows = (await db.execute(stmt.order_by(ComputeSession.created_at).limit(20))).scalars().all()
+    can_filter = "egress_proxy" in host_capabilities(machine).flags
     rate_ask = machine.asking_price_per_hour
+    job_running: bool | None = None
     for row in rows:
         if row.gpu_count > machine_gpus:
             continue
+        if not can_filter and (row.network_policy or {}).get("egress"):
+            continue  # a host with no network-filter proxy cannot start it (it refuses rather than widen the network)
+        if row.gpu_count > 0:
+            if job_running is None:
+                job_running = await machine_has_running_job(db, machine.id)
+            if job_running:
+                continue  # one GPU user at a time: a job is running here
         rate = decimal.Decimal(rate_ask) if rate_ask is not None else row.max_price_per_gpu_hour
         if rate > row.max_price_per_gpu_hour:
             continue

@@ -111,6 +111,11 @@ export default function SessionsPage() {
       <ConsolePageHeader
         title="Sessions"
         description="A session gives you a command window (a terminal) on a host's computer with a graphics card. You only pay while it is running, and it stops by itself if you leave it idle. What you type is locked between your browser and the host's computer, so the service in the middle cannot read it."
+        action={
+          <Button asChild>
+            <Link href="/dashboard/rent">Rent a GPU</Link>
+          </Button>
+        }
       />
       <Card className="mb-6">
         <CardContent className="p-6">
@@ -222,7 +227,7 @@ export default function SessionsPage() {
                 <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
                   <div className="min-w-0">
                     <Link className="break-all font-medium text-primary hover:underline" href={`/dashboard/sessions/${s.id}`}>
-                      {s.kit_ref ?? s.id}
+                      {s.kit_ref ?? (s.rental ? (s.template ? `Rental: ${s.template}` : "Rental: your own image") : s.id)}
                     </Link>
                     <p className="text-xs text-muted-foreground">
                       {s.gpu_count} graphics card, {s.held} credits set aside

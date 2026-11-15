@@ -232,6 +232,17 @@ export function QuoteDialog({
               </>
             ) : null}
           </DialogDescription>
+          {machine?.container_rental ? (
+            <p className="text-sm">
+              <Badge variant="default" className="mr-2 text-[10px] px-1.5 py-0">
+                Container rental
+              </Badge>
+              This computer also lets you run your own code.{" "}
+              <Link className="font-medium text-primary underline" href={`/dashboard/rent?machine=${encodeURIComponent(machine.machine_id)}`}>
+                Rent this GPU
+              </Link>
+            </p>
+          ) : null}
         </DialogHeader>
 
         {/* --- Not authenticated: prompt to log in --- */}

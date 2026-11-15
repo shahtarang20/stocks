@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -71,6 +72,7 @@ export function LiveGpuTable() {
   const [workload, setWorkload] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [hostKind, setHostKind] = useState("");
+  const [rentalOnly, setRentalOnly] = useState(false);
   const [page, setPage] = useState(1);
 
   const [quoteTarget, setQuoteTarget] = useState<MarketplaceMachine | null>(
@@ -88,8 +90,9 @@ export function LiveGpuTable() {
     if (region.trim()) p.region = region.trim();
     if (workload.trim()) p.workload = workload.trim();
     if (hostKind === "dedicated" || hostKind === "shared") p.host_kind = hostKind;
+    if (rentalOnly) p.container_rental = true;
     return p;
-  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, hostKind, page]);
+  }, [gpuModel, gpuVendor, gpuRuntime, minVram, maxPrice, region, workload, hostKind, rentalOnly, page]);
 
   const query = useQuery({
     queryKey: ["marketplace", "machines", params],
@@ -111,6 +114,7 @@ export function LiveGpuTable() {
     setRegion("");
     setWorkload("");
     setHostKind("");
+    setRentalOnly(false);
     setPage(1);
   }
 
@@ -203,6 +207,24 @@ export function LiveGpuTable() {
             </select>
           </div>
         </div>
+
+        <label className="mt-4 flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={rentalOnly}
+            onChange={(e) => {
+              setRentalOnly(e.target.checked);
+              setPage(1);
+            }}
+          />
+          <span>
+            <span className="font-medium">Only computers that allow container rental</span>
+            <span className="block text-xs text-muted-foreground">
+              On these you can bring your own code, with JupyterLab or a terminal, instead of running a ready-made Kit.
+            </span>
+          </span>
+        </label>
 
         <details
           className="group mt-4 rounded-md border border-border"
@@ -394,6 +416,15 @@ export function LiveGpuTable() {
                           {m.host_kind === "dedicated" ? "Dedicated" : "Shared PC"}
                         </Badge>
                       ) : null}
+                      {m.container_rental ? (
+                        <Badge
+                          variant="default"
+                          title="The host allows you to run your own code here, in a locked container. Use it for work that is not sensitive."
+                          className="text-[10px] px-1.5 py-0"
+                        >
+                          Container rental
+                        </Badge>
+                      ) : null}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {m.gpu_model ? `${formatMbAsGb(m.vram_mb)} memory` : "—"}
@@ -422,9 +453,16 @@ export function LiveGpuTable() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{reliabilityText(m)}</TableCell>
                   <TableCell className="text-right">
-                    <Button variant="outline" size="sm" onClick={() => openQuote(m)}>
-                      Get a price quote
-                    </Button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {m.container_rental ? (
+                        <Button asChild size="sm">
+                          <Link href={`/dashboard/rent?machine=${encodeURIComponent(m.machine_id)}`}>Rent this GPU</Link>
+                        </Button>
+                      ) : null}
+                      <Button variant="outline" size="sm" onClick={() => openQuote(m)}>
+                        Get a price quote
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

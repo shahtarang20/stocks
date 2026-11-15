@@ -435,6 +435,13 @@ async def claim_job(
     # Recover any stale leases first so requeued jobs become claimable again.
     await recover_expired_leases(db, now)
 
+    # One GPU user at a time: while a session that uses a GPU is starting or active on this machine, no job is handed out
+    # (the reserved job simply waits; the session claim makes the same check the other way round).
+    from app.services.sessions import machine_has_gpu_session
+
+    if await machine_has_gpu_session(db, machine.id):
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     result = await db.execute(
         select(Job)
         .where(Job.machine_id == machine.id, Job.status == fsm.RESERVED)

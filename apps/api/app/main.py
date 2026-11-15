@@ -116,6 +116,16 @@ async def _recovery_sweeper() -> None:
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     task: asyncio.Task | None = None
+    try:
+        from app.services import rental as _rental
+
+        if _rental.rental_enabled() and _rental.relay_misconfigured():
+            logger.error(
+                "CONTAINER_RENTAL_ENABLED is on and the API runs several workers, but SESSIONS_RELAY_BACKEND is not 'redis': "
+                "new rentals are refused (session_relay_not_ready) until it is set to redis."
+            )
+    except Exception:  # pragma: no cover - a warning must never stop the server
+        logger.exception("rental relay check failed")
     # Never run the sweeper under the test harness (shared in-memory DB).
     if not settings.is_test and settings.SWEEP_INTERVAL_SECONDS > 0:
         task = asyncio.create_task(_recovery_sweeper())

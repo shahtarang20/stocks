@@ -143,48 +143,68 @@ def download_verified(
     """Stream ``url`` to ``dest`` (never an API URL; a presigned store URL), checking size and SHA-256.
 
     Returns the bytes downloaded. On mismatch the partial file is deleted and ``input_hash_mismatch`` raised
-    (not retried: a wrong hash is not a network blip). Network errors are retried with a short backoff.
+    (not retried: a wrong hash is not a network blip). Network errors are retried with a short backoff, and a retry
+    CONTINUES where the dropped one stopped (a Range request; the bytes already kept stay hashed). If the server does not
+    honour the range, or anything about the kept bytes is in doubt, it starts again from zero. A ``.part`` file left by an
+    earlier run is never trusted: it is removed first.
     """
     import httpx
 
     part = dest + ".part"
+    _rm(part)
     last: Optional[Exception] = None
+    h = hashlib.sha256()
+    have = 0  # bytes of THIS call's part file that are written, hashed and safe to continue from
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     for attempt in range(max(1, retries)):
-        h, got = hashlib.sha256(), 0
         try:
-            kwargs: dict[str, Any] = {"timeout": timeout, "follow_redirects": True}
-            if transport is not None:
-                kwargs["transport"] = transport
-            with httpx.Client(**kwargs) as client:
-                with client.stream("GET", url) as resp:
-                    if resp.status_code != 200:
-                        raise V2Error("download_failed", f"HTTP {resp.status_code}")
-                    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "wb") as fh:
-                        for chunk in resp.iter_bytes(CHUNK):
-                            got += len(chunk)
-                            if got > size:
-                                raise V2Error("input_hash_mismatch", "more bytes than declared")
-                            h.update(chunk)
-                            fh.write(chunk)
-                            if on_chunk is not None:
-                                on_chunk(len(chunk))
+            if have != size:  # (have == size: the whole body arrived before the connection broke; just verify it)
+                kwargs: dict[str, Any] = {"timeout": timeout, "follow_redirects": True}
+                if transport is not None:
+                    kwargs["transport"] = transport
+                headers = {"Range": f"bytes={have}-"} if have > 0 else {}
+                with httpx.Client(**kwargs) as client:
+                    with client.stream("GET", url, headers=headers) as resp:
+                        if resp.status_code == 206 and have > 0 and resp.headers.get("content-range", "").startswith(f"bytes {have}-"):
+                            fd = os.open(part, flags | os.O_APPEND, 0o600)  # continue
+                        elif resp.status_code == 200:
+                            h, have = hashlib.sha256(), 0  # the whole body again (first try, or the server ignored the range)
+                            fd = os.open(part, flags | os.O_TRUNC, 0o600)
+                        else:
+                            if resp.status_code == 416:
+                                h, have = hashlib.sha256(), 0
+                                _rm(part)
+                            raise V2Error("download_failed", f"HTTP {resp.status_code}")
+                        with os.fdopen(fd, "ab" if have > 0 else "wb") as fh:
+                            for chunk in resp.iter_bytes(CHUNK):
+                                if have + len(chunk) > size:
+                                    raise V2Error("input_hash_mismatch", "more bytes than declared")
+                                fh.write(chunk)
+                                fh.flush()
+                                h.update(chunk)
+                                have += len(chunk)
+                                if on_chunk is not None:
+                                    on_chunk(len(chunk))
         except V2Error as exc:
-            _rm(part)
             if exc.code == "input_hash_mismatch":
+                _rm(part)
                 raise
             last = exc
-        except (httpx.HTTPError, OSError) as exc:
-            _rm(part)
+        except httpx.HTTPError as exc:
+            last = exc  # the part file and the hash are in step (a chunk counts only once written): the next try continues
+        except OSError as exc:
+            _rm(part)  # a local write problem: nothing kept can be trusted
+            h, have = hashlib.sha256(), 0
             last = exc
         else:
-            if got != size or h.hexdigest() != sha256:
+            if have != size or h.hexdigest() != sha256:
                 _rm(part)
                 raise V2Error("input_hash_mismatch", "downloaded bytes do not match the declared size or SHA-256")
             os.replace(part, dest)
-            return got
+            return have
         if attempt + 1 < retries:
             sleeper(min(2.0 ** attempt, 10.0))
+    _rm(part)
     raise V2Error("download_failed", f"download failed: {type(last).__name__}")
 
 

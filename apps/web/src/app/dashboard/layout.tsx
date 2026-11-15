@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   Boxes,
+  Cpu,
   Terminal,
   LayoutDashboard,
   FolderGit2,
@@ -30,6 +31,7 @@ const BASE_SECTIONS: NavSection[] = [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/dashboard/projects", label: "Projects", icon: FolderGit2 },
       { href: "/dashboard/kits", label: "Kits", icon: Boxes },
+      { href: "/dashboard/rent", label: "Rent a GPU", icon: Cpu },
       { href: "/dashboard/sessions", label: "Sessions", icon: Terminal },
       { href: "/dashboard/jobs", label: "Jobs", icon: ListChecks },
       {

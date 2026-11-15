@@ -521,6 +521,23 @@ class Settings(BaseSettings):
     SESSIONS_MAX_LIVE_PER_USER: int = 3
     SESSIONS_REAP_INTERVAL_SECONDS: int = 30
 
+    # Container rental (docs/architecture/RENTAL-container-rental-design.md): a renter runs their own image or a template on a
+    # host that opted in. OFF by default; the owner turns it on.
+    CONTAINER_RENTAL_ENABLED: bool = False
+    RENTAL_ALLOWED_REGISTRIES: str = "docker.io,ghcr.io,nvcr.io,quay.io"
+    # Hosts a rental may reach (through the egress proxy). Default is package and model hosting only; no network otherwise.
+    RENTAL_EGRESS_ALLOWLIST: str = (
+        "pypi.org:443,files.pythonhosted.org:443,download.pytorch.org:443,huggingface.co:443,cdn-lfs.huggingface.co:443,"
+        "cdn-lfs-us-1.huggingface.co:443,cdn.huggingface.co:443,github.com:443,objects.githubusercontent.com:443,"
+        "raw.githubusercontent.com:443,conda.anaconda.org:443,repo.anaconda.com:443"
+    )
+    RENTAL_WORKSPACE_MAX_GB: int = 100
+    RENTAL_MAX_INPUTS: int = 16
+    RENTAL_MAX_MEMORY_MB: int = 262144
+    RENTAL_MAX_CPUS: int = 64
+    RENTAL_EXPORT_WINDOW_SECONDS: int = 1800  # how long after a rental stops its host may still upload exported results
+    RENTAL_MAX_EXPORT_FILES: int = 2000
+
     # Stake sync: ComputeStakeVault (on-chain) -> provider_machines.stake_bonded (A1 / P1).
     # When enabled the chain is the only source of stake (R4): the admin "record stake" route refuses.
     STAKE_SYNC_ENABLED: bool = False

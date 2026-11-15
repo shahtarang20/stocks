@@ -5,8 +5,12 @@ Customer (user auth):
   GET  /v1/sessions, /v1/sessions/{id}    list / read
   POST /v1/sessions/{id}/connect-token    short-lived single-use browser token
   POST /v1/sessions/{id}/stop             stop and settle
+  POST /v1/sessions/{id}/export           save the rental's /workspace/results to the customer's storage now
+  GET  /v1/rental/templates               ready-made rental templates (public)
 Host agent (machine HMAC, outbound only):
   POST /v1/agent/sessions/claim | /{id}/started | /{id}/heartbeat | /{id}/ended | /{id}/token
+  Container rental (docs/architecture/RENTAL-container-rental-design.md section 7.4):
+  POST /v1/agent/sessions/{id}/inputs | /export-start | /export-result | /uploads[/{upload_id}/parts/{n}/url|confirm|complete]
 Relay sockets (token auth, single use):
   WS /v1/sessions/{id}/relay/host?token=...   WS /v1/sessions/{id}/relay/browser?token=...
 """
@@ -15,7 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import decimal
+import hashlib
+import json
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
@@ -26,10 +34,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.routers.agents import authenticate_machine
 from app.db.session import get_db, get_sessionmaker
 from app.deps import require_verified_user
+from app.core.config import settings
+from app.db.base import utcnow
+from app.models.data_plane import DataUpload
 from app.models.provider import HardwareInventory
 from app.models.sessions import SESSION_ACTIVE, SESSION_LIVE, SESSION_STARTING, STOP_HOST_ENDED, STOP_USER, ComputeSession
 from app.schemas.auth import CurrentUser
 from app.services import session_relay as relay_mod
+from app.services import data_plane as dp
+from app.services import rental as rental_svc
 from app.services import sessions as svc
 from app.services.audit import record_audit
 from app.services.kits import get_kit
@@ -39,6 +52,11 @@ router = APIRouter(tags=["sessions"])
 
 WS_POLICY = 1008
 IDLE_CHECK_SECONDS = 5
+
+
+class InputRef(BaseModel):
+    file_id: uuid.UUID
+    path: str = Field(max_length=300)
 
 
 class SessionCreate(BaseModel):
@@ -54,6 +72,15 @@ class SessionCreate(BaseModel):
     mode: str = "pty"
     tcp_port: int | None = None
     project_id: uuid.UUID | None = None
+    # Container rental (section 7.1)
+    template: str | None = Field(default=None, max_length=64)
+    machine_id: uuid.UUID | None = None
+    workspace_gb: int = 0
+    memory_mb: int | None = None
+    cpus: int | None = None
+    command: list[str] | None = Field(default=None, max_length=32)
+    inputs: list[InputRef] = Field(default_factory=list, max_length=64)
+    accept_rental_terms: bool = False
 
 
 class SessionOut(BaseModel):
@@ -70,6 +97,16 @@ class SessionOut(BaseModel):
     active_seconds: int | None = None
     host_pubkey: str | None = None
     created_at: str
+    rental: bool = False
+    template: str | None = None
+    workspace_gb: int = 0
+    memory_mb: int | None = None
+    cpus: int | None = None
+    machine_id: uuid.UUID | None = None
+    requested_machine_id: uuid.UUID | None = None
+    inputs: list[dict] = Field(default_factory=list)
+    export_state: str | None = None
+    exports: list[dict] = Field(default_factory=list)
 
 
 def _out(r: ComputeSession) -> SessionOut:
@@ -78,6 +115,14 @@ def _out(r: ComputeSession) -> SessionOut:
         max_duration_seconds=r.max_duration_seconds, idle_timeout_seconds=r.idle_timeout_seconds,
         held=minor_to_str(r.held_minor), captured=None if r.captured_minor is None else minor_to_str(r.captured_minor),
         active_seconds=r.active_seconds, host_pubkey=r.host_pubkey, created_at=r.created_at.isoformat(),
+        rental=bool(r.rental), template=r.template, workspace_gb=int(r.workspace_gb or 0), memory_mb=r.memory_mb,
+        cpus=r.cpus, machine_id=r.machine_id, requested_machine_id=r.requested_machine_id,
+        inputs=[{"path": i.get("path"), "size_bytes": i.get("size_bytes")} for i in (r.inputs or []) if isinstance(i, dict)],
+        export_state=r.export_state,
+        exports=[
+            {"name": e.get("name"), "size_bytes": e.get("size_bytes"), "file_id": e.get("file_id")}
+            for e in (r.exports or []) if isinstance(e, dict)
+        ],
     )
 
 
@@ -100,6 +145,8 @@ async def create_session(
     from app.services.abuse import assert_can_submit  # U16: no-op unless ABUSE_ENFORCE=true
 
     await assert_can_submit(db, user.id)
+    if body.template and (body.kit_ref or body.image_digest):
+        raise HTTPException(422, "template_excludes_kit_ref_and_image_digest")
     kit_image = None
     kit_session = None
     kit_egress = None
@@ -122,13 +169,16 @@ async def create_session(
             max_duration_seconds=body.max_duration_seconds, idle_timeout_seconds=body.idle_timeout_seconds,
             client_pubkey=body.client_pubkey, isolation_tier=body.isolation_tier,
             network_policy=body.network_policy, mode=body.mode, tcp_port=body.tcp_port,
-            kit_egress=kit_egress,
+            kit_egress=kit_egress, template=body.template, machine_id=body.machine_id,
+            workspace_gb=body.workspace_gb, memory_mb=body.memory_mb, cpus=body.cpus, command=body.command,
+            inputs=list(body.inputs), accept_rental_terms=body.accept_rental_terms,
         )
     except svc.SessionError as exc:
         raise _http(exc)
     except InsufficientFunds:
         raise HTTPException(402, "insufficient_credits")
-    await record_audit(db, actor_user_id=user.id, action="session.create", outcome="success", resource_type="session", resource_id=str(row.id))
+    await record_audit(db, actor_user_id=user.id, action="session.create", outcome="success", resource_type="session", resource_id=str(row.id),
+                       reason="rental" if row.rental else None)
     await db.commit()
     return _out(row)
 
@@ -175,6 +225,33 @@ async def stop(session_id: uuid.UUID, user: CurrentUser = Depends(require_verifi
     return _out(row)
 
 
+@router.post("/v1/sessions/{session_id}/export")
+async def request_export(session_id: uuid.UUID, user: CurrentUser = Depends(require_verified_user), db: AsyncSession = Depends(get_db)):
+    """Ask the host to save the rental's /workspace/results to the customer's storage now."""
+    row = await _mine(db, session_id, user)
+    if not row.rental or row.status != SESSION_ACTIVE:
+        raise HTTPException(409, "session_not_exportable")
+    if row.export_state in ("requested", "running"):
+        return {"export_state": row.export_state}
+    now = utcnow()
+    last = row.export_requested_at
+    if last is not None:
+        last = last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc)
+        if (now - last).total_seconds() < rental_svc.EXPORT_MIN_INTERVAL_SECONDS:
+            raise HTTPException(429, "export_too_soon")
+    row.export_requested_at = now
+    row.export_state = "requested"
+    await record_audit(db, actor_user_id=user.id, action="session.export", outcome="success", resource_type="session", resource_id=str(row.id))
+    await db.commit()
+    return {"export_state": "requested"}
+
+
+@router.get("/v1/rental/templates")
+async def rental_templates():
+    """Ready-made rental templates that can be rented now (they have a built image). Never includes the image digest."""
+    return [rental_svc.public_template(t) for t in rental_svc.available_templates()]
+
+
 # ---- host agent (machine HMAC) -------------------------------------------------------------
 class ClaimBody(BaseModel):
     host_pubkey: str
@@ -214,6 +291,13 @@ async def claim(request: Request, db: AsyncSession = Depends(get_db)):
             "command": row.command, "gpu_count": row.gpu_count, "isolation_tier": row.isolation_tier,
             "network_policy": row.network_policy, "max_duration_seconds": row.max_duration_seconds,
             "client_pubkey": row.client_pubkey, "host_token": token, "token_expires_in": svc.TOKEN_TTL_SECONDS,
+            "rental": bool(row.rental), "template": row.template, "workspace_gb": int(row.workspace_gb or 0),
+            "memory_mb": row.memory_mb, "cpus": row.cpus,
+            "inputs": [
+                {"path": i.get("path"), "size_bytes": i.get("size_bytes"), "sha256": i.get("sha256")}
+                for i in (row.inputs or []) if isinstance(i, dict)
+            ],
+            "export_window_seconds": int(getattr(settings, "RENTAL_EXPORT_WINDOW_SECONDS", 1800)),
         }
     }
 
@@ -244,7 +328,7 @@ async def host_heartbeat(session_id: uuid.UUID, request: Request, db: AsyncSessi
     await db.commit()
     if reason:
         await relay.close_session(str(row.id), reason)
-    return {"stop": reason is not None, "reason": reason}
+    return {"stop": reason is not None, "reason": reason, "export": reason is None and row.export_state == "requested"}
 
 
 class EndedBody(BaseModel):
@@ -268,6 +352,247 @@ async def ended(session_id: uuid.UUID, request: Request, db: AsyncSession = Depe
     await db.commit()
     await relay_mod.get_relay().close_session(str(row.id), "ended")
     return {"status": row.status}
+
+
+# ---- container rental: files in and out (machine HMAC) ---------------------------------------
+# Section 7.4 of docs/architecture/RENTAL-container-rental-design.md. The host agent moves the customer's files; the customer's
+# own API credentials never reach the host. Every route is for rental sessions and for the machine that holds the session.
+_SHA = re.compile(r"^[0-9a-f]{64}$")
+MAX_EXPORT_SIZE = 1 << 50
+
+
+def _json_body(raw: bytes) -> dict:
+    try:
+        data = json.loads(raw or b"{}")
+    except ValueError:
+        raise HTTPException(422, "invalid_body")
+    if not isinstance(data, dict):
+        raise HTTPException(422, "invalid_body")
+    return data
+
+
+def _dp_fail(exc: dp.DataPlaneError):
+    raise HTTPException(status_code=exc.http_status, detail=exc.code)
+
+
+def _aware(value: dt.datetime | None) -> dt.datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=dt.timezone.utc)
+    return value
+
+
+async def _rental_session(request: Request, db: AsyncSession, sid: uuid.UUID, *, files: bool):
+    """Machine auth, then the session must be this machine's rental. ``files`` routes also accept a session that stopped within
+    the export window (the host exports after the API ended it); other states are refused."""
+    machine, raw = await authenticate_machine(request, db)
+    row = (await db.execute(select(ComputeSession).where(ComputeSession.id == sid))).scalar_one_or_none()
+    if row is None or row.machine_id != machine.id:
+        raise HTTPException(404, "session_not_found")
+    if not row.rental:
+        raise HTTPException(409, "session_not_rental")
+    if row.status in (SESSION_STARTING, SESSION_ACTIVE):
+        return machine, row, raw
+    if files:
+        stopped = _aware(row.stopped_at)
+        window = int(getattr(settings, "RENTAL_EXPORT_WINDOW_SECONDS", 1800))
+        if stopped is not None and 0 <= (utcnow() - stopped).total_seconds() <= window:
+            return machine, row, raw
+        raise HTTPException(409, "export_window_closed")
+    raise HTTPException(409, "session_not_live")
+
+
+def _name_hash(name: str) -> str:
+    return hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+
+
+def _file_name(row: ComputeSession, name: str) -> str:
+    return f"session/{row.id}/{name}"
+
+
+def _clean_export_name(name: object) -> str:
+    try:
+        return rental_svc.clean_relpath(name)
+    except rental_svc.RentalError:
+        raise HTTPException(422, "invalid_path")
+
+
+async def _session_upload(db: AsyncSession, row: ComputeSession, upload_id: uuid.UUID) -> DataUpload:
+    up = await dp.get_owned_upload(db, row.customer_id, upload_id)
+    if not up.idempotency_key.startswith(f"session:{row.id}:"):
+        raise HTTPException(404, "Upload not found")
+    return up
+
+
+@router.post("/v1/agent/sessions/{session_id}/inputs")
+async def session_inputs(session_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)):
+    """Fresh presigned download links for the files the customer chose as inputs. Only listed files, only while starting or active."""
+    machine, row, _raw = await _rental_session(request, db, session_id, files=False)
+    out = []
+    for item in row.inputs or []:
+        try:
+            file_id = uuid.UUID(str(item.get("file_id")))
+            link = await dp.create_download_link(db, owner_id=row.customer_id, file_id=file_id)
+        except (ValueError, TypeError):
+            raise HTTPException(409, "input_changed")
+        except dp.DataPlaneError as exc:
+            _dp_fail(exc)
+        if link["sha256"] != item.get("sha256") or int(link["size_bytes"]) != int(item.get("size_bytes", -1)):
+            raise HTTPException(409, "input_changed")
+        out.append({
+            "path": item["path"], "url": link["url"], "size_bytes": int(link["size_bytes"]), "sha256": link["sha256"],
+            "expires_at": link["expires_at"].isoformat(),
+        })
+    await db.commit()
+    return {"inputs": out}
+
+
+@router.post("/v1/agent/sessions/{session_id}/export-start")
+async def export_start(session_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)):
+    _machine, row, _raw = await _rental_session(request, db, session_id, files=True)
+    row.export_state = "running"
+    await db.commit()
+    return {"state": "running"}
+
+
+async def _export_budget(db: AsyncSession, row: ComputeSession, idem: str, size: int) -> None:
+    """At most RENTAL_MAX_EXPORT_FILES files and about the granted workspace in bytes per session. A replay of an upload that
+    already exists is not counted twice."""
+    from app.models.data_plane import UPLOAD_ABORTED
+
+    prefix = f"session:{row.id}:"
+    rows = (
+        await db.execute(
+            select(DataUpload.idempotency_key, DataUpload.size_bytes).where(
+                DataUpload.owner_id == row.customer_id, DataUpload.idempotency_key.like(prefix + "%"),
+                DataUpload.status != UPLOAD_ABORTED,
+            )
+        )
+    ).all()
+    if any(key == idem for key, _size in rows):
+        return
+    if len(rows) >= int(getattr(settings, "RENTAL_MAX_EXPORT_FILES", 2000)):
+        raise HTTPException(409, "too_many_export_files")
+    cap = max(int(row.workspace_gb or 0), 1) * (1 << 30)
+    if sum(int(sz) for _k, sz in rows) + size > cap:
+        raise HTTPException(409, "export_too_large")
+
+
+@router.post("/v1/agent/sessions/{session_id}/uploads")
+async def session_start_upload(session_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)):
+    _machine, row, raw = await _rental_session(request, db, session_id, files=True)
+    body = _json_body(raw)
+    sha256, size = str(body.get("sha256") or "").lower(), body.get("size_bytes")
+    if not _SHA.match(sha256) or not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= MAX_EXPORT_SIZE:
+        raise HTTPException(422, "invalid_hash_or_size")
+    name = _clean_export_name(body.get("name"))
+    file_name = _file_name(row, name)
+    if len(file_name) > 255:
+        raise HTTPException(422, "invalid_path")
+    content_type = str(body.get("content_type") or "application/octet-stream")[:128]
+    idem = f"session:{row.id}:{_name_hash(name)}:{sha256}"  # at most 126 characters: the column holds 128
+    await _export_budget(db, row, idem, size)
+    try:
+        up, file = await dp.create_upload(
+            db, owner_id=row.customer_id, idempotency_key=idem, name=file_name, content_type=content_type,
+            sha256=sha256, size_bytes=size, internal_name=True,
+        )
+        state = await dp.upload_state(db, up)
+    except dp.DataPlaneError as exc:
+        _dp_fail(exc)
+    await db.commit()
+    return {
+        "upload_id": str(up.id), "status": up.status, "part_size": up.part_size, "part_count": up.part_count,
+        "file_id": str(file.id) if file is not None else (str(up.file_id) if up.file_id else None),
+        "verified_parts": state["verified_parts"], "corrupt_parts": state["corrupt_parts"],
+    }
+
+
+@router.post("/v1/agent/sessions/{session_id}/uploads/{upload_id}/parts/{part_number}/url")
+async def session_part_url(session_id: uuid.UUID, upload_id: uuid.UUID, part_number: int, request: Request, db: AsyncSession = Depends(get_db)):
+    _machine, row, raw = await _rental_session(request, db, session_id, files=True)
+    body = _json_body(raw)
+    size = body.get("size_bytes")
+    if not isinstance(size, int) or isinstance(size, bool):
+        raise HTTPException(422, "invalid_part_size")
+    try:
+        up = await _session_upload(db, row, upload_id)
+        out = await dp.issue_part_url(db, up, part_number=part_number, sha256=str(body.get("sha256") or ""), size_bytes=size)
+    except dp.DataPlaneError as exc:
+        _dp_fail(exc)
+    if "expires_at" in out:
+        out["expires_at"] = out["expires_at"].isoformat()
+    await db.commit()
+    return out
+
+
+@router.post("/v1/agent/sessions/{session_id}/uploads/{upload_id}/parts/{part_number}/confirm")
+async def session_part_confirm(session_id: uuid.UUID, upload_id: uuid.UUID, part_number: int, request: Request, db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import JSONResponse
+
+    from app.models.data_plane import PART_CORRUPT
+
+    _machine, row, _raw = await _rental_session(request, db, session_id, files=True)
+    try:
+        up = await _session_upload(db, row, upload_id)
+        part = await dp.confirm_part(db, up, part_number=part_number)
+    except dp.DataPlaneError as exc:
+        _dp_fail(exc)
+    if part.status == PART_CORRUPT:
+        await db.commit()  # keep the corrupt marker; an error response would roll it back
+        return JSONResponse(status_code=409, content={"detail": "part_corrupt", "action": "resend", "part_number": part_number})
+    await db.commit()
+    return {"part_number": part_number, "status": part.status}
+
+
+@router.post("/v1/agent/sessions/{session_id}/uploads/{upload_id}/complete")
+async def session_complete(session_id: uuid.UUID, upload_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)):
+    _machine, row, _raw = await _rental_session(request, db, session_id, files=True)
+    try:
+        up = await _session_upload(db, row, upload_id)
+        up, file = await dp.complete_upload(db, up)
+    except dp.DataPlaneError as exc:
+        if exc.code in dp.PERSIST_ON_ERROR:
+            await db.commit()  # keep the corrupt-part marker: the error response would otherwise roll it back
+        _dp_fail(exc)
+    await db.commit()
+    return {"upload_id": str(up.id), "status": up.status, "file_id": str(file.id) if file is not None else None,
+            "sha256": up.sha256, "size_bytes": up.size_bytes}
+
+
+@router.post("/v1/agent/sessions/{session_id}/export-result")
+async def export_result(session_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db)):
+    """The host reports what it saved. Each file must be one THIS session created in the customer's storage."""
+    _machine, row, raw = await _rental_session(request, db, session_id, files=True)
+    body = _json_body(raw)
+    files = body.get("files")
+    if not isinstance(files, list) or len(files) > int(getattr(settings, "RENTAL_MAX_EXPORT_FILES", 2000)):
+        raise HTTPException(422, "invalid_files")
+    seen: dict[str, dict] = {}
+    for item in files:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "invalid_files")
+        name = _clean_export_name(item.get("name"))
+        size, sha = item.get("size_bytes"), str(item.get("sha256") or "").lower()
+        if not isinstance(size, int) or isinstance(size, bool) or not 0 <= size <= MAX_EXPORT_SIZE or not _SHA.match(sha):
+            raise HTTPException(422, "invalid_files")
+        try:
+            file_id = uuid.UUID(str(item.get("file_id")))
+            f = await dp.get_owned_file(db, row.customer_id, file_id)
+        except (ValueError, TypeError):
+            raise HTTPException(422, "invalid_files")
+        except dp.DataPlaneError:
+            raise HTTPException(422, "export_file_mismatch")
+        if f.name != _file_name(row, name) or f.sha256 != sha or int(f.size_bytes) != size:
+            raise HTTPException(422, "export_file_mismatch")
+        seen[name] = {"name": name, "size_bytes": size, "sha256": sha, "file_id": str(f.id)}
+    merged = {e["name"]: e for e in (row.exports or []) if isinstance(e, dict) and e.get("name")}
+    merged.update(seen)
+    if len(merged) > int(getattr(settings, "RENTAL_MAX_EXPORT_FILES", 2000)):
+        raise HTTPException(409, "too_many_export_files")
+    row.exports = [merged[k] for k in sorted(merged)]
+    row.export_state = "failed" if body.get("failed") is True else "done"
+    await db.commit()
+    return {"export_state": row.export_state, "files": len(row.exports)}
 
 
 # ---- relay sockets ---------------------------------------------------------------------------

@@ -1261,3 +1261,35 @@ def test_pip_is_told_to_use_only_ready_made_packages_and_no_dependencies_for_the
     done = _build(ready, "build_environment", gpu="amd")
     line = next(line for line in done.stdout.splitlines() if "amdsmi" in line)
     assert "--no-deps" in line and "--only-binary :all:" in line
+
+
+# ---- container rental opt-in ---------------------------------------------------------------------------------------------
+def test_rental_is_off_unless_the_host_asks_for_it(ready):
+    text = out(ready.run("--dry-run", "--token", TOKEN, "--server", SERVER))
+    assert "rental on" not in text and "container rental" not in text.lower().replace("computecoin-agent rental off", "")
+
+
+def test_a_host_can_turn_it_on_during_install_and_is_told_exactly_what_it_means(ready):
+    text = out(ready.run("--dry-run", "--allow-rental", "--token", TOKEN, "--server", SERVER))
+    assert f"computecoin-agent rental on" in text
+    assert "NOT a private environment" in text and "non-sensitive" in text and "computecoin-agent rental off" in text
+
+
+def test_the_rental_step_comes_after_the_computer_is_connected_and_before_the_services(ready):
+    text = out(ready.run("--dry-run", "--allow-rental", "--token", TOKEN, "--server", SERVER))
+    assert text.index("Connecting this computer") < text.index("Turning on container rental") < text.index("Installing the services")
+
+
+def test_the_help_lists_the_option(box):
+    assert "--allow-rental" in box.run("--help").stdout
+
+
+def test_an_agent_too_old_to_know_rental_does_not_fail_the_install(ready):
+    code = 'DRY_RUN=0; ALLOW_RENTAL=1; as_service_user() { return 1; }\nenable_rental\necho AFTER'
+    done = ready.source(code)
+    assert done.returncode == 0 and "AFTER" in done.stdout and "too old" in done.stderr
+
+
+def test_nothing_runs_when_the_option_is_not_given(ready):
+    done = ready.source('DRY_RUN=0; ALLOW_RENTAL=0; as_service_user() { echo CALLED; return 0; }\nenable_rental\necho AFTER')
+    assert "CALLED" not in done.stdout and "AFTER" in done.stdout

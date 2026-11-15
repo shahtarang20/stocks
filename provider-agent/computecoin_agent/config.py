@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import tomli_w
+import os
+
 from pydantic import field_validator
 from pydantic_settings import (
     BaseSettings,
@@ -29,6 +31,30 @@ from .platform import get_platform
 # ``load`` points the class-level TOML source at the file for the duration of one construction; concurrent loads (the
 # supervisor, the executor and the heartbeat thread all call it) must not see each other's setting.
 _LOAD_LOCK = threading.RLock()
+
+
+def update_config_file(updates: dict[str, Any], path: Optional[Path] = None) -> Path:
+    """Change ONLY the given keys in the settings file and keep everything else exactly as it is.
+
+    ``AgentConfig.save`` rewrites every field (defaults included), which would freeze today's defaults into the file. This
+    reads the file as it is, changes the named keys and writes it back the same secure way (0600 file, 0700 folder). A value
+    the settings reject raises ``ValueError`` before anything is written."""
+    import tomllib
+
+    path = path or default_config_path()
+    AgentConfig(**updates)  # the settings' own validators decide whether the values are acceptable
+    plat = get_platform()
+    existing: dict[str, Any] = {}
+    if path.exists():
+        try:
+            existing = tomllib.loads(plat.secrets.read_file(path).decode("utf-8"))
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as exc:
+            raise ValueError(f"the settings file {path} could not be read ({type(exc).__name__}); it was not changed") from exc
+    existing.update(updates)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    plat.paths.restrict_dir(path.parent)
+    plat.secrets.write_file(path, tomli_w.dumps(existing).encode("utf-8"))
+    return path
 
 
 def default_config_dir() -> Path:
@@ -115,6 +141,37 @@ class AgentConfig(BaseSettings):
     tee_snp_product: Optional[str] = None  # AMD KDS product: Milan | Genoa | Turin
     tee_cache_dir: Optional[str] = None  # cached VCEK/ASK or Intel collateral files
 
+    @field_validator("rental_max_workspace_gb")
+    @classmethod
+    def _check_rental_workspace(cls, value: int) -> int:
+        if not (1 <= value <= 10_000):
+            raise ValueError("rental_max_workspace_gb must be between 1 and 10000")
+        return value
+
+    @field_validator("rental_max_memory_gb")
+    @classmethod
+    def _check_rental_memory(cls, value: int) -> int:
+        if not (0 <= value <= 4096):
+            raise ValueError("rental_max_memory_gb must be between 0 (automatic) and 4096")
+        return value
+
+    @field_validator("rental_max_cpus")
+    @classmethod
+    def _check_rental_cpus(cls, value: int) -> int:
+        if not (0 <= value <= 1024):
+            raise ValueError("rental_max_cpus must be between 0 (automatic) and 1024")
+        return value
+
+    @field_validator("rental_root", mode="before")
+    @classmethod
+    def _check_rental_root(cls, value: Any) -> Optional[str]:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        text = str(value).strip()
+        if "\x00" in text or not os.path.isabs(text) or text == os.path.abspath(os.sep):
+            raise ValueError("rental_root must be an absolute path to a folder of its own")
+        return text
+
     @field_validator("gpu_power_limit_percent")
     @classmethod
     def _check_power_percent(cls, value: Optional[float]) -> Optional[float]:
@@ -175,6 +232,16 @@ class AgentConfig(BaseSettings):
     # ---- CPU-only Kits (resource_defaults.gpu_count 0). Operator opt-in: when true the heartbeat health block carries
     # ``cpu_capable: true`` so the platform may place a CPU-only Kit job here. Such a job runs without --gpus.
     cpu_only_kits_enabled: bool = False
+    # ---- Container rental (docs/architecture/RENTAL-container-rental-design.md). `allow_container_rental` is the host's OWN opt-in to
+    # run a customer's own container (or a ready template) on this computer in an ordinary hardened container. Off by default; a
+    # host that never turns it on serves Kits and practice jobs only. `serve_sessions` makes the installed agent also serve
+    # interactive sessions (Kit sessions are safe; rentals still need the opt-in above).
+    allow_container_rental: bool = False
+    serve_sessions: bool = True
+    rental_root: Optional[str] = None  # where rental workspaces live (default: <data dir>/rental)
+    rental_max_workspace_gb: int = 50  # the host's own cap, applied over what a customer asks for
+    rental_max_memory_gb: int = 0  # 0 = 90 percent of this computer's memory
+    rental_max_cpus: int = 0  # 0 = all but one core
     # Send this computer's real GPU readings (use, memory, temperature, power) to the platform every minute or so, so the
     # host's usage page and the platform's overheating alerts work. Nothing about jobs or programs is sent. Set false to opt out.
     telemetry_enabled: bool = True

@@ -43,6 +43,7 @@ UNINSTALL=0
 NO_START=0
 RUN_AS_ROOT=0
 FORCE=0
+ALLOW_RENTAL=0
 REENROLL=0
 GPU_VENDOR=""
 TOKEN="${COMPUTECOIN_ENROLL_TOKEN:-}"
@@ -87,6 +88,9 @@ Options:
   --server URL       the Computecoin server address shown on the setup page (https, or http for localhost)
   --package-base URL where the agent package is published (default: the project's release page)
   --gpu-vendor V     nvidia or amd: use this when the computer has both (an AMD processor graphics chip can look like an AMD card)
+  --allow-rental     also let customers rent this computer and run THEIR OWN code on its GPU in a locked container (container rental).
+                     Off unless you ask for it. Only for non-sensitive work: a stranger's code runs on this computer. You can turn it off
+                     any time with: computecoin-agent rental off
   --reenroll         connect again with a new token, replacing a saved connection that is no longer accepted
   --run-as-root      run the services as root (lets the agent apply the graphics-card power cap)
   --force            go ahead even if a customer job is running now (it is stopped; the customer is not charged)
@@ -256,6 +260,7 @@ parse_args() {
       --package-base)  [ $# -ge 2 ] || die "--package-base needs a value"; PACKAGE_BASE="$2"; shift 2 ;;
       --gpu-vendor)    [ $# -ge 2 ] || die "--gpu-vendor needs nvidia or amd"; GPU_VENDOR="$2"; shift 2 ;;
       --reenroll)      REENROLL=1; shift ;;
+      --allow-rental)  ALLOW_RENTAL=1; shift ;;
       --run-as-root)   RUN_AS_ROOT=1; shift ;;
       --force)         FORCE=1; shift ;;
       --no-start)      NO_START=1; shift ;;
@@ -613,6 +618,18 @@ enroll_machine() {
   ALREADY_CONNECTED=1
 }
 
+# ---- container rental (opt-in) -----------------------------------------------------------------------------------------
+enable_rental() {
+  [ "$ALLOW_RENTAL" = 1 ] || return 0
+  step "Turning on container rental (you asked for it)"
+  say "Customers who rent this computer run their own code on its graphics card inside a locked container: no extra rights, no network unless they"
+  say "ask for allowed software sites, nothing outside a private work folder. It is NOT a private environment, and it is for non-sensitive work."
+  say "You can turn it off at any time with:  computecoin-agent rental off"
+  if ! as_service_user "$INSTALL_DIR/venv/bin/computecoin-agent" rental on; then
+    warn "this version of the agent could not turn container rental on (it may be too old to know about it). The computer works as before."
+  fi
+}
+
 # ---- services --------------------------------------------------------------------------------------------------------
 unit_text() {
   # $1 = description, $2 = command line, $3 = seconds to wait before a restart
@@ -765,6 +782,7 @@ main() {
   setup_user
   check_service_user_can_run
   enroll_machine
+  enable_rental
   install_services
   verify_running
   step "Done"

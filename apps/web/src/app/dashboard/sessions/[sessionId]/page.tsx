@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { sessionsApi } from "@/lib/sessions";
+import { RentalPanel } from "@/components/sessions/rental-panel";
 import { SessionChannel, T_CLOSE, T_DATA, T_READY, T_RESIZE, fromHex } from "@/lib/session-crypto";
 
 /** Minimal terminal over the end-to-end encrypted relay. xterm.js is loaded in the browser only. */
@@ -32,7 +33,9 @@ export default function SessionTerminalPage() {
   const [state, setState] = useState("waiting for a host's computer");
   const info = useQuery({ queryKey: ["session", sessionId], queryFn: () => sessionsApi.get(sessionId), refetchInterval: (q) => (q.state.status === "error" ? false : 3000), retry: false });
   const live = info.data && ["pending", "starting", "active"].includes(info.data.status);
-  const ready = info.data?.status === "active" && !!info.data.host_pubkey;
+  // A program with its own web page (Jupyter) is opened by the web view, not by the terminal below.
+  const isWeb = info.data?.mode === "tcp";
+  const ready = info.data?.status === "active" && !!info.data.host_pubkey && !isWeb;
 
   useEffect(() => {
     if (!ready || !box.current) return;
@@ -132,7 +135,24 @@ export default function SessionTerminalPage() {
             : "We could not load this session. Reload the page to try again."}
         </div>
       ) : null}
-      <div ref={box} hidden={info.isError} className="h-[28rem] w-full rounded-md border bg-black p-2" aria-label="Terminal" />
+      {info.data ? <RentalPanel session={info.data} /> : null}
+      {isWeb && live ? (
+        <div className="mb-3 rounded-md border border-border p-4 text-sm">
+          <p className="mb-2">
+            This session is a program with its own web page, such as JupyterLab. Open it in a new tab. What you do there is locked between your browser and the host&apos;s computer.
+          </p>
+          {info.data?.status === "active" ? (
+            <Button asChild>
+              <Link href={`/dashboard/sessions/${sessionId}/web`} target="_blank" rel="noopener">
+                Open in a new tab
+              </Link>
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground">The button appears when the session is running.</p>
+          )}
+        </div>
+      ) : null}
+      <div ref={box} hidden={info.isError || isWeb} className="h-[28rem] w-full rounded-md border bg-black p-2" aria-label="Terminal" />
 
       <Dialog open={confirmStop} onOpenChange={(open) => { if (!open && !stopping) setConfirmStop(false); }}>
         <DialogContent>

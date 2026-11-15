@@ -6,7 +6,7 @@ import datetime as dt
 import uuid
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class AdminUserOut(BaseModel):
@@ -25,6 +25,21 @@ class AdminUserActionResponse(BaseModel):
     email: str
     status: str
     message: str
+
+
+class AdminVerifyEmailRequest(BaseModel):
+    """Marking an email confirmed by hand skips the proof that the person owns the mailbox, so a reason is required
+    and kept in the audit log."""
+
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_is_a_real_sentence(cls, value: str) -> str:
+        value = value.strip()
+        if not (5 <= len(value) <= 300):
+            raise ValueError("reason must be between 5 and 300 characters")
+        return value
 
 
 class AdminAuditLogOut(BaseModel):

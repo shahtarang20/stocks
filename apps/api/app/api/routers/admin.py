@@ -41,6 +41,7 @@ from app.schemas.admin import (
     AdminPlatformStatsOut,
     AdminUserActionResponse,
     AdminUserOut,
+    AdminVerifyEmailRequest,
 )
 from app.schemas.auth import CurrentUser
 from app.schemas.marketplace import money_str
@@ -417,6 +418,40 @@ async def reinstate_user(
         email=user.email,
         status="active",
         message="User has been reinstated successfully",
+    )
+
+
+@money_router.post("/users/{user_id}/verify-email", response_model=AdminUserActionResponse)
+async def verify_user_email(
+    user_id: uuid.UUID,
+    body: AdminVerifyEmailRequest,
+    request: Request,
+    current: CurrentUser = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AdminUserActionResponse:
+    """Mark a user's email as confirmed by hand (for example while the platform cannot yet deliver email to them).
+
+    This skips the proof that the person owns the mailbox, and a confirmed email unlocks billing, the wallet, withdrawals and
+    running jobs, so it needs a written reason and is audited. Asking again for an already confirmed account changes nothing."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user_not_found")
+    if user.status == UserStatus.deleted:
+        # An anonymised account has no real email to confirm.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="account_deleted")
+    status_text = user.status.value if hasattr(user.status, "value") else str(user.status)
+    if user.email_verified:
+        return AdminUserActionResponse(
+            user_id=user.id, email=user.email, status=status_text, message="This email was already confirmed. Nothing changed."
+        )
+    user.email_verified = True
+    await record_audit(
+        db, action="admin.user.verify_email", outcome="success", actor_user_id=current.id,
+        ip=client_ip(request), resource_type="user", resource_id=str(user.id), reason=body.reason,
+    )
+    await db.commit()
+    return AdminUserActionResponse(
+        user_id=user.id, email=user.email, status=status_text, message="The email has been marked as confirmed."
     )
 
 

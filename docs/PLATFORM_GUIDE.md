@@ -614,10 +614,17 @@ The most powerful page. Four tools:
 | **Authorize payout** | Approve a provider's payout request |
 | **Resolve dispute** | Judge a dispute and refund if upheld |
 
+| **Confirm email** | Marks the account's email as confirmed by hand, for someone who cannot receive the confirmation email (for example while the platform's email sender is not yet set up for outside addresses). Needs a written reason of at least 5 characters, which is saved in the audit log |
 **Guardrails you cannot bypass.** Refunds are capped at what was actually
 captured, cumulatively — you cannot refund the same job twice past its total.
 You cannot edit a balance directly; money only moves through a balanced, logged
 transaction. Dispute resolution is idempotent and locks the row, so a double
+**Confirm email, with care.** It skips the proof that the person owns the mailbox, and a confirmed email unlocks billing, the wallet,
+withdrawals, Stripe payout setup and running jobs. Use it only for people you know. It works at once (the person does not need to log in again),
+asking again for an already confirmed account changes nothing, it is refused for deleted accounts, and it does not lift a suspension. It is available to
+administrators only (an API key never carries this power). The proper fix is a verified sending domain in Resend; see
+[operations/launch-checklist.md](operations/launch-checklist.md) and the deploy runbook.
+
 click cannot double-refund.
 
 ---

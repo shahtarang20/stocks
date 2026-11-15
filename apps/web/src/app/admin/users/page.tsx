@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, RefreshCw, ShieldAlert, UserCheck, UserX, Users } from "lucide-react";
+import { CheckCircle2, MailCheck, RefreshCw, ShieldAlert, UserCheck, UserX, Users } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,8 @@ export default function AdminUsersPage() {
 
   const [actionTarget, setActionTarget] = useState<{ user: AdminUser; action: "suspend" | "reinstate" } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [verifyTarget, setVerifyTarget] = useState<AdminUser | null>(null);
+  const [verifyReason, setVerifyReason] = useState("");
 
   const query = useQuery({
     queryKey: ["admin", "users"],
@@ -69,7 +71,21 @@ export default function AdminUsersPage() {
     },
   });
 
+  const verifyMutation = useMutation({
+    mutationFn: ({ userId, reason }: { userId: string; reason: string }) => api.verifyUserEmail(token, userId, reason),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      toast.success(res.message);
+      setVerifyTarget(null);
+      setVerifyReason("");
+    },
+    onError: (err) => {
+      setErrorMessage(err instanceof ApiError ? err.message : "We could not confirm this email. Please try again, or check the audit log.");
+    },
+  });
+
   const users = query.data ?? [];
+  const reasonOk = verifyReason.trim().length >= 5;
 
   const isPendingAction = suspendMutation.isPending || reinstateMutation.isPending;
 
@@ -87,7 +103,7 @@ export default function AdminUsersPage() {
     <>
       <ConsolePageHeader
         title="Users"
-        description="See everyone who has an account. Suspend an account to stop it from using ComputeCoin, or reinstate it to give access back. Every action is saved in the audit log."
+        description="See everyone who has an account. Suspend an account to stop it from using ComputeCoin, or reinstate it to give access back. If someone cannot receive the confirmation email, you can mark their email as confirmed here. Every action is saved in the audit log."
         action={
           <Button variant="outline" onClick={() => query.refetch()} disabled={query.isFetching}>
             <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
@@ -170,33 +186,51 @@ export default function AdminUsersPage() {
                       <TableCell className="text-right">
                         {user.status === "deleted" ? (
                           <span className="text-xs text-muted-foreground">Deleted</span>
-                        ) : user.status === "active" ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isSelf}
-                            onClick={() => {
-                              setErrorMessage(null);
-                              setActionTarget({ user, action: "suspend" });
-                            }}
-                            className="text-danger hover:bg-danger/10 hover:text-danger"
-                          >
-                            <UserX className="h-3.5 w-3.5 mr-1" />
-                            Suspend account
-                          </Button>
                         ) : (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setErrorMessage(null);
-                              setActionTarget({ user, action: "reinstate" });
-                            }}
-                            className="text-success hover:bg-success/10 hover:text-success"
-                          >
-                            <UserCheck className="h-3.5 w-3.5 mr-1" />
-                            Reinstate account
-                          </Button>
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {!user.email_verified ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setErrorMessage(null);
+                                  setVerifyReason("");
+                                  setVerifyTarget(user);
+                                }}
+                              >
+                                <MailCheck className="h-3.5 w-3.5 mr-1" />
+                                Confirm email
+                              </Button>
+                            ) : null}
+                            {user.status === "active" ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={isSelf}
+                                onClick={() => {
+                                  setErrorMessage(null);
+                                  setActionTarget({ user, action: "suspend" });
+                                }}
+                                className="text-danger hover:bg-danger/10 hover:text-danger"
+                              >
+                                <UserX className="h-3.5 w-3.5 mr-1" />
+                                Suspend account
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setErrorMessage(null);
+                                  setActionTarget({ user, action: "reinstate" });
+                                }}
+                                className="text-success hover:bg-success/10 hover:text-success"
+                              >
+                                <UserCheck className="h-3.5 w-3.5 mr-1" />
+                                Reinstate account
+                              </Button>
+                            )}
+                          </div>
                         )}
                       </TableCell>
                     </TableRow>
@@ -207,6 +241,60 @@ export default function AdminUsersPage() {
           </Card>
         )}
       </div>
+
+      {/* Confirm an email by hand */}
+      <Dialog open={Boolean(verifyTarget)} onOpenChange={(open) => !open && !verifyMutation.isPending && setVerifyTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MailCheck className="h-5 w-5 text-primary" />
+              Mark this email as confirmed?
+            </DialogTitle>
+            <DialogDescription>
+              {verifyTarget?.email} will be treated as a confirmed address without clicking an email link. That unlocks billing,
+              the wallet, withdrawals and running jobs for this account, so only do it for someone you know. Your reason is saved in
+              the audit log.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1.5">
+            <label htmlFor="verify-reason" className="text-sm font-medium">
+              Why? (at least 5 characters)
+            </label>
+            <textarea
+              id="verify-reason"
+              value={verifyReason}
+              onChange={(e) => setVerifyReason(e.target.value)}
+              maxLength={300}
+              rows={3}
+              placeholder="For example: known host, email delivery not set up yet"
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
+            />
+          </div>
+
+          {errorMessage && verifyTarget && (
+            <div role="alert" className="rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+              {errorMessage}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setVerifyTarget(null)} disabled={verifyMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!reasonOk || verifyMutation.isPending}
+              onClick={() => {
+                if (!verifyTarget || !reasonOk) return;
+                setErrorMessage(null);
+                verifyMutation.mutate({ userId: verifyTarget.user_id, reason: verifyReason.trim() });
+              }}
+            >
+              {verifyMutation.isPending ? "Saving…" : "Mark email as confirmed"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation Dialog */}
       <Dialog open={Boolean(actionTarget)} onOpenChange={(open) => !open && setActionTarget(null)}>

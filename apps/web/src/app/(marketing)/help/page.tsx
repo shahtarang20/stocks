@@ -103,6 +103,12 @@ export default function HelpPage() {
             browser and pay per second. Save what you want to keep in the results folder: it is copied to your files automatically.
             The host can see your files, so use it for work that is not sensitive.
           </p>
+          <h3>Can I rent without a graphics card?</h3>
+          <p>
+            Yes. On <Link href="/dashboard/rent">Rent a GPU</Link>, choose <strong>0 (no graphics card, CPU only)</strong> under
+            Graphics cards. You get the computer&apos;s processor and memory only, which is enough to try the service or to run work that
+            does not need a card. Code that needs a graphics card will not use one. You are still charged the computer&apos;s hourly price, as for one card.
+          </p>
           <h3>What is practice mode?</h3>
           <p>
             Today most jobs run in practice mode (simulated). The job is practised, not truly run. Results are placeholders and

@@ -29,6 +29,8 @@ import {
   versionBelow,
   webViewAvailable,
   type RentalForm,
+  CPU_ONLY_NOTE,
+  gpuChoiceLabel,
 } from "./rental";
 import type { RentalTemplate } from "./sessions";
 
@@ -307,7 +309,8 @@ describe("building the request", () => {
   });
 
   const cases: [string, Partial<RentalForm>, boolean][] = [
-    ["gpu 0", { gpuCount: "0" }, false],
+    ["gpu 0 (no graphics card, CPU only)", { gpuCount: "0" }, true],
+    ["gpu -1", { gpuCount: "-1" }, false],
     ["gpu 1", { gpuCount: "1" }, true],
     ["gpu 8", { gpuCount: "8" }, true],
     ["gpu 9", { gpuCount: "9" }, false],
@@ -353,7 +356,7 @@ describe("building the request", () => {
 
   it("reports every problem at once, each against its own field", () => {
     const r = buildRentalRequest(
-      form({ gpuCount: "0", memoryGb: "0", cpus: "0", workspaceGb: "999", maxPrice: "0", maxMinutes: "0", idleMinutes: "0", accepted: false }),
+      form({ gpuCount: "9", memoryGb: "0", cpus: "0", workspaceGb: "999", maxPrice: "0", maxMinutes: "0", idleMinutes: "0", accepted: false }),
       TEMPLATES,
     );
     expect(r.ok).toBe(false);
@@ -620,5 +623,52 @@ describe("every piece of guidance has real content", () => {
     expect(HOST_RENTAL_RISKS.join(" ")).toMatch(/see the customer's files/);
     expect(CUSTOMER_RENTAL_BEFORE.map((b) => b.text).join(" ")).toMatch(/host can see your files/);
     expect(CUSTOMER_RENTAL_NOT_FOR.join(" ")).toMatch(/host can see it/);
+  });
+});
+
+describe("renting with no graphics card (CPU only)", () => {
+  it("lets a form ask for 0 cards and sends exactly 0 to the API", () => {
+    const r = buildRentalRequest(form({ gpuCount: "0" }), TEMPLATES);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.body.gpu_count).toBe(0);
+  });
+
+  it("still sends 1 to 8 as before", () => {
+    for (const n of [1, 2, 8]) {
+      const r = buildRentalRequest(form({ gpuCount: String(n) }), TEMPLATES);
+      expect(r.ok && r.body.gpu_count).toBe(n);
+    }
+  });
+
+  it("matches the API's range of 0 to 8", () => {
+    expect(RENTAL_LIMITS.minGpus).toBe(0);
+    expect(RENTAL_LIMITS.maxGpus).toBe(8);
+    expect(repo("apps/api/app/services/sessions.py")).toMatch(/if not 0 <= gpu_count <= 8:/);
+  });
+
+  it("explains the refusal in words that include the 0 choice", () => {
+    const r = buildRentalRequest(form({ gpuCount: "9" }), TEMPLATES);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.gpuCount).toMatch(/0 \(no graphics card\)/);
+    expect(rentalErrorText("gpu_count_out_of_range")).toMatch(/0 \(no graphics card\)/);
+  });
+
+  it("prices the held credits for 0 cards as for 1 card, exactly as the server does", () => {
+    expect(holdEstimate("1.50", "0", "120")).toBe(holdEstimate("1.50", "1", "120"));
+    expect(holdEstimate("1.50", "0", "120")).toBe("3.00");
+    expect(repo("apps/api/app/services/sessions.py")).toMatch(/gpu_count=max\(gpus, 1\)/);
+  });
+
+  it("labels the choices, with the CPU-only one explained", () => {
+    expect(gpuChoiceLabel(0)).toBe("0 (no graphics card, CPU only)");
+    for (const n of [1, 2, 8]) expect(gpuChoiceLabel(n)).toBe(String(n));
+    expect(CPU_ONLY_NOTE).toMatch(/processor and memory/);
+    expect(CPU_ONLY_NOTE).toMatch(/charged/);
+  });
+
+  it("mentions the 0 choice in the how-it-works guide", () => {
+    expect(CUSTOMER_RENTAL_STEPS.map((x) => x.text).join(" ")).toMatch(/0 means processor and memory only/);
   });
 });

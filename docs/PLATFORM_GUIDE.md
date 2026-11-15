@@ -356,6 +356,7 @@ container rental appear), then either a **ready-made template** (PyTorch, or a v
 libraries) or **your own public image**, accept the warning, and start. The session page opens JupyterLab or a terminal through the
 encrypted relay. You pay per second while it is active, the same way as any session; a rental that never starts costs nothing.
 
+* **No graphics card (CPU only).** Choose **0** under Graphics cards to use only the computer's processor and memory, for a small test or work that needs no card. It is charged at the computer's hourly price, as for one card, and graphics-card code will not use a GPU.
 * **Workspace.** A private folder (`/workspace`) on the host's disk, sized by you (up to the platform limit). It lasts only while the
   rental runs and is deleted when it ends.
 * **Files in.** Choose files from your stored files; they are copied into the workspace before the rental starts, and that time is not charged.

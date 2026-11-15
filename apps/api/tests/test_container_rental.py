@@ -531,6 +531,20 @@ async def test_a_session_without_a_gpu_does_not_block_jobs(client, rental_on):
     assert (await claim_job(client, m["machine_id"], m["secret"])).status_code == 200
 
 
+async def test_a_rental_with_no_graphics_card_is_held_like_one_card(client, rental_on):
+    """CPU-only (gpu_count 0) is accepted and priced as one card, so the host is paid the machine's hourly price."""
+    await _machine(client, "rt-cpu-host@example.com", hostname="cpu1")
+    h = await _login(client, "rt-cpu@example.com")
+    zero = await _create(client, h, gpu_count=0)
+    one = await _create(client, h, gpu_count=1)
+    two = await _create(client, h, gpu_count=2)
+    assert zero.status_code == 201 and one.status_code == 201 and two.status_code == 201
+    assert zero.json()["held"] == one.json()["held"] and float(zero.json()["held"]) > 0
+    assert float(two.json()["held"]) > float(one.json()["held"])
+    assert (await _create(client, h, gpu_count=-1)).json()["detail"] == "gpu_count_out_of_range"
+    assert (await _create(client, h, gpu_count=9)).json()["detail"] == "gpu_count_out_of_range"
+
+
 # ---- the customer's export request ----------------------------------------------------------------------------------------
 async def test_export_needs_an_active_rental_owned_by_the_caller(client, rental_on):
     from tests.test_sessions_routes import _kit

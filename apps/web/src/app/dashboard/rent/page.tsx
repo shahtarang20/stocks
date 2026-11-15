@@ -25,6 +25,8 @@ import {
   RENTAL_LIMITS,
   RENTAL_WARNING_POINTS,
   buildRentalRequest,
+  CPU_ONLY_NOTE,
+  gpuChoiceLabel,
   holdEstimate,
   inputProblems,
   priceBelow,
@@ -396,13 +398,18 @@ export default function RentPage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-1.5">
                 <Label htmlFor="gpus">Graphics cards</Label>
-                <select id="gpus" className={selectClass} value={form.gpuCount} onChange={(e) => set("gpuCount", e.target.value)} aria-invalid={Boolean(errors.gpuCount)}>
-                  {Array.from({ length: RENTAL_LIMITS.maxGpus }, (_, i) => i + 1).map((n) => (
+                <select id="gpus" className={selectClass} value={form.gpuCount} onChange={(e) => set("gpuCount", e.target.value)} aria-invalid={Boolean(errors.gpuCount)} aria-describedby={form.gpuCount === "0" ? "gpus-d" : undefined}>
+                  {Array.from({ length: RENTAL_LIMITS.maxGpus - RENTAL_LIMITS.minGpus + 1 }, (_, i) => i + RENTAL_LIMITS.minGpus).map((n) => (
                     <option key={n} value={String(n)}>
-                      {n}
+                      {gpuChoiceLabel(n)}
                     </option>
                   ))}
                 </select>
+                {form.gpuCount === "0" ? (
+                  <p id="gpus-d" role="note" className="text-xs text-muted-foreground">
+                    {CPU_ONLY_NOTE}
+                  </p>
+                ) : null}
                 <FieldError id="gpus-e" text={errors.gpuCount} />
               </div>
               <div className="space-y-1.5">

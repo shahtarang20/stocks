@@ -9,7 +9,7 @@ import type { ExportState, RentalTemplate, SessionCreateInput, SessionInfo } fro
 
 // ---- limits (the API's defaults; the API can be set lower or higher, and always has the last word) ---------------------
 export const RENTAL_LIMITS = {
-  minGpus: 1,
+  minGpus: 0, // 0 = no graphics card: the computer's processor and memory only (the API accepts 0 to 8)
   maxGpus: 8,
   minMemoryMb: 1024,
   maxMemoryMb: 262_144,
@@ -268,7 +268,7 @@ export function buildRentalRequest(form: RentalForm, templates: RentalTemplate[]
 
   const gpus = num(form.gpuCount);
   if (gpus === null || gpus < RENTAL_LIMITS.minGpus || gpus > RENTAL_LIMITS.maxGpus) {
-    errors.gpuCount = `Choose between ${RENTAL_LIMITS.minGpus} and ${RENTAL_LIMITS.maxGpus} graphics cards.`;
+    errors.gpuCount = `Choose between ${RENTAL_LIMITS.minGpus} (no graphics card) and ${RENTAL_LIMITS.maxGpus} graphics cards.`;
   }
   const memGb = num(form.memoryGb);
   const memMb = memGb === null ? null : memGb * 1024;
@@ -339,13 +339,23 @@ export function holdEstimate(price: string, gpuCount: string, minutes: string): 
   if (!PRICE_RE.test(p) || g === null || m === null) return null;
   const [whole, frac = ""] = p.split(".");
   const micro = BigInt(whole + frac.padEnd(6, "0")); // credits x 1e6
-  const total = (micro * BigInt(g) * BigInt(m)) / BigInt(60); // still x 1e6
+  const billed = Math.max(g, 1); // a rental with no graphics card is priced as one card, exactly as the server does
+  const total = (micro * BigInt(billed) * BigInt(m)) / BigInt(60); // still x 1e6
   const s = total.toString().padStart(7, "0");
   const int = s.slice(0, -6);
   let dec = s.slice(-6).replace(/0+$/, "");
   if (dec.length < 2) dec = dec.padEnd(2, "0");
   return `${int}.${dec}`;
 }
+
+/** What the "Graphics cards" selector shows for each number. */
+export function gpuChoiceLabel(n: number): string {
+  return n === 0 ? "0 (no graphics card, CPU only)" : String(n);
+}
+
+/** Shown under the selector when no graphics card is chosen. */
+export const CPU_ONLY_NOTE =
+  "No graphics card: only the computer's processor and memory are used, so graphics-card code will not run on the GPU. Good for testing and for work that does not need one. You are still charged the computer's hourly price, as for one card.";
 
 // ---- wording shown to people ----------------------------------------------------------------------------------------------
 /** The warning a customer must accept. Same words everywhere it is shown. */
@@ -419,7 +429,7 @@ export function rentalErrorText(code: string | null): string | null {
     too_many_live_sessions: "You already have the most sessions allowed running. Stop one, then try again.",
     custom_images_not_enabled_for_sessions: "Bringing your own image is not switched on yet. Use a template instead.",
     max_price_must_be_positive: "The most you will pay per hour must be above zero.",
-    gpu_count_out_of_range: "Choose between 1 and 8 graphics cards.",
+    gpu_count_out_of_range: "Choose between 0 (no graphics card) and 8 graphics cards.",
     max_duration_out_of_range: "The longest it can run must be between 1 minute and 24 hours.",
     idle_timeout_out_of_range: "The idle time must be at least 1 minute and no longer than the longest it can run.",
     machine_cannot_filter_network:
@@ -553,7 +563,7 @@ export const CUSTOMER_RENTAL_STEPS: { title: string; text: string }[] = [
   },
   {
     title: "Choose the size, the time and the price",
-    text: "Pick the workspace, memory and processor cores, the most you will pay per hour, and the longest it may run. We set aside enough credits for the longest time and give back what you do not use.",
+    text: "Pick the number of graphics cards (0 means processor and memory only), the workspace, memory and processor cores, the most you will pay per hour, and the longest it may run. We set aside enough credits for the longest time and give back what you do not use.",
   },
   {
     title: "Read the warning, tick the box and start",

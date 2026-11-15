@@ -33,7 +33,7 @@
         "accelerate",
         "tensorboard"
       ],
-      "digest": null
+      "digest": "ghcr.io/shahtarang20/rental-pytorch-jupyter@sha256:58b279d23c444496e52a50b7620356d6f2e1ee3cae03d50cb7fcbd64c59935d0"
     },
     {
       "slug": "vision-jupyter",
@@ -69,7 +69,7 @@
         "matplotlib",
         "jupyterlab"
       ],
-      "digest": null
+      "digest": "ghcr.io/shahtarang20/rental-vision-jupyter@sha256:e6a461e54994553160cd066f3748f66a4385a12a12d199c2e18404f768da9ee0"
     }
   ]
 }

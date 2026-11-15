@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Server } from "lucide-react";
 import { ConsolePageHeader } from "@/components/console/console-page";
+import { CustomerRentalGuide } from "@/components/rental/customer-rental-guide";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -203,6 +204,10 @@ export default function RentPage() {
           </Button>
         }
       />
+
+      <div className="mb-6">
+        <CustomerRentalGuide />
+      </div>
 
       <form onSubmit={submit} noValidate className="space-y-6" aria-label="Rent a GPU">
         {/* 1. Which computer */}

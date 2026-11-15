@@ -553,6 +553,8 @@ The Computecoin app protects your graphics card in layers. What each one does, a
 
 > *Let customers run their own code on your graphics card.*
 
+The same instructions are on screen for hosts: an optional step on the host setup page (`/provider/onboarding#container-rental`) and a box on "My computers". Customers get a "How renting a graphics card works" guide at the top of **Rent a GPU**, a card on the dashboard, a note on the public marketplace page, and entries in Help and the glossary.
+
 Off unless you turn it on. First run `computecoin-agent rental check`: it tests Docker, the graphics card and a locked-down test container and says
 what to fix. Then run `computecoin-agent rental on` on the computer (or install with `--allow-rental`), then restart the agent; `rental off`
 turns it off and `rental status` shows the setting. A running rental is allowed to finish; no new ones start. "My computers" shows

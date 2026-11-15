@@ -14,6 +14,7 @@ const GLOSSARY: { term: string; meaning: string }[] = [
   { term: "Agent", meaning: "A small program you install on your computer if you are a host. It tells ComputeCoin what your computer has and runs the jobs it receives." },
   { term: "API key", meaning: "A secret password for a program, not a person. A program uses it to send jobs for you. Keep it private." },
   { term: "Booking", meaning: "A short hold on a spot on a host's computer before you run a job. You are not charged for a booking." },
+  { term: "Container rental", meaning: "Renting a host's graphics card to run your own code in JupyterLab or a terminal, instead of using a Kit. The host chooses to allow it. The host can see your files, so use it for work that is not sensitive. The menu item is called \"Rent a GPU\"." },
   { term: "Computer", meaning: "The machine a host shares. It can be a desktop, a laptop or a server." },
   { term: "Credits", meaning: "What you spend on jobs and what hosts earn. In this preview they are test credits, not real money." },
   { term: "CPU-only", meaning: "A computer or job that does not use a graphics card. A host must turn this on before a computer takes CPU-only work." },
@@ -32,10 +33,12 @@ const GLOSSARY: { term: string; meaning: string }[] = [
   { term: "Quote", meaning: "A price offer for a job. It holds for a short time (120 seconds by default)." },
   { term: "Session", meaning: "A live, hands-on connection to a rented computer, like a remote desktop or a terminal." },
   { term: "Setup token", meaning: "A one-time code that links one computer to a host's account. Some screens call it an enrollment token. It works once and lasts about an hour." },
+  { term: "Template", meaning: "A ready-made setup for Rent a GPU, such as PyTorch with JupyterLab, with the common training libraries already installed." },
   { term: "Test network", meaning: "A practice copy of a blockchain that uses coins with no value. We start there before any real network." },
   { term: "TPM", meaning: "A small security chip on many motherboards. It helps prove a computer has not been tampered with. Needed only for private jobs." },
   { term: "Video memory (VRAM)", meaning: "The memory on a graphics card. Bigger jobs need more of it." },
   { term: "Wallet", meaning: "A crypto wallet, such as MetaMask. You only need one if you want to use the COMPUTE token. It is optional." },
+  { term: "Workspace", meaning: "Your private folder (/workspace) on the host's computer during a rental. It is deleted when the rental ends. Put files you want to keep in its results folder, which is saved to your files." },
 ];
 
 export default function HelpPage() {
@@ -93,6 +96,13 @@ export default function HelpPage() {
             You pay for the time your job really ran on the host&apos;s computer. While it runs, credits are held. When it ends,
             you are charged for the time used and the rest comes back. If a job fails, you are not charged as if it succeeded.
           </p>
+          <h3>Can I run my own code, for example to train a model?</h3>
+          <p>
+            Yes, with <Link href="/dashboard/rent">Rent a GPU</Link> (sign in first). You pick a computer whose host allows it, pick a
+            ready-made template or your own public image, tick a warning and start. You work in JupyterLab or a terminal in your
+            browser and pay per second. Save what you want to keep in the results folder: it is copied to your files automatically.
+            The host can see your files, so use it for work that is not sensitive.
+          </p>
           <h3>What is practice mode?</h3>
           <p>
             Today most jobs run in practice mode (simulated). The job is practised, not truly run. Results are placeholders and
@@ -124,6 +134,12 @@ export default function HelpPage() {
           <p>
             Ready? Open the <Link href="/provider/onboarding">step-by-step setup guide</Link>. You will need to be signed in.
           </p>
+          <h3>How do I let customers run their own code on my computer?</h3>
+          <p>
+            This is optional and off until you turn it on. Open the <Link href="/provider/onboarding#container-rental">optional step on the
+            setup guide</Link>. It lists what your computer needs and the commands, in order: test the computer, turn it on, restart the
+            agent. You can turn it off any time.
+          </p>
           <h3>How you are paid today</h3>
           <p>
             You earn when a job finishes. You then ask for a payout and an administrator approves it. Everything uses test
@@ -145,6 +161,7 @@ export default function HelpPage() {
             <li><strong>A job failed.</strong> Open the job. It explains what happened and what to do. You are not charged as if it worked.</li>
             <li><strong>I do not have enough credits.</strong> Add credits on the <Link href="/dashboard/billing">Credits and billing</Link> page.</li>
             <li><strong>I think a charge is wrong.</strong> Open a dispute from the job.</li>
+            <li><strong>My rental is stuck on &ldquo;waiting&rdquo;.</strong> No host that allows rental was free at your price. It ends after 10 minutes and costs nothing. Raise the most you will pay, or pick another computer.</li>
             <li><strong>My computer does not show as online.</strong> See the fixes in step 4 of the <Link href="/provider/onboarding">setup guide</Link>.</li>
             <li><strong>Is ComputeCoin working?</strong> Check the <Link href="/status">status page</Link>.</li>
           </ul>

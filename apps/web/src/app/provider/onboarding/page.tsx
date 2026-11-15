@@ -33,6 +33,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HelpTip } from "@/components/ui/help-tip";
 import { MachineStatusBadge } from "@/components/provider/machine-status-badge";
+import { HostRentalGuide } from "@/components/provider/host-rental-guide";
 import {
   Dialog,
   DialogContent,
@@ -235,7 +236,7 @@ export default function ProviderOnboardingPage() {
     <>
       <ConsolePageHeader
         title="Add my computer"
-        description="Six steps to share your computer on ComputeCoin. Do them in order. You can come back to this page at any time."
+        description="Six steps to share your computer on ComputeCoin, plus one optional step to let customers run their own code. Do them in order. You can come back to this page at any time."
         action={
           <Button asChild variant="outline">
             <Link href="/help">Help and glossary</Link>
@@ -923,6 +924,33 @@ sudo usermod -aG render,video $USER`}
                 </p>
               </Fix>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Optional — container rental                                       */}
+        {/* ---------------------------------------------------------------- */}
+        <Card id="container-rental">
+          <CardHeader>
+            <div className="flex flex-wrap items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-sm font-semibold text-muted-foreground"
+              >
+                +
+              </span>
+              <h2 className="text-base font-semibold leading-tight tracking-tight">
+                Optional: let customers run their own code (container rental)
+              </h2>
+              <Badge variant="neutral">Optional</Badge>
+            </div>
+            <CardDescription className="sm:pl-11">
+              You can skip this and still earn from Kits and ordinary jobs. Do it after your computer shows as online (step 4). It is off
+              until you turn it on.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="sm:pl-11">
+            <HostRentalGuide />
           </CardContent>
         </Card>
 

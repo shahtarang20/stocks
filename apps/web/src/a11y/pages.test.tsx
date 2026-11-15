@@ -86,6 +86,16 @@ describe("axe: zero serious or critical violations", () => {
     const violations = await seriousViolations(<RentalPanel session={session as never} />);
     expect(violations, describeViolations(violations)).toEqual([]);
   });
+  it("host rental guide", async () => {
+    const { HostRentalGuide } = await import("@/components/provider/host-rental-guide");
+    const violations = await seriousViolations(<HostRentalGuide />);
+    expect(violations, describeViolations(violations)).toEqual([]);
+  });
+  it("customer rental guide", async () => {
+    const { CustomerRentalGuide } = await import("@/components/rental/customer-rental-guide");
+    const violations = await seriousViolations(<CustomerRentalGuide />);
+    expect(violations, describeViolations(violations)).toEqual([]);
+  });
   it("file upload control", async () => {
     const { FileUpload } = await import("@/components/kits/file-upload");
     const violations = await seriousViolations(

@@ -49,6 +49,7 @@ import { formatMbAsGb } from "@/lib/utils";
 import { capitalize } from "@/lib/format";
 import { sandboxHelp, sandboxLabel, sandboxState } from "@/lib/host-sandbox";
 import { RENTAL_BADGE_HELP, RENTAL_BADGE_LABEL, machineRentalState } from "@/lib/rental";
+import { HostRentalGuide } from "@/components/provider/host-rental-guide";
 
 function hardwareSummary(m: Machine): string {
   const hw = m.hardware;
@@ -278,26 +279,9 @@ export default function ProviderHardwarePage() {
 
       {machines.length > 0 ? (
         <details className="mt-4 rounded-md border border-border px-4 py-3 text-sm">
-          <summary className="cursor-pointer font-medium">About container rental (letting customers run their own code)</summary>
-          <div className="mt-3 space-y-2 text-muted-foreground">
-            <p>
-              <strong className="font-medium text-foreground">What it is.</strong> Most jobs on ComputeCoin run software that ComputeCoin has published. With container rental on,
-              a customer can instead run <em>their own</em> code on your graphics card, with JupyterLab or a terminal, for work such as training a model. They pay per second while it runs.
-            </p>
-            <p>
-              <strong className="font-medium text-foreground">What it means for you.</strong> A stranger&apos;s code runs on your computer inside a locked container. It cannot reach your files, your
-              programs or your home network, it has no internet unless the customer chooses a short list of package sites, and it is stopped if it overheats your card or uses too much disk.
-              It is meant for work that is not sensitive, and customers are told that you can see their files. A locked container is strong protection but not a perfect wall, so use a computer
-              that holds nothing you could not afford to lose.
-            </p>
-            <p>
-              <strong className="font-medium text-foreground">It is off unless you turn it on.</strong> First run{" "}
-              <code className="rounded bg-surface-2 px-1 font-mono text-xs">computecoin-agent rental check</code> on that computer: it tests Docker, the graphics card and a locked-down test container and says
-              what to fix. Then turn it on by running{" "}
-              <code className="rounded bg-surface-2 px-1 font-mono text-xs">computecoin-agent rental on</code> on that computer, then restart the agent. You can turn it off at any
-              time with <code className="rounded bg-surface-2 px-1 font-mono text-xs">computecoin-agent rental off</code>. A rental that is already running when you turn it off is allowed to finish; no new
-              ones are started. The badge above shows the current state a minute after the agent restarts.
-            </p>
+          <summary className="cursor-pointer font-medium">How to let customers run their own code on a computer (container rental)</summary>
+          <div className="mt-3">
+            <HostRentalGuide headingLevel={3} />
           </div>
         </details>
       ) : null}

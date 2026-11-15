@@ -123,8 +123,8 @@ const CUSTOMER_GROUPS: Group[] = [
     intro: "For people who want more control.",
     items: [
       {
-        name: "Notebooks and terminals",
-        text: "Open a JupyterLab notebook or a terminal on a computer with a graphics card, live in your browser, and stop it when you are done.",
+        name: "Rent a GPU: notebooks and terminals",
+        text: "Open JupyterLab or a terminal on a host's computer with a graphics card, live in your browser, with your own code. Pick a ready-made PyTorch or vision template, or bring your own public image. You pay per second, results are saved to your files, and the host can see your files, so use it for work that is not sensitive. Start from Rent a GPU after you sign in.",
       },
       {
         name: "Bring your own container",
@@ -177,6 +177,10 @@ const HOST_ITEMS: Item[] = [
   {
     name: "See what you earn",
     text: "Your host console shows your computers, jobs, earnings and payouts.",
+  },
+  {
+    name: "Optional: let customers run their own code (container rental)",
+    text: "Switch it on yourself, with two commands, and customers can rent your graphics card for their own work, such as training a model. It is off until you turn it on, and you can turn it off any time. It is new, and customers can see that their files are visible to you. The setup page has the steps.",
   },
   {
     name: "Take private jobs (special hardware)",

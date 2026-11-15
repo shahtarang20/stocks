@@ -499,3 +499,99 @@ export const RENTAL_BADGE_HELP: Record<"on" | "off" | "update", string> = {
   on: "Customers can run their own code on this computer, in a locked container. Turn it off any time with: computecoin-agent rental off",
   off: "This computer only runs Kits and ordinary jobs. Customers cannot run their own code on it.",
 };
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Guidance shown to hosts and customers. One place, so the setup page, "My computers", the public pages and the Rent page say the same
+// thing, and the commands a host is told to run are the ones the agent really has (checked by a test against the agent's own CLI).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/** The commands a host runs on the computer that offers container rental. */
+export const HOST_RENTAL_COMMANDS = {
+  check: "computecoin-agent rental check",
+  on: "computecoin-agent rental on",
+  status: "computecoin-agent rental status",
+  off: "computecoin-agent rental off",
+  restart: "sudo systemctl restart computecoin-agent",
+} as const;
+
+/** What a host's computer needs before container rental can work. */
+export const HOST_RENTAL_NEEDS: { lead: string; text: string }[] = [
+  { lead: "A Linux computer.", text: "Ubuntu 22.04 or 24.04. Windows and Mac computers cannot offer container rental." },
+  { lead: "An NVIDIA graphics card that works.", text: "Running nvidia-smi in a terminal must list it. AMD cards are not supported for container rental." },
+  { lead: "Docker, and the NVIDIA Container Toolkit.", text: "The toolkit lets Docker use your graphics card inside a container." },
+  { lead: "The ComputeCoin agent, version 0.2.0 or newer,", text: "already connected to your account (steps 1 to 4 on this page)." },
+  { lead: "Some free disk space.", text: "Each rental gets a private work folder on your disk, limited in size (50 GB by default). It is deleted when the rental ends." },
+];
+
+/** What happens on a host's computer while a customer rents it. */
+export const HOST_RENTAL_WHAT_HAPPENS: string[] = [
+  "The agent starts one locked container for the customer. It has no extra rights, cannot see your files or programs, and cannot reach your home network.",
+  "It has no internet unless the customer asked for a short list of package sites (such as pip). Those go through a filter that only lets those sites through.",
+  "The customer gets a private work folder on your disk. When the rental ends it is deleted, after the customer's results are copied to their own storage.",
+  "You are paid per second while the rental is running, at the price you set, the same as for jobs. Credits are test credits for now.",
+  "While a rental runs, your computer takes no other graphics-card job, and the other way round.",
+  "The rental stops by itself if your card gets too hot, your disk runs low, you pause the agent or start using the computer, or its programs look like a cryptocurrency miner.",
+];
+
+/** The honest limits a host must know before turning container rental on. */
+export const HOST_RENTAL_RISKS: string[] = [
+  "A locked container is strong protection, but it is not a perfect wall. Use a computer that holds nothing you could not afford to lose.",
+  "You can see the customer's files and programs while it runs. Customers are told this and are asked not to use it for private data.",
+  "Miner detection catches the well-known miners. It is a deterrent, not a guarantee.",
+  "Container rental is new and has not yet been proven on many real computers. Start with a computer you can watch.",
+];
+
+/** The steps a customer follows. */
+export const CUSTOMER_RENTAL_STEPS: { title: string; text: string }[] = [
+  {
+    title: "Choose a computer",
+    text: "Pick one from the list, or leave it on any computer. Only computers whose host chose to allow container rental are listed. If no host takes your rental within 10 minutes, it ends by itself and costs nothing.",
+  },
+  {
+    title: "Choose what to run",
+    text: "Use a ready-made template (PyTorch, or a vision stack, opened in JupyterLab), or bring your own public image and open a terminal or a web page.",
+  },
+  {
+    title: "Choose the size, the time and the price",
+    text: "Pick the workspace, memory and processor cores, the most you will pay per hour, and the longest it may run. We set aside enough credits for the longest time and give back what you do not use.",
+  },
+  {
+    title: "Read the warning, tick the box and start",
+    text: "The session page shows its progress. When it is running, press Open to use JupyterLab or the terminal in your browser. The first start can take a few minutes while the host's computer downloads the image.",
+  },
+  {
+    title: "Save your results",
+    text: "Put the files you want to keep in the results folder (/workspace/results). They are saved to your files automatically every few minutes, when you press Save results now, and when the rental ends.",
+  },
+  {
+    title: "Stop when you are done",
+    text: "You pay only for the seconds it was running. It also stops by itself when it sits idle or reaches the longest time you set.",
+  },
+];
+
+/** What a customer needs before starting. */
+export const CUSTOMER_RENTAL_BEFORE: { lead: string; text: string }[] = [
+  { lead: "A confirmed email address.", text: "We email you a link when you sign up. Without it you cannot start paid work." },
+  { lead: "Credits in your account.", text: "Add them on the Credits and billing page. In this preview they are test credits, not real money." },
+  { lead: "Data you are allowed to share.", text: "The host can see your files and programs while the rental runs. Do not use it for secrets, private models, or other people's personal data (such as photos of faces) unless they agreed. For private work use Kits or the private options instead." },
+  { lead: "Your code or a template.", text: "A template gives you JupyterLab with the common training libraries. Your own image must be public and pinned by its @sha256: address." },
+];
+
+export const CUSTOMER_RENTAL_GOOD_FOR: string[] = [
+  "Training and fine-tuning your own model on a graphics card you do not own.",
+  "Trying ideas in a notebook, or running your own scripts on a GPU.",
+  "Work that is not sensitive.",
+];
+
+export const CUSTOMER_RENTAL_NOT_FOR: string[] = [
+  "Private or sensitive data. The host can see it.",
+  "Anything that must never be lost. The workspace is deleted when the rental ends, and is lost if the host's computer fails. Only the results folder is saved to your files.",
+  "Work that needs the open internet. Only a short list of package sites can be allowed.",
+];
+
+export const CUSTOMER_RENTAL_PROBLEMS: { lead: string; text: string }[] = [
+  { lead: "It sits on \"waiting\" for a long time.", text: "No host that allows rental was free at your price. It ends after 10 minutes and costs nothing. Raise the most you will pay, or pick another computer." },
+  { lead: "It will not open.", text: "Open the session page and read its status. Stop it and start again if it is stuck. You pay only for the seconds it was running." },
+  { lead: "My files are gone.", text: "Only files in /workspace/results are saved. Everything else in the workspace is deleted when the rental ends." },
+  { lead: "I ran out of credits.", text: "Add credits on the Credits and billing page, then start again." },
+];

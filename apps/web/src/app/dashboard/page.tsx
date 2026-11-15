@@ -175,6 +175,20 @@ export default function DashboardPage() {
           explains the words used here in plain language.
         </p>
         {!loading && !failed && jobs.length === 0 ? <FirstJobGuide /> : null}
+        <Card role="region" aria-labelledby="rent-callout-title">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+            <div>
+              <h2 id="rent-callout-title" className="text-base font-semibold">Run your own code on a rented graphics card</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Training or fine-tuning your own model? Rent a computer with a GPU from a host and open JupyterLab or a terminal in your
+                browser. You pay per second while it runs. Not for private data.
+              </p>
+            </div>
+            <Button asChild variant="outline" className="shrink-0">
+              <Link href="/dashboard/rent">Rent a GPU</Link>
+            </Button>
+          </CardContent>
+        </Card>
         {failed ? (
           <div
             role="alert"

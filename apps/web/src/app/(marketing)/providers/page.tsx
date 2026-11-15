@@ -77,6 +77,31 @@ export default function ProvidersPage() {
             step with copy-and-paste commands and a troubleshooting list. You need to log in
             first.
           </p>
+          <h2>Optional: let customers run their own code</h2>
+          <p>
+            Besides Kits and ordinary jobs, a host can switch on <strong>container rental</strong>. A customer then rents your
+            graphics card for their own work, such as training or fine-tuning a model, in JupyterLab or a terminal. They pay per
+            second while it runs, and you earn that.
+          </p>
+          <ul>
+            <li>
+              <strong>It is off until you turn it on.</strong> You turn it on with two commands on your computer and can turn it off
+              any time. A rental already running is allowed to finish.
+            </li>
+            <li>
+              <strong>It needs more:</strong> an NVIDIA card that works, Docker with the NVIDIA Container Toolkit, and agent version
+              0.2.0 or newer.
+            </li>
+            <li>
+              <strong>The customer&apos;s code runs on your computer</strong> in a locked container, with no access to your files or home
+              network. You can see the customer&apos;s files while it runs, and customers are told. A container is not a perfect wall, so
+              use a computer that holds nothing you could not afford to lose.
+            </li>
+            <li>
+              <strong>It is new.</strong> It has not yet been proven on many real computers. Start with one you can watch. The host
+              setup page has the exact steps.
+            </li>
+          </ul>
           <h2>What is real today</h2>
           <ul>
             <li>

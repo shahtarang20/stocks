@@ -527,3 +527,98 @@ describe("the new error codes have plain words", () => {
     expect(t).not.toMatch(/_/); // no raw code shown to a person
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The guidance on screen must stay true to the code. These read the agent, the installer and the API's own files.
+// ---------------------------------------------------------------------------------------------------------------------------------
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  CUSTOMER_RENTAL_BEFORE,
+  CUSTOMER_RENTAL_GOOD_FOR,
+  CUSTOMER_RENTAL_NOT_FOR,
+  CUSTOMER_RENTAL_PROBLEMS,
+  CUSTOMER_RENTAL_STEPS,
+  HOST_RENTAL_COMMANDS,
+  HOST_RENTAL_NEEDS,
+  HOST_RENTAL_RISKS,
+  HOST_RENTAL_WHAT_HAPPENS,
+} from "./rental";
+
+const repo = (rel: string) => readFileSync(fileURLToPath(new URL(`../../../../${rel}`, import.meta.url)), "utf8");
+
+describe("the host instructions match the agent", () => {
+  const cli = repo("provider-agent/computecoin_agent/cli.py");
+  const allowed = /action not in \(([^)]*)\)/.exec(cli)?.[1] ?? "";
+
+  it("only tells a host to run commands the agent really has", () => {
+    for (const cmd of [HOST_RENTAL_COMMANDS.check, HOST_RENTAL_COMMANDS.on, HOST_RENTAL_COMMANDS.status, HOST_RENTAL_COMMANDS.off]) {
+      const [program, sub, action] = cmd.split(" ");
+      expect(program).toBe("computecoin-agent");
+      expect(sub).toBe("rental");
+      expect(allowed).toContain(`"${action}"`);
+    }
+  });
+
+  it("mentions the installer option the installer really has", () => {
+    expect(repo("apps/web/public/install.sh")).toContain("--allow-rental");
+  });
+
+  it("names the service the installer creates", () => {
+    expect(repo("apps/web/public/install.sh")).toContain(`AGENT_UNIT="computecoin-agent"`);
+    expect(HOST_RENTAL_COMMANDS.restart).toBe("sudo systemctl restart computecoin-agent");
+  });
+
+  it("states the disk limit the agent really defaults to", () => {
+    expect(repo("provider-agent/computecoin_agent/config.py")).toMatch(/rental_max_workspace_gb: int = 50\b/);
+    expect(HOST_RENTAL_NEEDS.map((n) => n.text).join(" ")).toContain("50 GB");
+  });
+
+  it("states the minimum agent version the update hint uses", () => {
+    expect(HOST_RENTAL_NEEDS.map((n) => n.lead).join(" ")).toContain(RENTAL_MIN_AGENT_VERSION);
+  });
+});
+
+describe("the customer instructions match the platform", () => {
+  it("says the wait for a host is 10 minutes, as the API does", () => {
+    expect(repo("apps/api/app/services/sessions.py")).toMatch(/UNCLAIMED_SECONDS = 600\b/);
+    expect(CUSTOMER_RENTAL_STEPS[0].text).toContain("10 minutes");
+    expect(CUSTOMER_RENTAL_PROBLEMS[0].text).toContain("10 minutes");
+  });
+
+  it("says results are saved every few minutes, as the agent does", () => {
+    expect(repo("provider-agent/computecoin_agent/session_agent.py")).toMatch(/AUTOSAVE_SECONDS = 300\.0/);
+    expect(CUSTOMER_RENTAL_STEPS.map((s) => s.text).join(" ")).toContain("every few minutes");
+  });
+
+  it("names the registries the API really allows", () => {
+    const allowed = repo("apps/api/app/core/config.py");
+    expect(allowed).toMatch(/RENTAL_ALLOWED_REGISTRIES: str = "docker\.io,ghcr\.io,nvcr\.io,quay\.io"/);
+  });
+});
+
+describe("every piece of guidance has real content", () => {
+  it("has no empty or duplicated entries", () => {
+    const lists: string[][] = [
+      HOST_RENTAL_NEEDS.map((n) => `${n.lead} ${n.text}`),
+      HOST_RENTAL_WHAT_HAPPENS,
+      HOST_RENTAL_RISKS,
+      CUSTOMER_RENTAL_STEPS.map((s) => `${s.title} ${s.text}`),
+      CUSTOMER_RENTAL_BEFORE.map((b) => `${b.lead} ${b.text}`),
+      CUSTOMER_RENTAL_GOOD_FOR,
+      CUSTOMER_RENTAL_NOT_FOR,
+      CUSTOMER_RENTAL_PROBLEMS.map((p) => `${p.lead} ${p.text}`),
+    ];
+    for (const list of lists) {
+      expect(list.length).toBeGreaterThan(1);
+      expect(new Set(list).size).toBe(list.length);
+      for (const t of list) expect(t.trim().length).toBeGreaterThan(20);
+    }
+  });
+
+  it("warns both sides that the host can see the customer's files", () => {
+    expect(HOST_RENTAL_RISKS.join(" ")).toMatch(/see the customer's files/);
+    expect(CUSTOMER_RENTAL_BEFORE.map((b) => b.text).join(" ")).toMatch(/host can see your files/);
+    expect(CUSTOMER_RENTAL_NOT_FOR.join(" ")).toMatch(/host can see it/);
+  });
+});

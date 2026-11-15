@@ -109,7 +109,10 @@ def test_scientific_zip_safety_env_argv(tmp_path):
         z.writestr("a.csv", b"1")
     with zipfile.ZipFile(good) as z:
         assert [i.filename for i in ep.safe_zip_members(z)] == ["a.csv"]
-    for bad in ("../x", "/abs", "a/../../x", "a\\b"):
+    # On Windows, zipfile itself turns a backslash in a member name into "/" (when writing and again when reading), so "a\\b" cannot exist
+    # inside a zip there and reaches the Kit as the harmless "a/b". The case is real, and still tested, everywhere else.
+    bad_names = ["../x", "/abs", "a/../../x"] + (["a\\b"] if os.sep == "/" else [])
+    for bad in bad_names:
         p = tmp_path / "b.zip"
         with zipfile.ZipFile(p, "w") as z:
             z.writestr(zipfile.ZipInfo(bad), b"x")

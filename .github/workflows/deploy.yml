@@ -43,7 +43,8 @@ jobs:
 
       - name: Railway token not configured
         if: env.RAILWAY_TOKEN == ''
-        run: echo "RAILWAY_TOKEN is not set; nothing was deployed."
+        # A yellow warning on the run page, not a quiet echo: a green run that deployed nothing looks exactly like a deploy.
+        run: echo "::warning title=Nothing was deployed::RAILWAY_TOKEN is not set (Settings, Secrets and variables, Actions). The API was NOT deployed by this run."
 
   deploy-vercel:
     name: Deploy Web Application to Vercel
@@ -72,4 +73,4 @@ jobs:
 
       - name: Vercel token not configured
         if: env.VERCEL_TOKEN == ''
-        run: echo "VERCEL_TOKEN is not set; nothing was deployed."
+        run: echo "::warning title=Nothing was deployed::VERCEL_TOKEN is not set (Settings, Secrets and variables, Actions). The web app was NOT deployed by this run."

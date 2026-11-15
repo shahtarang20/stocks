@@ -46,7 +46,10 @@ async def test_link_flow_shows_the_wallet_and_can_be_unlinked(client):
     assert got["wallet"]["address"] == acct.address and got["credits"]["simulated"] is True
 
     # Linking the same address again is harmless.
-    again = await client.post("/v1/wallet/link", json={"address": acct.address, "message": await _challenge(client, h, acct.address), "signature": _sign(acct, await _challenge(client, h, acct.address))}, headers=h)
+    # ONE challenge, signed and sent as it is. Asking twice gave two messages with different issue times whenever the calls fell in
+    # different seconds, so the signature did not match the message and the test failed at random on a slow machine.
+    second = await _challenge(client, h, acct.address)
+    again = await client.post("/v1/wallet/link", json={"address": acct.address, "message": second, "signature": _sign(acct, second)}, headers=h)
     assert again.status_code in (200, 201)
 
     assert (await client.delete("/v1/wallet/link", headers=h)).status_code == 204

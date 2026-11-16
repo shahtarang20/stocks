@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/provider/onboarding", useRouter: () => ({ push: vi.fn() }) }));
@@ -63,3 +63,31 @@ describe("host setup page: one-line install", () => {
     expect(screen.getByText(/--uninstall/)).toBeTruthy();
   });
 });
+
+describe("host setup page: the optional rental tick-box", () => {
+  const pasted = () =>
+    screen.getAllByText(/curl -fsSL .*install\.sh/).map((e) => e.textContent ?? "").find((t) => t.includes("mktemp")) ?? "";
+
+  it("is unticked at first, and the line has no rental word", () => {
+    renderPage();
+    const box = screen.getByRole("checkbox", { name: /Also let customers run their own code/ }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(pasted()).not.toContain("--allow-rental");
+  });
+
+  it("adds the rental word to the line when ticked, and removes it when unticked", () => {
+    renderPage();
+    const box = screen.getByRole("checkbox", { name: /Also let customers run their own code/ });
+    fireEvent.click(box);
+    expect(pasted()).toMatch(/--server \S+ --allow-rental; rm -f "\$f"$/);
+    expect(pasted()).not.toContain("--token");
+    fireEvent.click(box);
+    expect(pasted()).not.toContain("--allow-rental");
+  });
+
+  it("says plainly what ticking it does", () => {
+    renderPage();
+    expect(screen.getByText(/also turns container rental on and tests the\s+computer/)).toBeTruthy();
+  });
+});
+

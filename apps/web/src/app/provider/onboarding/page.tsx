@@ -64,7 +64,7 @@ import { useAuth } from "@/lib/auth-context";
 import { RelativeTime } from "@/components/console/bits";
 import { useToast } from "@/components/console/toast";
 import { formatDateTime } from "@/lib/format";
-import { buildInstallCommand, buildUnattendedInstallCommand, uninstallCommand } from "@/lib/install-command";
+import { buildInstallCommand, buildOneClickInstallCommand, buildUnattendedInstallCommand, uninstallCommand } from "@/lib/install-command";
 
 const TOKEN_STATUS_VARIANT: Record<
   EnrollmentTokenStatus,
@@ -155,6 +155,11 @@ export default function ProviderOnboardingPage() {
   // Honesty constraint: never persisted (no storage), shown once.
   const [newToken, setNewToken] = useState<EnrollmentTokenCreated | null>(null);
   const [label, setLabel] = useState("");
+  // Ticked: the one-line install also turns container rental on (and tests the computer). Off unless the host asks.
+  const [allowRental, setAllowRental] = useState(false);
+  // The one-click button: create a token, then copy one finished line that carries it.
+  const [pendingCopy, setPendingCopy] = useState(false);
+  const [oneClickNote, setOneClickNote] = useState<"copied" | "manual" | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<EnrollmentToken | null>(null);
   const [registered, setRegistered] = useState(false);
 
@@ -225,10 +230,23 @@ export default function ProviderOnboardingPage() {
     server: API_BASE_URL,
     token: newToken?.enrollment_token,
     packageBase: process.env.NEXT_PUBLIC_AGENT_PACKAGE_BASE,
+    allowRental,
   };
   // The pasted line has no token in it: the installer asks for it with typing hidden, so it never shows in the list of
   // running programs. The unattended form (token inside) is only for scripts that cannot answer a prompt.
   const installCommand = buildInstallCommand(commandInput);
+  const oneClickCommand = buildOneClickInstallCommand(commandInput);
+  const copyOneClick = (command: string) => {
+    const done = navigator.clipboard?.writeText(command);
+    if (!done) return setOneClickNote("manual");
+    done.then(() => setOneClickNote("copied"), () => setOneClickNote("manual"));
+  };
+  // After the token is created, copy the finished line (the browser may refuse without a fresh click: then the host presses the copy button).
+  useEffect(() => {
+    if (!pendingCopy || !oneClickCommand) return;
+    setPendingCopy(false);
+    copyOneClick(oneClickCommand);
+  }, [pendingCopy, oneClickCommand]); // eslint-disable-line react-hooks/exhaustive-deps
   const unattendedCommand = buildUnattendedInstallCommand(commandInput);
   const removeCommand = uninstallCommand(origin);
 
@@ -566,7 +584,10 @@ sudo usermod -aG render,video $USER`}
                       variant="ghost"
                       size="icon"
                       aria-label="Dismiss token"
-                      onClick={() => setNewToken(null)}
+                      onClick={() => {
+                        setNewToken(null);
+                        setOneClickNote(null);
+                      }}
                     >
                       <X />
                     </Button>
@@ -629,6 +650,66 @@ sudo usermod -aG render,video $USER`}
                 (sudo). It checks the computer, installs the agent, connects the computer to your account, and starts
                 the agent and its heat watchdog so they keep running after a restart.
               </p>
+              <div className="space-y-1">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={allowRental}
+                    onChange={(e) => setAllowRental(e.target.checked)}
+                    aria-describedby="allow-rental-d"
+                  />
+                  <span className="font-medium">Also let customers run their own code on this computer (container rental)</span>
+                </label>
+                <p id="allow-rental-d" className="pl-6 text-xs text-muted-foreground">
+                  Optional. Ticking this adds one word to the line below. The same install then also turns container rental on and tests the
+                  computer, so you do not need the separate rental commands further down. Read &ldquo;Optional: let customers run their own
+                  code&rdquo; first. You can turn it off any time.
+                </p>
+              </div>
+              <div className="space-y-2 rounded-md border border-border bg-surface-2/40 p-3" data-testid="one-click">
+                <p className="text-sm">
+                  <span className="font-medium">Easiest.</span>{" "}
+                  <span className="text-muted-foreground">
+                    Press the button. It creates a setup token and copies one finished line that already has the token in it. Paste it in a
+                    terminal on the computer you want to share and type your password when asked. Nothing else is asked.
+                  </span>
+                </p>
+                <Button
+                  type="button"
+                  disabled={!isProvider || createMut.isPending}
+                  onClick={() => {
+                    if (oneClickCommand) {
+                      copyOneClick(oneClickCommand);
+                    } else {
+                      setOneClickNote(null);
+                      setPendingCopy(true);
+                      if (!createMut.isPending) createMut.mutate();
+                    }
+                  }}
+                >
+                  {createMut.isPending ? (
+                    <>
+                      <Loader2 className="animate-spin" /> Creating…
+                    </>
+                  ) : oneClickCommand ? (
+                    "Copy the install command again"
+                  ) : (
+                    "Create token and copy the install command"
+                  )}
+                </Button>
+                {!isProvider ? <p className="text-xs text-muted-foreground">Finish step 3a first.</p> : null}
+                {oneClickCommand ? (
+                  <div className="space-y-1.5">
+                    {oneClickNote === "copied" ? (
+                      <p role="status" className="text-xs text-success">Copied. Paste it in the terminal now. It works once and stops working in about an hour.</p>
+                    ) : oneClickNote === "manual" ? (
+                      <p role="status" className="text-xs text-warning">Your browser did not let us copy it. Press the copy button below.</p>
+                    ) : null}
+                    <CopyField label="One-click install command (it has your token in it, so do not share it)" value={oneClickCommand} />
+                  </div>
+                ) : null}
+              </div>
               {installCommand ? (
                 <CopyField label="Install and connect (Linux)" value={installCommand} />
               ) : (

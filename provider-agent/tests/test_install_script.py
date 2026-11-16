@@ -373,6 +373,15 @@ def test_the_token_can_come_from_the_environment(ready):
     assert done.returncode == 0 and TOKEN not in out(done) and "--token-file" in out(done)
 
 
+def test_the_one_click_line_works_end_to_end_in_a_dry_run(ready):
+    """The website's one-click line sets the token in the environment and passes only --server (and --allow-rental): no prompt, no token printed."""
+    done = ready.run("--dry-run", "--server", SERVER, "--allow-rental", COMPUTECOIN_ENROLL_TOKEN=TOKEN)
+    text = out(done)
+    assert done.returncode == 0 and TOKEN not in text
+    assert "would ask you to paste the setup token" not in text
+    assert "--token-file" in text and "computecoin-agent rental on" in text and "computecoin-agent rental check" in text
+
+
 def test_both_services_are_written_with_a_restart_and_the_right_command(ready):
     text = out(ready.run("--dry-run", "--token", TOKEN, "--server", SERVER))
     assert "computecoin-agent.service (mode 644)" in text and "computecoin-watchdog.service (mode 644)" in text
@@ -1293,3 +1302,27 @@ def test_an_agent_too_old_to_know_rental_does_not_fail_the_install(ready):
 def test_nothing_runs_when_the_option_is_not_given(ready):
     done = ready.source('DRY_RUN=0; ALLOW_RENTAL=0; as_service_user() { echo CALLED; return 0; }\nenable_rental\necho AFTER')
     assert "CALLED" not in done.stdout and "AFTER" in done.stdout
+
+
+def test_the_rental_step_tests_the_computer_and_says_what_to_do_about_a_failure(ready):
+    text = out(ready.run("--dry-run", "--allow-rental", "--token", TOKEN, "--server", SERVER))
+    assert "computecoin-agent rental check" in text
+    assert text.index("computecoin-agent rental on") < text.index("computecoin-agent rental check") < text.index("Installing the services")
+
+
+def test_a_failing_rental_test_never_fails_the_install(ready):
+    code = (
+        'DRY_RUN=0; ALLOW_RENTAL=1\n'
+        'as_service_user() { case "$*" in *"rental check"*) return 1;; *) return 0;; esac; }\n'
+        'enable_rental\necho AFTER'
+    )
+    done = ready.source(code)
+    assert done.returncode == 0 and "AFTER" in done.stdout
+    assert "found a problem" in done.stderr and "rental check" in done.stdout
+    assert "no graphics card" in done.stdout or "has none" in done.stdout
+
+
+def test_a_passing_rental_test_prints_no_warning(ready):
+    done = ready.source('DRY_RUN=0; ALLOW_RENTAL=1; as_service_user() { return 0; }\nenable_rental\necho AFTER')
+    assert done.returncode == 0 and "AFTER" in done.stdout and "found a problem" not in done.stderr
+

@@ -627,6 +627,14 @@ enable_rental() {
   say "You can turn it off at any time with:  computecoin-agent rental off"
   if ! as_service_user "$INSTALL_DIR/venv/bin/computecoin-agent" rental on; then
     warn "this version of the agent could not turn container rental on (it may be too old to know about it). The computer works as before."
+    return 0
+  fi
+  # Test the computer now, so the host learns about a missing piece here and not from a customer. A failing test never stops the install.
+  step "Testing this computer for container rental (the first test downloads a small image and can take a few minutes)"
+  if ! as_service_user "$INSTALL_DIR/venv/bin/computecoin-agent" rental check; then
+    warn "the container rental test found a problem (the lines marked FAIL above each say what to do). The computer is still connected and works for ordinary jobs."
+    say "After you fix it, test again with:  computecoin-agent rental check"
+    say "If the only FAIL is the graphics card and this computer has none, that is expected: it can still offer rentals that need no card."
   fi
 }
 

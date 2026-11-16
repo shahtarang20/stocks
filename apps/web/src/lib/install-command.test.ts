@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildInstallCommand,
+  buildOneClickInstallCommand,
   buildUnattendedInstallCommand,
   isPlainToken,
   isPlainUrl,
@@ -104,3 +107,63 @@ describe("uninstallCommand", () => {
     expect(uninstallCommand(null)).toBeNull();
   });
 });
+
+describe("the optional rental word", () => {
+  it("adds --allow-rental to both lines only when asked, and never otherwise", () => {
+    const on = { origin: ORIGIN, server: SERVER, token: TOKEN, allowRental: true };
+    expect(buildInstallCommand(on)).toBe(`f=$(mktemp) && curl -fsSL ${ORIGIN}/install.sh -o "$f" && sudo sh "$f" --server ${SERVER} --allow-rental; rm -f "$f"`);
+    expect(buildUnattendedInstallCommand(on)).toBe(`curl -fsSL ${ORIGIN}/install.sh | sudo sh -s -- --token ${TOKEN} --server ${SERVER} --allow-rental`);
+    for (const allowRental of [false, undefined]) {
+      expect(buildInstallCommand({ origin: ORIGIN, server: SERVER, allowRental })).not.toContain("--allow-rental");
+      expect(buildUnattendedInstallCommand({ origin: ORIGIN, server: SERVER, token: TOKEN, allowRental })).not.toContain("--allow-rental");
+    }
+  });
+
+  it("puts the package address first and the rental word last, and still never puts the token in the pasted line", () => {
+    const cmd = buildInstallCommand({ origin: ORIGIN, server: SERVER, token: TOKEN, packageBase: "https://dl.example.com/agent", allowRental: true }) as string;
+    expect(cmd).toMatch(/--server https:\/\/api\.example\.com --package-base https:\/\/dl\.example\.com\/agent --allow-rental; rm -f "\$f"$/);
+    expect(cmd).not.toContain("enr_");
+  });
+
+  it("is a word the installer really has", () => {
+    const sh = readFileSync(fileURLToPath(new URL("../../public/install.sh", import.meta.url)), "utf8");
+    expect(sh).toContain("--allow-rental)");
+  });
+});
+
+describe("buildOneClickInstallCommand (the button's finished line)", () => {
+  it("carries the token in the shell, hands it to sudo through the environment, and cleans up", () => {
+    expect(buildOneClickInstallCommand({ origin: ORIGIN, server: SERVER, token: TOKEN })).toBe(
+      `export COMPUTECOIN_ENROLL_TOKEN='${TOKEN}'; f=$(mktemp) && curl -fsSL ${ORIGIN}/install.sh -o "$f" && ` +
+        `sudo --preserve-env=COMPUTECOIN_ENROLL_TOKEN sh "$f" --server ${SERVER}; rm -f "$f"; unset COMPUTECOIN_ENROLL_TOKEN`,
+    );
+  });
+
+  it("never puts the token after sudo or on the installer's own line (so it is not in a program's argument list)", () => {
+    const cmd = buildOneClickInstallCommand({ origin: ORIGIN, server: SERVER, token: TOKEN }) as string;
+    const afterSudo = cmd.slice(cmd.indexOf("sudo"));
+    expect(afterSudo).not.toContain(TOKEN);
+    expect(afterSudo).not.toContain("--token");
+    expect(cmd.indexOf(TOKEN)).toBeLessThan(cmd.indexOf("sudo"));
+  });
+
+  it("adds the package address and the rental word the same way the other lines do", () => {
+    const cmd = buildOneClickInstallCommand({ origin: ORIGIN, server: SERVER, token: TOKEN, packageBase: "https://dl.example.com/agent", allowRental: true }) as string;
+    expect(cmd).toContain(`--server ${SERVER} --package-base https://dl.example.com/agent --allow-rental; rm -f "$f"; unset`);
+    expect(buildOneClickInstallCommand({ origin: ORIGIN, server: SERVER, token: TOKEN })).not.toContain("--allow-rental");
+  });
+
+  it("is built only from a real token and plain addresses, never from anything that could break out of the quotes", () => {
+    for (const bad of [null, undefined, "", "enr_", "abc", "enr_abc'; rm -rf / #12345678", "enr_abcdefgh 12345678", "enr_abcdefgh\n12345678", "enr_$(id)12345678"]) {
+      expect(buildOneClickInstallCommand({ origin: ORIGIN, server: SERVER, token: bad }), String(bad)).toBeNull();
+    }
+    expect(buildOneClickInstallCommand({ origin: "ftp://x.com", server: SERVER, token: TOKEN })).toBeNull();
+    expect(buildOneClickInstallCommand({ origin: ORIGIN, server: "https://x.com;id", token: TOKEN })).toBeNull();
+  });
+
+  it("uses the variable name the installer really reads", () => {
+    const sh = readFileSync(fileURLToPath(new URL("../../public/install.sh", import.meta.url)), "utf8");
+    expect(sh).toContain('TOKEN="${COMPUTECOIN_ENROLL_TOKEN:-}"');
+  });
+});
+

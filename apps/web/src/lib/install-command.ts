@@ -32,6 +32,8 @@ export interface InstallCommandInput {
   token?: string | null;
   /** Where the agent package is published, when it is not the project's default release page. */
   packageBase?: string | null;
+  /** Also turn on container rental during the install (adds --allow-rental). Off unless the host ticks the box. */
+  allowRental?: boolean;
 }
 
 function baseParts(input: InstallCommandInput): { origin: string; server: string; extra: string } | null {
@@ -40,7 +42,7 @@ function baseParts(input: InstallCommandInput): { origin: string; server: string
   if (!isPlainUrl(origin) || !isPlainUrl(server)) return null;
   const base = input.packageBase ? trimSlash(input.packageBase) : "";
   if (base && !isPlainUrl(base)) return null;
-  return { origin, server, extra: base ? ` --package-base ${base}` : "" };
+  return { origin, server, extra: (base ? ` --package-base ${base}` : "") + (input.allowRental === true ? " --allow-rental" : "") };
 }
 
 /**
@@ -66,6 +68,21 @@ export function buildUnattendedInstallCommand(input: InstallCommandInput): strin
   if (!p) return null;
   const token = isPlainToken(input.token) ? input.token : TOKEN_PLACEHOLDER;
   return `curl -fsSL ${p.origin}/install.sh | sudo sh -s -- --token ${token} --server ${p.server}${p.extra}`;
+}
+
+/**
+ * One finished line for the "create the token and copy the line" button: it carries the token, so the installer asks nothing but the sudo
+ * password. The token is set inside the host's own shell (a shell built-in, so it is not in any program's argument list), handed to the
+ * installer through the environment with sudo's --preserve-env, and removed afterwards. It stays in that terminal's history, which is the cost
+ * of one paste; the token works once and expires. Null unless the token and both addresses are plain values the installer would accept.
+ */
+export function buildOneClickInstallCommand(input: InstallCommandInput): string | null {
+  const p = baseParts(input);
+  if (!p || !isPlainToken(input.token)) return null;
+  return (
+    `export COMPUTECOIN_ENROLL_TOKEN='${input.token}'; f=$(mktemp) && curl -fsSL ${p.origin}/install.sh -o "$f" && ` +
+    `sudo --preserve-env=COMPUTECOIN_ENROLL_TOKEN sh "$f" --server ${p.server}${p.extra}; rm -f "$f"; unset COMPUTECOIN_ENROLL_TOKEN`
+  );
 }
 
 export function uninstallCommand(origin: string | null | undefined): string | null {

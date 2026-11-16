@@ -21,12 +21,15 @@ import { formatBytes, formatMbAsGb } from "@/lib/utils";
 import {
   EGRESS_CHOICES,
   EMPTY_FORM,
+  QUICK_FILLS,
   RENTAL_ACCEPT_LABEL,
   RENTAL_LIMITS,
   RENTAL_WARNING_POINTS,
+  applyQuickFill,
   buildRentalRequest,
   CPU_ONLY_NOTE,
   gpuChoiceLabel,
+  filesProblemText,
   holdEstimate,
   inputProblems,
   priceBelow,
@@ -90,7 +93,8 @@ export default function RentPage() {
     queryKey: ["rent", "files"],
     enabled: Boolean(accessToken),
     queryFn: () => dataApi.listFiles(token, { limit: 100 }),
-    retry: (n, err) => !isDataPlaneDisabled(err) && n < 2,
+    // A refusal (not signed in, email not confirmed) will not change by asking again.
+    retry: (n, err) => !isDataPlaneDisabled(err) && !(err instanceof ApiError && (err.status === 401 || err.status === 403)) && n < 2,
   });
 
   // Every ready-made template opens JupyterLab, so none is offered while the browser cannot open one.
@@ -331,6 +335,30 @@ export default function RentPage() {
               </div>
             ) : (
               <div className="space-y-4">
+                <div className="space-y-1.5" role="group" aria-labelledby="quickfill-l">
+                  <p id="quickfill-l" className="text-sm font-medium">Quick fill (or type your own below)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {QUICK_FILLS.map((q) => (
+                      <Button
+                        key={q.id}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={q.appKind === "web" && !WEB_VIEW}
+                        aria-describedby={`quickfill-${q.id}-d`}
+                        onClick={() => setForm((f) => applyQuickFill(f, q))}
+                      >
+                        {q.label}
+                      </Button>
+                    ))}
+                  </div>
+                  {QUICK_FILLS.map((q) => (
+                    <p key={q.id} id={`quickfill-${q.id}-d`} className="text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">{q.label}:</span> {q.help}
+                      {q.appKind === "web" && !WEB_VIEW ? " Not available here: the session web address is not switched on." : ""}
+                    </p>
+                  ))}
+                </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="image">Image address</Label>
                   <Input
@@ -462,7 +490,9 @@ export default function RentPage() {
             ) : filesQuery.isLoading ? (
               <p className="text-sm text-muted-foreground">Loading your files…</p>
             ) : filesQuery.isError ? (
-              <p role="alert" className="text-sm text-danger">We could not load your files. You can still start the rental without them.</p>
+              <p role="alert" className="text-sm text-danger">
+                {filesProblemText(apiErrorCode(filesQuery.error), filesQuery.error instanceof ApiError ? filesQuery.error.status : undefined)}
+              </p>
             ) : files.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 You have no stored files yet. Upload a dataset on the Kits page first, and it will appear here. You can also download data from inside the rental if you allow the internet choices below.

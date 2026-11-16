@@ -70,4 +70,37 @@ describe("Rent page: graphics cards", () => {
     expect(screen.getByLabelText("A ready-made template")).toBeTruthy();
     expect(screen.getByRole("checkbox", { name: /I understand/i })).toBeTruthy();
   });
+
+  it("fills the form from the Python terminal button, and the Jupyter button explains why it is off here", () => {
+    renderPage();
+    const python = screen.getByRole("button", { name: "Python terminal" });
+    const jupyter = screen.getByRole("button", { name: "Jupyter web page" }) as HTMLButtonElement;
+    expect(jupyter.disabled).toBe(true); // no session web address in the test setup
+    expect(document.body.textContent).toMatch(/session web address is not switched on/);
+    fireEvent.click(python);
+    expect((screen.getByLabelText("Image address") as HTMLInputElement).value).toMatch(/^docker\.io\/library\/python@sha256:[0-9a-f]{64}$/);
+    expect((screen.getByLabelText("Start command (optional)") as HTMLInputElement).value).toBe("/bin/bash");
+    expect((screen.getByLabelText("Graphics cards") as HTMLSelectElement).value).toBe("0");
+    expect((screen.getByLabelText(/A terminal/) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("still lets the customer type the image address by hand", () => {
+    renderPage();
+    const box = screen.getByLabelText("Image address") as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "ghcr.io/acme/x@sha256:" + "a".repeat(64) } });
+    expect(box.value).toBe("ghcr.io/acme/x@sha256:" + "a".repeat(64));
+  });
+
+  it("tells an unconfirmed account to confirm its email, instead of a vague error", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/data/files")) {
+        return Promise.resolve(new Response(JSON.stringify({ detail: "email_not_verified" }), { status: 403, headers: { "Content-Type": "application/json" } }));
+      }
+      return new Promise(() => {});
+    }));
+    renderPage();
+    expect(await screen.findByText(/Please confirm your email address to bring in your files/)).toBeTruthy();
+    expect(document.body.textContent).toMatch(/You can still start the rental without them\./);
+  });
 });

@@ -363,9 +363,11 @@ encrypted relay. You pay per second while it is active, the same way as any sess
 * **Results out.** Put finished files in `/workspace/results`. They are saved to your storage automatically every few minutes, when you press **Save results now**,
   and when the rental ends, so if the host's computer dies you lose at most the last few minutes. Saved files appear on the session page and in your stored files.
 * **Internet.** Off by default. Tick only the package sites you need (for example pip).
-* **Custom images.** Public images only, from Docker Hub, ghcr.io, nvcr.io or quay.io, pinned by `@sha256:` digest.
+* **Custom images.** Public images only, from Docker Hub, ghcr.io, nvcr.io or quay.io, pinned by `@sha256:` digest. Under "My own image", the **Quick fill** buttons (**Python terminal** and **Jupyter web page**) fill in a ready example with one click: the pinned image address, how to use it, the port and the command. You can change any box afterwards, or type your own address as before.
 * **The warning.** The host can see your files and processes. This is for non-sensitive work: do not use it for secrets, private models you
   cannot afford to expose, or personal data such as face images of real people without a legal basis. For that, use Kits, sandboxed hosts or the private tiers.
+
+The guide at the top of **Rent a GPU** is written for every kind of customer, from someone who has never used a terminal to a team that brings its own image. It asks "Which one are you?", gives the steps, a worked cost example (at 1.00 an hour a 30-minute limit sets aside about 0.50 plus the fee), what to have ready, your first five minutes (wait for Active, open it, try one small command, keep files in `/workspace/results`, press Save results now, stop), how to get the address of your own image (`docker buildx imagetools inspect <image>:<tag>`, then write it as `docker.io/library/<name>@sha256:…`), what it is and is not good for, a list of common problems, and a folded "For teams and heavy use" section with the limits (up to 8 graphics cards, 256 GB memory, 64 cores, 100 GB workspace, 24 hours, 3 rentals at once, 16 input files).
 
 Container rental is **off by default** on the platform and must also be on for the host. Nothing here has been run on a real GPU yet; see
 [container-rental-runbook.md](operations/container-rental-runbook.md).
@@ -566,6 +568,13 @@ sites, and only a private work folder it can write to, which is deleted at the e
 and is stopped if the card overheats, your disk runs low, you pause the agent, you start using the computer, or its processes look like a cryptocurrency
 miner. While a rental runs the computer takes no normal job, and the other way round. A locked container is strong protection but not a perfect wall:
 use a computer that holds nothing you could not afford to lose. Windows hosts cannot enable this.
+
+The on-screen guide is written for every kind of host, from a gaming laptop at home to a data centre: it explains how a host earns, asks "Which one are you?",
+lists what the computer needs (the normal Docker Engine, not Docker Desktop; a computer with no graphics card can still offer rentals that need none, and its
+`rental check` shows one expected FAIL for the card), gives the steps including setting a price and going Online, how to tell it works, how to look after a
+home computer (sleep, heat and noise, being busy), the risks, a short "if something does not work" list, and a collapsed "For data centres and many computers"
+section (the `--allow-rental` install, the `rental_max_workspace_gb`, `rental_max_memory_gb`, `rental_max_cpus` and `rental_root` settings, disk planning,
+outbound-only networking and checking agent versions).
 
 ---
 

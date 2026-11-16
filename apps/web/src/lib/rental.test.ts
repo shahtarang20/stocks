@@ -31,6 +31,22 @@ import {
   type RentalForm,
   CPU_ONLY_NOTE,
   gpuChoiceLabel,
+  QUICK_FILLS,
+  applyQuickFill,
+  filesProblemText,
+  HOST_RENTAL_CARE,
+  HOST_RENTAL_DATACENTRE,
+  HOST_RENTAL_EARN,
+  HOST_RENTAL_NO_CARD,
+  HOST_RENTAL_TROUBLE,
+  HOST_RENTAL_WHO,
+  HOST_RENTAL_WORKING,
+  RENTAL_DEFAULTS,
+  CUSTOMER_RENTAL_COST,
+  CUSTOMER_RENTAL_FIRST,
+  CUSTOMER_RENTAL_IMAGE_HELP,
+  CUSTOMER_RENTAL_TEAMS,
+  CUSTOMER_RENTAL_WHO,
 } from "./rental";
 import type { RentalTemplate } from "./sessions";
 
@@ -670,5 +686,169 @@ describe("renting with no graphics card (CPU only)", () => {
 
   it("mentions the 0 choice in the how-it-works guide", () => {
     expect(CUSTOMER_RENTAL_STEPS.map((x) => x.text).join(" ")).toMatch(/0 means processor and memory only/);
+  });
+});
+
+
+describe("one-click examples for your own image", () => {
+  const python = QUICK_FILLS.find((q) => q.id === "python-terminal")!;
+  const jupyter = QUICK_FILLS.find((q) => q.id === "jupyter-web")!;
+  const start: RentalForm = { ...EMPTY_FORM, source: "template", template: "pytorch-jupyter", accepted: true, machineId: "", gpuCount: "2" };
+
+  it("offers a Python terminal and a Jupyter web page, and nothing else", () => {
+    expect(QUICK_FILLS.map((q) => q.id)).toEqual(["python-terminal", "jupyter-web"]);
+  });
+
+  it("switches to your own image and fills the image, how to use it, the port and the command", () => {
+    const f = applyQuickFill(start, python);
+    expect(f).toMatchObject({ source: "image", template: "", image: python.image, appKind: "terminal", port: "", command: "/bin/bash" });
+    const g = applyQuickFill(start, jupyter);
+    expect(g).toMatchObject({ source: "image", template: "", image: jupyter.image, appKind: "web", port: "8888", command: "" });
+  });
+
+  it("sets graphics cards to 0 only for the example that needs no card", () => {
+    expect(applyQuickFill(start, python).gpuCount).toBe("0");
+    expect(applyQuickFill(start, jupyter).gpuCount).toBe("2"); // the customer's own choice is kept
+  });
+
+  it("leaves everything else the customer chose alone", () => {
+    const f = applyQuickFill({ ...start, memoryGb: "7", cpus: "3", maxPrice: "0.40", egress: ["pip"] }, python);
+    expect(f).toMatchObject({ memoryGb: "7", cpus: "3", maxPrice: "0.40", egress: ["pip"], accepted: true });
+  });
+
+  it("builds a valid request straight from each example, as a terminal and as a web program", () => {
+    const t = buildRentalRequest(applyQuickFill(start, python), TEMPLATES);
+    expect(t.ok).toBe(true);
+    if (t.ok) expect(t.body).toMatchObject({ image_digest: python.image, mode: "pty", command: ["/bin/bash"], gpu_count: 0 });
+    const w = buildRentalRequest(applyQuickFill(start, jupyter), TEMPLATES);
+    expect(w.ok).toBe(true);
+    if (w.ok) expect(w.body).toMatchObject({ image_digest: jupyter.image, mode: "tcp", tcp_port: 8888 });
+  });
+
+  it("uses only pinned addresses from the registries the API allows", () => {
+    for (const q of QUICK_FILLS) {
+      expect(q.image, q.id).toMatch(/^[a-z0-9.-]+\/[\w./-]+@sha256:[0-9a-f]{64}$/);
+      expect(["docker.io", "ghcr.io", "nvcr.io", "quay.io"], q.id).toContain(q.image.split("/")[0]);
+    }
+  });
+
+  it("uses the same Jupyter image the API offers as a template", () => {
+    const templates = JSON.parse(repo("apps/api/app/data/rental_templates.json")).templates as { slug: string; digest: string }[];
+    expect(templates.find((t) => t.slug === "pytorch-jupyter")?.digest).toBe(jupyter.image);
+  });
+});
+
+
+describe("the files box when the list cannot be loaded", () => {
+  it("says to confirm the email when that is the reason", () => {
+    expect(filesProblemText("email_not_verified", 403)).toMatch(/confirm your email address to bring in your files/);
+  });
+  it("says to sign in again when the session ended, and keeps the plain message otherwise", () => {
+    expect(filesProblemText(null, 401)).toMatch(/sign in again/);
+    expect(filesProblemText(null, 500)).toBe("We could not load your files. You can still start the rental without them.");
+    expect(filesProblemText(null)).toBe("We could not load your files. You can still start the rental without them.");
+  });
+  it("always tells the customer the rental can start without files", () => {
+    for (const [code, status] of [["email_not_verified", 403], [null, 401], [null, 500]] as const) {
+      expect(filesProblemText(code, status)).toMatch(/You can still start the rental without them\.$/);
+    }
+  });
+});
+
+
+describe("the host guide for every kind of host", () => {
+  it("has real, different content in each new list", () => {
+    const lists: string[][] = [
+      HOST_RENTAL_WHO.map((w) => `${w.lead} ${w.text}`),
+      HOST_RENTAL_CARE,
+      HOST_RENTAL_WORKING,
+      HOST_RENTAL_TROUBLE.map((t) => `${t.problem} ${t.fix}`),
+      HOST_RENTAL_DATACENTRE.map((d) => `${d.lead} ${d.text}`),
+    ];
+    for (const list of lists) {
+      expect(list.length).toBeGreaterThan(1);
+      expect(new Set(list).size).toBe(list.length);
+      for (const t of list) expect(t.trim().length).toBeGreaterThan(20);
+    }
+    expect(HOST_RENTAL_EARN.length).toBeGreaterThan(40);
+    expect(HOST_RENTAL_NO_CARD.length).toBeGreaterThan(40);
+  });
+
+  it("names only agent settings that really exist", () => {
+    const config = repo("provider-agent/computecoin_agent/config.py");
+    const text = HOST_RENTAL_DATACENTRE.map((d) => d.text).join(" ");
+    for (const name of ["rental_max_workspace_gb", "rental_max_memory_gb", "rental_max_cpus", "rental_root"]) {
+      expect(text, name).toContain(name);
+      expect(config, name).toMatch(new RegExp(`\\b${name}\\b`));
+    }
+    expect(config).toMatch(/rental_max_workspace_gb: int = 50\b/);
+    expect(text).toContain("agent.toml");
+  });
+
+  it("only mentions the agent options and commands that exist", () => {
+    const text = HOST_RENTAL_DATACENTRE.map((d) => d.text).join(" ");
+    expect(text).toContain("--allow-rental");
+    expect(repo("apps/web/public/install.sh")).toContain("--allow-rental");
+    expect(text).toContain("rental check --image");
+    expect(repo("provider-agent/computecoin_agent/cli.py")).toMatch(/"--image"/);
+  });
+
+  it("states the facts the platform really uses: the 10-minute wait, the default most-you-pay, and 0-card rentals not blocking jobs", () => {
+    const trouble = HOST_RENTAL_TROUBLE.map((t) => t.fix).join(" ");
+    expect(trouble).toContain("10 minutes");
+    expect(repo("apps/api/app/services/sessions.py")).toMatch(/UNCLAIMED_SECONDS = 600\b/);
+    expect(trouble).toContain("1.00");
+    expect(RENTAL_DEFAULTS.maxPrice).toBe("1.00");
+    expect(HOST_RENTAL_DATACENTRE.map((d) => d.text).join(" ")).toMatch(/0 graphics cards does not block jobs/);
+    expect(repo("apps/api/tests/test_container_rental.py")).toContain("test_a_session_without_a_gpu_does_not_block_jobs");
+  });
+
+  it("uses the marketplace filter wording the Marketplace really shows", () => {
+    expect(HOST_RENTAL_WORKING.join(" ")).toContain("Only computers that allow container rental");
+    expect(repo("apps/web/src/app/(marketing)/marketplace/gpus/page.tsx")).toContain("Only computers that allow container rental");
+  });
+});
+
+
+describe("the customer guide for every kind of customer", () => {
+  it("has real, different content in each new list", () => {
+    const lists: string[][] = [
+      CUSTOMER_RENTAL_WHO.map((w) => `${w.lead} ${w.text}`),
+      CUSTOMER_RENTAL_FIRST.map((w) => `${w.lead} ${w.text}`),
+      CUSTOMER_RENTAL_IMAGE_HELP.map((w) => `${w.lead} ${w.text}`),
+      CUSTOMER_RENTAL_TEAMS.map((w) => `${w.lead} ${w.text}`),
+    ];
+    for (const list of lists) {
+      expect(list.length).toBeGreaterThan(1);
+      expect(new Set(list).size).toBe(list.length);
+      for (const t of list) expect(t.trim().length).toBeGreaterThan(20);
+    }
+    expect(CUSTOMER_RENTAL_COST.length).toBeGreaterThan(100);
+  });
+
+  it("states the limits the form and the API really have", () => {
+    const text = CUSTOMER_RENTAL_TEAMS.map((t) => t.text).join(" ");
+    expect(text).toContain(`up to ${RENTAL_LIMITS.maxGpus} graphics cards`);
+    expect(text).toContain(`${RENTAL_LIMITS.maxMemoryMb / 1024} GB of memory`);
+    expect(text).toContain(`${RENTAL_LIMITS.maxCpus} processor cores`);
+    expect(text).toContain(`${RENTAL_LIMITS.maxWorkspaceGb} GB workspace`);
+    expect(text).toContain(`${RENTAL_LIMITS.maxSeconds / 3600} hours`);
+    expect(text).toContain(`up to ${RENTAL_LIMITS.maxInputs} files`);
+    const config = repo("apps/api/app/core/config.py");
+    expect(config).toMatch(/SESSIONS_MAX_LIVE_PER_USER: int = 3\b/);
+    expect(text).toContain("At most 3 rentals can run at once");
+    expect(config).toMatch(new RegExp(`RENTAL_MAX_INPUTS: int = ${RENTAL_LIMITS.maxInputs}\\b`));
+  });
+
+  it("names the registries the API allows and the Quick fill buttons the page really has", () => {
+    const help = CUSTOMER_RENTAL_IMAGE_HELP.map((t) => t.text).join(" ");
+    for (const r of ["Docker Hub", "ghcr.io", "nvcr.io", "quay.io"]) expect(help).toContain(r);
+    for (const q of QUICK_FILLS) expect(`${CUSTOMER_RENTAL_STEPS.map((s) => s.text).join(" ")} ${CUSTOMER_RENTAL_WHO.map((w) => w.text).join(" ")}`).toContain(q.label);
+  });
+
+  it("gives an example price that matches how the hold is worked out", () => {
+    // 1.00 an hour for 30 minutes sets aside 0.50 before the platform fee
+    expect(CUSTOMER_RENTAL_COST).toContain("about 0.50 plus the fee");
+    expect(Number(RENTAL_DEFAULTS.maxPrice) * (30 / 60)).toBe(0.5);
   });
 });

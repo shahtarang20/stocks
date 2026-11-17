@@ -282,7 +282,7 @@ async def create_session(
         memory_mb, cpus = _rental_limits(workspace_gb, memory_mb, cpus)
         if machine_id is not None:
             try:
-                await rental_svc.check_target_machine(db, machine_id, require_flag=True, needs_egress=bool(network_policy))
+                await rental_svc.check_target_machine(db, machine_id, require_flag=True, needs_egress=bool(network_policy), gpu_count=gpu_count)
             except rental_svc.RentalError as exc:
                 raise SessionError(exc.code, exc.status) from exc
         try:
@@ -299,7 +299,7 @@ async def create_session(
             raise SessionError("rental_fields_require_rental")
         if machine_id is not None:
             try:
-                await rental_svc.check_target_machine(db, machine_id, require_flag=False)
+                await rental_svc.check_target_machine(db, machine_id, require_flag=False, rental=False)
             except rental_svc.RentalError as exc:
                 raise SessionError(exc.code, exc.status) from exc
     policy = validate_request(
@@ -367,15 +367,21 @@ async def claim_next(db: AsyncSession, machine, *, host_pubkey: str, machine_gpu
     stmt = select(ComputeSession).where(ComputeSession.status == SESSION_PENDING)
     # A session the customer aimed at one machine is only that machine's; a rental only goes to a host that opted in.
     stmt = stmt.where(or_(ComputeSession.requested_machine_id.is_(None), ComputeSession.requested_machine_id == machine.id))
-    if "container_rental" not in host_capabilities(machine).flags:
+    caps = host_capabilities(machine)
+    if "container_rental" not in caps.flags:
         stmt = stmt.where(ComputeSession.rental.is_(False))
+    if caps.is_windows:
+        # A Windows host runs customers' own containers inside its managed Linux system and nothing else: never a Kit session.
+        stmt = stmt.where(ComputeSession.rental.is_(True))
     rows = (await db.execute(stmt.order_by(ComputeSession.created_at).limit(20))).scalars().all()
-    can_filter = "egress_proxy" in host_capabilities(machine).flags
+    can_filter = "egress_proxy" in caps.flags
     rate_ask = machine.asking_price_per_hour
     job_running: bool | None = None
     for row in rows:
         if row.gpu_count > machine_gpus:
             continue
+        if caps.is_windows and row.gpu_count > 1:
+            continue  # a Windows host's Linux system sees one card (Docker there supports only `--gpus all`)
         if not can_filter and (row.network_policy or {}).get("egress"):
             continue  # a host with no network-filter proxy cannot start it (it refuses rather than widen the network)
         if row.gpu_count > 0:

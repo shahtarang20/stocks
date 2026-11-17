@@ -208,7 +208,9 @@ def relay_misconfigured() -> bool:
 
 
 # --------------------------------------------------------------------------- database checks
-async def check_target_machine(db: AsyncSession, machine_id: uuid.UUID, *, require_flag: bool, needs_egress: bool = False):
+async def check_target_machine(
+    db: AsyncSession, machine_id: uuid.UUID, *, require_flag: bool, needs_egress: bool = False, gpu_count: int = 0, rental: bool = True,
+):
     """The machine a customer picked. Raises ``machine_not_available_for_rental`` unless it is usable now, and
     ``machine_cannot_filter_network`` when the rental asks for internet sites and this host has no network-filter proxy configured
     (it could not start the container without widening the network, so it is refused up front)."""
@@ -223,7 +225,15 @@ async def check_target_machine(db: AsyncSession, machine_id: uuid.UUID, *, requi
         raise RentalError("machine_not_available_for_rental")
     if await blocked_provider_ids(db, {machine.provider_id}):
         raise RentalError("machine_not_available_for_rental")
-    flags = host_capabilities(machine).flags
+    caps = host_capabilities(machine)
+    flags = caps.flags
+    if caps.is_windows:
+        # A Windows host runs customers' own containers inside a WSL 2 Linux system and nothing else: never a Kit session, and one card
+        # at a time (NVIDIA's CUDA-on-WSL guide: Docker there supports only `--gpus all`, and the Linux system sees one GPU).
+        if not rental:
+            raise RentalError("windows_host_takes_rentals_only")
+        if gpu_count > 1:
+            raise RentalError("windows_host_offers_one_gpu")
     if require_flag and "container_rental" not in flags:
         raise RentalError("machine_not_available_for_rental")
     if needs_egress and "egress_proxy" not in flags:

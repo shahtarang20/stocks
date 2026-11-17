@@ -524,6 +524,14 @@ class Settings(BaseSettings):
     # Container rental (docs/architecture/RENTAL-container-rental-design.md): a renter runs their own image or a template on a
     # host that opted in. OFF by default; the owner turns it on.
     CONTAINER_RENTAL_ENABLED: bool = False
+    # EXPERIMENTAL. Lets a Windows host (its agent runs customers' containers inside a managed WSL2 Linux system) offer container
+    # rental. Off by default: while off a Windows host never keeps the container_rental flag. It needs CONTAINER_RENTAL_ENABLED too, and
+    # the host's own opt-in. A Windows host only ever takes rentals (never Kit sessions).
+    WINDOWS_RENTAL_ENABLED: bool = False
+    # A PILOT list for the experimental Windows rental: comma-separated machine ids that may offer it while WINDOWS_RENTAL_ENABLED is off, so a first
+    # real Windows PC can be tried without opening it to every Windows host. Anything that is not a machine id is ignored. Needs CONTAINER_RENTAL_ENABLED
+    # and the host's own opt-in too.
+    WINDOWS_RENTAL_MACHINE_IDS: str = ""
     RENTAL_ALLOWED_REGISTRIES: str = "docker.io,ghcr.io,nvcr.io,quay.io"
     # Hosts a rental may reach (through the egress proxy). Default is package and model hosting only; no network otherwise.
     RENTAL_EGRESS_ALLOWLIST: str = (

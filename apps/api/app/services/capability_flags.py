@@ -58,6 +58,35 @@ WINDOWS_FORBIDDEN_FLAGS: frozenset[str] = frozenset(
 PRIVATE_TIERS = ("sealed", "sealed_pro", "confidential")
 
 
+def windows_pilot_machine_ids() -> frozenset[str]:
+    """The machine ids in ``WINDOWS_RENTAL_MACHINE_IDS``, lower-cased and normalised. Anything that is not a UUID is ignored (never an error)."""
+    import uuid
+
+    from app.core.config import settings
+
+    raw = getattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", "")
+    out: set[str] = set()
+    for part in (raw if isinstance(raw, str) else "").split(","):
+        try:
+            out.add(str(uuid.UUID(part.strip())))
+        except (ValueError, AttributeError):
+            continue
+    return frozenset(out)
+
+
+def windows_forbidden_flags(machine_id: Any = None) -> frozenset[str]:
+    """The flags a Windows host is never granted. ``container_rental`` is granted only while the platform switch ``WINDOWS_RENTAL_ENABLED`` is on
+    (experimental, off by default), or to a machine named in the pilot list ``WINDOWS_RENTAL_MACHINE_IDS``; every other flag stays forbidden
+    whatever either setting says."""
+    from app.core.config import settings
+
+    if getattr(settings, "WINDOWS_RENTAL_ENABLED", False) is True:
+        return WINDOWS_FORBIDDEN_FLAGS - {"container_rental"}
+    if machine_id is not None and str(machine_id).lower() in windows_pilot_machine_ids():
+        return WINDOWS_FORBIDDEN_FLAGS - {"container_rental"}
+    return WINDOWS_FORBIDDEN_FLAGS
+
+
 # --------------------------------------------------------------------------- sanitising (heartbeat input)
 def sanitize_capabilities(value: Any) -> list[str] | None:
     """Known flags only, de-duplicated, in ``KNOWN_FLAGS`` order. None stays None (absent); anything that is not a list
@@ -123,8 +152,14 @@ def host_capabilities(machine: Any) -> HostCapabilities:
     flags = frozenset(caps or [])
     os_name = platform.get("os")
     if os_name == "windows":
-        flags = flags - WINDOWS_FORBIDDEN_FLAGS
+        flags = flags - windows_forbidden_flags(getattr(machine, "id", None))
     return HostCapabilities(legacy=False, os=os_name, flags=flags, has_capabilities=bool(caps))
+
+
+def machine_host_os(machine: Any) -> str | None:
+    """``"linux"``, ``"windows"`` or None (a legacy agent that never said). Self-reported, so it is a LABEL for customers (a Windows
+    host can be less steady: the PC may sleep), never a proof of anything."""
+    return host_capabilities(machine).os
 
 
 def machine_offers_rental(machine: Any) -> bool:
@@ -214,7 +249,8 @@ def machine_platform_view(machine: Any) -> tuple[dict[str, str] | None, list[str
     platform = sanitize_platform(health.get("platform"))
     caps = sanitize_capabilities(health.get("capabilities")) if platform is not None else None
     if platform is not None and platform.get("os") == "windows" and caps is not None:
-        caps = [c for c in caps if c not in WINDOWS_FORBIDDEN_FLAGS]
+        forbidden = windows_forbidden_flags(getattr(machine, "id", None))
+        caps = [c for c in caps if c not in forbidden]
     return platform, caps
 
 

@@ -44,7 +44,7 @@ from app.schemas.marketplace import (
     ReliabilityOut,
     money_str,
 )
-from app.services.capability_flags import machine_host_kind, machine_offers_rental
+from app.services.capability_flags import machine_host_kind, machine_host_os, machine_offers_rental
 from app.services.provider import derive_status
 
 # Per-machine in-process locks (see module docstring on SQLite vs Postgres).
@@ -197,6 +197,7 @@ def shape_marketplace_machine(
         reliability=ReliabilityOut(completed_jobs=0, success_rate=None),
         last_heartbeat_at=ensure_aware(machine.last_heartbeat_at),
         host_kind=machine_host_kind(machine),
+        host_os=machine_host_os(machine),
         container_rental=machine_offers_rental(machine),
     )
 

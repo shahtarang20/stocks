@@ -929,6 +929,266 @@ def test_the_flag_is_known_and_a_windows_host_never_keeps_it():
     assert "container_rental" not in host_capabilities(M()).flags and "container_tier" in host_capabilities(M()).flags
 
 
+# ---- Windows hosts (experimental, behind WINDOWS_RENTAL_ENABLED) -------------------------------------------------------------
+def _windows_machine(caps):
+    class M:
+        last_health = {"platform": {"os": "windows"}, "capabilities": caps}
+
+    return M()
+
+
+def test_a_windows_host_keeps_the_rental_flag_only_while_the_windows_switch_is_on(monkeypatch):
+    from app.core.config import settings
+    from app.services.capability_flags import host_capabilities, machine_platform_view
+
+    m = _windows_machine(["container_rental", "container_tier"])
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    assert "container_rental" not in host_capabilities(m).flags
+    assert "container_rental" not in (machine_platform_view(m)[1] or [])
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    assert "container_rental" in host_capabilities(m).flags and "container_tier" in host_capabilities(m).flags
+    assert "container_rental" in (machine_platform_view(m)[1] or [])
+
+
+def test_the_windows_switch_frees_only_the_rental_flag_never_a_private_tier_or_gvisor(monkeypatch):
+    from app.core.config import settings
+    from app.services.capability_flags import WINDOWS_FORBIDDEN_FLAGS, host_capabilities, windows_forbidden_flags
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    assert windows_forbidden_flags() == WINDOWS_FORBIDDEN_FLAGS - {"container_rental"}
+    others = ["gvisor", "microvm", "sealed", "sealed_pro", "confidential", "vfio_gpu", "multi_node", "amd_rocm"]
+    m = _windows_machine(["container_rental", *others])
+    assert host_capabilities(m).flags == frozenset({"container_rental"})
+
+
+def test_a_truthy_look_alike_does_not_turn_the_windows_switch_on(monkeypatch):
+    from app.core.config import settings
+    from app.services.capability_flags import windows_forbidden_flags, WINDOWS_FORBIDDEN_FLAGS
+
+    for look_alike in ("true", 1, "1", None):
+        monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", look_alike)
+        assert windows_forbidden_flags() == WINDOWS_FORBIDDEN_FLAGS
+
+
+def test_a_linux_host_is_not_affected_by_the_windows_switch(monkeypatch):
+    from app.core.config import settings
+    from app.services.capability_flags import host_capabilities
+
+    class M:
+        last_health = {"platform": {"os": "linux"}, "capabilities": ["container_rental", "container_tier"]}
+
+    for v in (True, False):
+        monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", v)
+        assert host_capabilities(M()).flags == frozenset({"container_rental", "container_tier"})
+
+
+async def test_a_windows_host_with_the_switch_on_is_handed_a_rental(client, rental_on, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    m = await _machine(client, "rt-win1-host@example.com", hostname="win1")
+    await _set_flags(m["machine_id"], True, os_name="windows")
+    h = await _login(client, "rt-win1@example.com")
+    sid = (await _create(client, h)).json()["id"]
+    got = await _claim_session(client, m)
+    assert got.status_code == 200 and got.json()["session"]["id"] == sid and got.json()["session"]["rental"] is True
+
+
+async def test_a_windows_host_with_the_switch_off_is_never_handed_a_rental(client, rental_on, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    m = await _machine(client, "rt-win2-host@example.com", hostname="win2")
+    await _set_flags(m["machine_id"], True, os_name="windows")
+    h = await _login(client, "rt-win2@example.com")
+    await _create(client, h)
+    assert (await _claim_session(client, m)).json() == {"session": None}
+
+
+async def test_a_windows_host_is_never_handed_a_kit_session_even_with_the_switch_on(client, rental_on, monkeypatch):
+    from app.core.config import settings
+    from tests.test_sessions_routes import _kit
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    m = await _machine(client, "rt-win3-host@example.com", hostname="win3")
+    await _set_flags(m["machine_id"], True, os_name="windows")
+    h = await _login(client, "rt-win3@example.com")
+    r = await client.post("/v1/sessions", headers=h, json={"kit_ref": await _kit(), "max_price_per_gpu_hour": "2.00", "client_pubkey": PUBKEY})
+    assert r.status_code == 201
+    assert (await _claim_session(client, m)).json() == {"session": None}  # a Kit session is for Linux hosts only
+    linux = await _machine(client, "rt-win3-linux@example.com", opted_in=False, hostname="win3-linux")
+    assert (await _claim_session(client, linux)).json()["session"]["id"] == r.json()["id"]  # and a Linux host still gets it
+
+
+async def test_a_windows_host_gets_the_rental_and_leaves_a_kit_session_for_a_linux_host(client, rental_on, monkeypatch):
+    from app.core.config import settings
+    from tests.test_sessions_routes import _kit
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win4-win@example.com", hostname="win4")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    h = await _login(client, "rt-win4@example.com")
+    kit_id = (await client.post("/v1/sessions", headers=h, json={"kit_ref": await _kit(), "max_price_per_gpu_hour": "2.00", "client_pubkey": PUBKEY})).json()["id"]
+    rental_id = (await _create(client, h)).json()["id"]
+    got = (await _claim_session(client, win)).json()["session"]
+    assert got["id"] == rental_id and got["rental"] is True  # the older Kit session was skipped for the Windows host
+    assert (await _row(kit_id)).status == "pending"
+
+
+async def test_the_marketplace_labels_a_windows_host_and_offers_its_rental_only_with_the_switch_on(client, rental_on, monkeypatch):
+    from app.core.config import settings
+
+    win = await _machine(client, "rt-mkt-win@example.com", hostname="mkt-win")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    lin = await _machine(client, "rt-mkt-lin@example.com", hostname="mkt-lin")
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    items = {i["machine_id"]: i for i in (await client.get("/v1/marketplace/machines")).json()["items"]}
+    assert items[win["machine_id"]]["host_os"] == "windows" and items[win["machine_id"]]["container_rental"] is False
+    assert items[lin["machine_id"]]["host_os"] == "linux" and items[lin["machine_id"]]["container_rental"] is True
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    items = {i["machine_id"]: i for i in (await client.get("/v1/marketplace/machines")).json()["items"]}
+    assert items[win["machine_id"]]["host_os"] == "windows" and items[win["machine_id"]]["container_rental"] is True
+    only = (await client.get("/v1/marketplace/machines", params={"container_rental": "true"})).json()["items"]
+    assert {i["machine_id"] for i in only} == {win["machine_id"], lin["machine_id"]}
+
+
+async def _set_gpu_count(machine_id, n):
+    from app.models.provider import HardwareInventory
+
+    async with get_sessionmaker()() as db:
+        hw = (await db.execute(select(HardwareInventory).where(HardwareInventory.machine_id == uuid.UUID(machine_id)))).scalar_one()
+        hw.gpu_count = n
+        await db.commit()
+
+
+async def test_a_rental_aimed_at_a_windows_host_may_ask_for_at_most_one_card(client, rental_on, monkeypatch):
+    """NVIDIA's CUDA-on-WSL guide: Docker in WSL 2 supports only `--gpus all`, and the Linux system sees one GPU."""
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win5-host@example.com", hostname="win5")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    await _set_gpu_count(win["machine_id"], 4)
+    h = await _login(client, "rt-win5@example.com")
+    two = await _create(client, h, machine_id=win["machine_id"], gpu_count=2)
+    assert two.status_code == 422 and two.json()["detail"] == "windows_host_offers_one_gpu"
+    for n in (0, 1):
+        assert (await _create(client, h, machine_id=win["machine_id"], gpu_count=n)).status_code == 201, n
+
+
+async def test_a_linux_host_still_takes_a_rental_for_several_cards(client, rental_on):
+    lin = await _machine(client, "rt-win6-host@example.com", hostname="win6")
+    await _set_gpu_count(lin["machine_id"], 4)
+    h = await _login(client, "rt-win6@example.com")
+    assert (await _create(client, h, machine_id=lin["machine_id"], gpu_count=2)).status_code == 201
+
+
+async def test_a_windows_host_is_never_given_a_multi_card_rental_even_when_none_was_aimed_at_it(client, rental_on, monkeypatch):
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win7-win@example.com", hostname="win7")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    await _set_gpu_count(win["machine_id"], 4)
+    lin = await _machine(client, "rt-win7-lin@example.com", hostname="win7-lin")
+    await _set_gpu_count(lin["machine_id"], 4)
+    h = await _login(client, "rt-win7@example.com")
+    sid = (await _create(client, h, gpu_count=2)).json()["id"]
+    assert (await _claim_session(client, win)).json() == {"session": None}  # skipped for the Windows host
+    assert (await _claim_session(client, lin)).json()["session"]["id"] == sid  # a Linux host with enough cards takes it
+    one = (await _create(client, h, gpu_count=1)).json()["id"]
+    assert (await _claim_session(client, win)).json()["session"]["id"] == one  # and a one-card rental still goes to the Windows host
+
+
+async def test_a_kit_session_aimed_at_a_windows_host_is_refused_up_front_not_left_waiting(client, rental_on, monkeypatch):
+    from tests.test_sessions_routes import _kit
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win8-host@example.com", hostname="win8")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    h = await _login(client, "rt-win8@example.com")
+    r = await client.post("/v1/sessions", headers=h, json={"kit_ref": await _kit(), "max_price_per_gpu_hour": "2.00", "client_pubkey": PUBKEY,
+                                                           "machine_id": win["machine_id"]})
+    assert r.status_code == 422 and r.json()["detail"] == "windows_host_takes_rentals_only"
+
+
+# ---- the Windows pilot list (WINDOWS_RENTAL_MACHINE_IDS) ----------------------------------------------------------------------
+PILOT_A = "11111111-1111-4111-8111-111111111111"
+PILOT_B = "22222222-2222-4222-8222-222222222222"
+
+
+def _win_machine(machine_id, caps=("container_rental", "container_tier")):
+    class M:
+        last_health = {"platform": {"os": "windows"}, "capabilities": list(caps)}
+
+    m = M()
+    m.id = uuid.UUID(machine_id)
+    return m
+
+
+def test_a_pilot_machine_keeps_the_rental_flag_while_the_windows_switch_is_off_and_others_do_not(monkeypatch):
+    from app.services.capability_flags import host_capabilities, machine_platform_view
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", PILOT_A)
+    assert "container_rental" in host_capabilities(_win_machine(PILOT_A)).flags
+    assert "container_rental" in (machine_platform_view(_win_machine(PILOT_A))[1] or [])
+    assert "container_rental" not in host_capabilities(_win_machine(PILOT_B)).flags
+    assert "container_rental" not in (machine_platform_view(_win_machine(PILOT_B))[1] or [])
+
+
+def test_the_pilot_list_is_forgiving_about_spaces_and_case_and_ignores_junk(monkeypatch):
+    from app.services.capability_flags import host_capabilities, windows_pilot_machine_ids
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", f"  {PILOT_A.upper()} , not-an-id,, 12345 ;{PILOT_B}")
+    assert windows_pilot_machine_ids() == frozenset({PILOT_A})  # ";" is not a separator, so the second id is part of junk
+    assert "container_rental" in host_capabilities(_win_machine(PILOT_A)).flags
+    for bad in ("", "   ", ",,,", "abc", PILOT_A[:-1], PILOT_A + "0"):
+        monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", bad)
+        assert windows_pilot_machine_ids() == frozenset(), bad
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", None)
+    assert windows_pilot_machine_ids() == frozenset()  # never an error
+
+
+def test_the_pilot_list_frees_only_the_rental_flag_and_only_for_the_named_machine(monkeypatch):
+    from app.services.capability_flags import WINDOWS_FORBIDDEN_FLAGS, host_capabilities, windows_forbidden_flags
+
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", PILOT_A)
+    assert windows_forbidden_flags(PILOT_A) == WINDOWS_FORBIDDEN_FLAGS - {"container_rental"}
+    assert windows_forbidden_flags(PILOT_B) == WINDOWS_FORBIDDEN_FLAGS and windows_forbidden_flags() == WINDOWS_FORBIDDEN_FLAGS
+    others = ["gvisor", "microvm", "sealed", "sealed_pro", "confidential", "vfio_gpu", "multi_node", "amd_rocm"]
+    assert host_capabilities(_win_machine(PILOT_A, ["container_rental", *others])).flags == frozenset({"container_rental"})
+
+
+async def test_only_the_pilot_windows_machine_is_listed_and_handed_a_rental_while_the_switch_is_off(client, rental_on, monkeypatch):
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    pilot = await _machine(client, "rt-pil1-host@example.com", hostname="pil1")
+    other = await _machine(client, "rt-pil2-host@example.com", hostname="pil2")
+    for m in (pilot, other):
+        await _set_flags(m["machine_id"], True, os_name="windows")
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", f"junk, {pilot['machine_id']}")
+    items = {i["machine_id"]: i for i in (await client.get("/v1/marketplace/machines")).json()["items"]}
+    assert items[pilot["machine_id"]]["container_rental"] is True and items[pilot["machine_id"]]["host_os"] == "windows"
+    assert items[other["machine_id"]]["container_rental"] is False
+    h = await _login(client, "rt-pil@example.com")
+    sid = (await _create(client, h, machine_id=pilot["machine_id"])).json()["id"]
+    assert (await _create(client, h, machine_id=other["machine_id"])).status_code == 422  # not on the list: refused up front
+    got = (await _claim_session(client, pilot)).json()["session"]
+    assert got["id"] == sid and got["rental"] is True
+    assert (await _claim_session(client, other)).json() == {"session": None}
+
+
+async def test_the_pilot_machine_still_gets_one_card_and_never_a_kit_session(client, rental_on, monkeypatch):
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
+    pilot = await _machine(client, "rt-pil3-host@example.com", hostname="pil3")
+    await _set_flags(pilot["machine_id"], True, os_name="windows")
+    await _set_gpu_count(pilot["machine_id"], 4)
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", pilot["machine_id"])
+    h = await _login(client, "rt-pil3@example.com")
+    two = await _create(client, h, machine_id=pilot["machine_id"], gpu_count=2)
+    assert two.status_code == 422 and two.json()["detail"] == "windows_host_offers_one_gpu"
+    assert (await _create(client, h, machine_id=pilot["machine_id"], gpu_count=1)).status_code == 201
+
+
 # ---- pure helpers -----------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("image,expected", [
     ("ghcr.io/a/b@sha256:" + "0" * 64, "ghcr.io"), ("pytorch/pytorch@sha256:" + "0" * 64, "docker.io"),

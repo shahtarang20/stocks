@@ -261,7 +261,11 @@ def test_the_work_flag_says_so_when_there_is_no_usable_container_engine(monkeypa
 def test_the_work_command_has_the_flag_and_it_is_off_by_default():
     from typer.testing import CliRunner
 
-    out = CliRunner().invoke(cli.app, ["work", "--help"]).output
+    import re
+
+    # CI forces colour and a narrow width, which splits "--serve-rentals" with style codes and line breaks: ask for plain text, and strip any that remain.
+    out = CliRunner().invoke(cli.app, ["work", "--help"], env={"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"}).output
+    out = re.sub(r"\x1b\[[0-9;]*m", "", out)
     assert "--serve-rentals" in out and "EXPERIMENTAL" in out.upper()
 
 

@@ -19,6 +19,8 @@ is the existing per-GPU-second session billing. It is a second path beside Kits,
 | `RENTAL_EGRESS_ALLOWLIST` | same | optional; hosts a rental may reach (default: Python packages, PyTorch, Hugging Face, GitHub, Conda) |
 | `SESSIONS_RELAY_BACKEND` | same | **`redis`** (the API runs more than one worker; the in-memory relay breaks with two). If rental is on, the API has more than one worker and this is not `redis`, it logs an error at start and **refuses new rentals** (`session_relay_not_ready`) instead of starting ones nobody can connect to |
 | `STREAM_RELAY_BACKEND` | same | `redis` (same reason, for streamed model output) |
+| `WINDOWS_RENTAL_ENABLED` | same | **EXPERIMENTAL**, default `false`. `true` lets a Windows host keep the rental flag and be handed rentals (never Kit sessions). Needs `CONTAINER_RENTAL_ENABLED` too. Leave off until a Windows PC has passed [the first real test](windows-rental-test-checklist.md) |
+| `WINDOWS_RENTAL_MACHINE_IDS` | same | **EXPERIMENTAL PILOT**, default empty. Comma-separated machine ids (the id in the My computers page link or the marketplace) that may offer Windows rentals while `WINDOWS_RENTAL_ENABLED` is `false`: use it to try ONE real Windows PC first. Junk entries are ignored. Needs `CONTAINER_RENTAL_ENABLED` and the host's own opt-in too |
 | `NEXT_PUBLIC_SESSION_PROXY_ORIGIN` | Vercel, web project | the address of a **second** deployment of the web app on another domain (needed to open Jupyter in the browser; see the U10 design, section 9). While it is unset the Rent page hides the templates and the web-page option and offers only a terminal on the customer's own image |
 
 `REDIS_URL` must already be set (it is). The Redis relay code was written from documentation and checked only against a fake Redis; watch the first
@@ -63,7 +65,12 @@ To change the image: rebuild it (needs the repository variable `PROXY_BASE_IMAGE
 
 Do it in this order and stop at the first failure:
 
-0. On the host: `computecoin-agent rental check` passes (warnings are allowed, FAIL is not).
+0. On the host: `computecoin-agent rental check` passes (warnings are allowed, FAIL is not). It prints an **NVIDIA driver** line (535.86 or newer
+   is needed) and picks its test image from the driver (CUDA 12.4 for 550 and up, CUDA 12.2 for 535 to 549): write both down.
+   A laptop with an AMD processor and an NVIDIA card shows two graphics brands: the installer now uses the NVIDIA card and says so.
+   For the first GPU rental, also run `nvidia-smi` and `python3 -c "import torch;print(torch.cuda.is_available())"` in the PyTorch template
+   (it must print `True`), and pull the plug on nothing: a "driver version is insufficient" or "Failed to initialize NVML" message is a known
+   cause, with the fix in the host guide.
 1. Opt the host in, wait a minute, and check the marketplace shows **Container rental** on that machine.
 2. As a verified test customer with test credits, open **Rent a GPU**, pick that machine and `pytorch-jupyter`, accept the warning, start it.
 3. Open Jupyter from the session page. In a notebook run `import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))`. Expect `True` and your card.

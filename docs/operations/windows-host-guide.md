@@ -30,10 +30,10 @@ The installer runs a **requirements checker** first and shows a plain pass or fa
 | Requirement | Placeholder value | Notes |
 |---|---|---|
 | Processor | 64-bit Intel or AMD (x86-64) | ARM Windows is not supported yet |
-| Windows | Windows 10 or 11 that supports WSL 2 with GPU compute. WSL itself needs Windows 10 version 2004 (build 19041) or later, or Windows 11 **[read 2026-11-06]**. The checker's placeholder minimum is build 19044 (Windows 10 21H2): `TODO(verify-docs)` the real minimum for GPU compute in WSL2 | Home and Pro: both must be tested (plan section 10) |
+| Windows | **Windows 11** (build 22000 or newer). **[read 2026-11-17]** Microsoft's wsl-config page: the `[boot]` setting (systemd, which the managed Linux system needs) "is only available on Windows 11 and Server 2022". NVIDIA's CUDA-on-WSL guide alone would allow Windows 10 21H2, but this runtime cannot run there. | Home and Pro: both must be tested (plan section 10) |
 | Virtualization | Enabled in the firmware (BIOS/UEFI) | `TODO(verify-docs)` how to tell on each vendor's firmware |
 | WSL | Current WSL from the Microsoft Store or `wsl --update`; the signed runtime manifest states the minimum version (placeholder 2.0.0) | |
-| NVIDIA graphics card and driver | GeForce RTX 20 series or newer, or a data-centre card; at least 8 GB of video memory; a current **Windows** NVIDIA driver (placeholder 535.0). **Do not install a Linux NVIDIA driver inside the distro**: the Windows driver provides the GPU to WSL | `TODO(verify-docs)` NVIDIA's CUDA-on-WSL guide: supported cards and driver |
+| NVIDIA graphics card and driver | a GeForce or RTX card in its normal (WDDM) mode, **not** a card in TCC mode and **not** a data-centre card (NVIDIA's CUDA-on-WSL guide, **[read 2026-11-17]**); at least 8 GB of video memory; a current **Windows** NVIDIA driver (placeholder 535.0). **Do not install a Linux NVIDIA driver inside the distro**: the Windows driver provides the GPU to WSL | `TODO(verify-docs)` NVIDIA's CUDA-on-WSL guide: supported cards and driver |
 | Memory | 8 GB minimum, 16 GB recommended | The runtime uses part of it while it runs |
 | Free disk | 60 GB on the drive that will hold the distro | The distro's virtual disk is capped |
 | Internet | Outgoing connections only. **You do not open any port** | |

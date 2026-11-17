@@ -380,8 +380,8 @@ async def claim_next(db: AsyncSession, machine, *, host_pubkey: str, machine_gpu
     for row in rows:
         if row.gpu_count > machine_gpus:
             continue
-        if caps.is_windows and row.gpu_count > 1:
-            continue  # a Windows host's Linux system sees one card (Docker there supports only `--gpus all`)
+        if caps.is_windows and row.gpu_count not in (0, machine_gpus):
+            continue  # Docker in WSL supports only `--gpus all`: a Windows host gives a rental none of its cards or all of them, never some
         if not can_filter and (row.network_policy or {}).get("egress"):
             continue  # a host with no network-filter proxy cannot start it (it refuses rather than widen the network)
         if row.gpu_count > 0:

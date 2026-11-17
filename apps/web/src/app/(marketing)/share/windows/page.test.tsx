@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // W14: the Windows sharing page states the limits in plain words and does not promise an installer. WRITTEN, NOT RUN.
-// Bug re-insertion: delete the "NVIDIA only" or "Ordinary jobs only" paragraph (the limits test fails); change the notice to
+// Bug re-insertion: delete the "NVIDIA GeForce or RTX only" or "Container rentals only" paragraph (the limits test fails); change the notice to
 // "Download the installer" (the not-available test fails).
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -19,10 +19,12 @@ describe("share a Windows PC page", () => {
   it("says plainly that Windows hosts get the container tier and NVIDIA cards only", () => {
     const { container } = render(<ShareWindowsPage />);
     const text = container.textContent ?? "";
-    expect(text).toMatch(/Ordinary jobs only/);
+    expect(text).toMatch(/Container rentals only/);
+    expect(text).toMatch(/does not take Kits/);
     expect(text).toMatch(/private jobs/i);
-    expect(text).toMatch(/NVIDIA only/);
-    expect(text).toMatch(/AMD graphics cards are only supported on Linux/);
+    expect(text).toMatch(/NVIDIA GeForce or RTX only/);
+    expect(text).toMatch(/AMD is supported on Linux/);
+    expect(text).toMatch(/all of the PC.s\s+graphics cards together/);
   });
 
   it("does not offer a download and says it is not available yet", () => {

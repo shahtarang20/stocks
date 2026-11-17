@@ -95,7 +95,7 @@ Pages read: Microsoft Learn "Basic commands for WSL" (2025-12-01), "Advanced set
 | Documented fact | Changed in the code |
 |---|---|
 | The `[boot]` section (systemd) "is only available on Windows 11 and Server 2022"; this runtime needs systemd as PID 1 | The Windows requirement is now **Windows 11** (build 22000), not Windows 10 21H2 (the host guide, checklist, kit and website text agree) |
-| In WSL 2, Docker supports **only `--gpus all`** and the Linux system sees one GPU at a time | `build_gpu_argv` returns `--gpus all` inside WSL (`wsl_env.running_in_wsl`); the Windows check uses it; the server gives a Windows host at most **one card per rental** and refuses more up front (`windows_host_offers_one_gpu`) |
+| In WSL 2, Docker supports **only `--gpus all`** (a card cannot be picked by number), so a container gets every card the PC has | `build_gpu_argv` returns `--gpus all` inside WSL (`wsl_env.running_in_wsl`); the Windows check uses it; the server gives a Windows host a rental only for **none of its cards or all of them** (a PC with two cards is rented as two, one customer at a time) and refuses any other count up front (`windows_host_rents_all_cards`); claims skip a rental that asks for part of the cards |
 | GPU compute in WSL works on GeForce and RTX cards in WDDM mode, **not** cards in TCC mode or data-centre cards | The host guide, the Windows host guide and the test kit (`NVIDIA card mode`) say so |
 | Install only the Windows NVIDIA driver, never a Linux one inside WSL | Already how the runtime works; unchanged |
 | `/usr/lib/wsl/lib/nvidia-smi` is the documented full path; being on `PATH` is not stated | The check tries the name, then the full path (done earlier) |

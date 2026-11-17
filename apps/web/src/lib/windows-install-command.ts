@@ -51,7 +51,7 @@ export function buildWindowsInstallCommand(input: WindowsInstallInput): string |
     input.allowRental === true
       ? [
           `& $py -I -m computecoin_agent rental check`,
-          `if ($LASTEXITCODE -ne 0) { Write-Warning 'The rental test found a problem. Read the lines marked FAIL above. The computer is connected and still works for ordinary jobs.' }`,
+          `if ($LASTEXITCODE -ne 0) { Write-Warning 'The rental test found a problem. Read the lines marked FAIL above. The computer is connected, but customers cannot rent it until the problem is fixed.' }`,
           `& $py -I -m computecoin_agent rental on`,
         ]
       : [];
@@ -92,5 +92,5 @@ export const WINDOWS_CONSENT_POINTS: string[] = [
 /** Extra points when the host ticks "allow container rental". */
 export const WINDOWS_RENTAL_CONSENT_POINTS: string[] = [
   "Customers may run their OWN code in a locked container in that Linux system. It is not a private environment, so use a PC with nothing private on it. You can see the customer's files while it runs.",
-  "On Windows each rental gets one graphics card, and a restart or hibernate ends a rental.",
+  "On Windows a rental gets all of the PC's graphics cards together, and a restart or hibernate ends a rental.",
 ];

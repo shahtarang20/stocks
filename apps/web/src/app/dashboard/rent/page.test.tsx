@@ -131,5 +131,41 @@ describe("Rent page: graphics cards", () => {
     expect(screen.getByTestId("windows-host-warning").textContent).toMatch(/Windows rentals are experimental/);
     expect(screen.getByTestId("windows-host-warning").textContent).toMatch(/only Linux images work/);
   });
+
+  it("tells a customer that a Windows computer gives all its cards together, and fixes the count on one press", async () => {
+    const m = (id: string, os: string, cards: number) => ({
+      machine_id: id, gpu_model: "RTX 3060", gpu_vendor: "nvidia", gpu_runtime: "cuda", gpu_count: cards, vram_mb: 12288, cpu_model: null, cpu_cores: 8,
+      ram_mb: 16384, region: null, verification_status: "detected", price_per_hour: "0.50", currency: "credits", supported_workloads: [],
+      available_slots: 1, max_concurrent_jobs: 1, reliability: { completed_jobs: 0, success_rate: null }, last_heartbeat_at: new Date().toISOString(),
+      host_kind: "shared", container_rental: true, host_os: os,
+    });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes("/v1/marketplace/machines")) {
+        return Promise.resolve(new Response(JSON.stringify({ items: [m("win-2", "windows", 2), m("win-1", "windows", 1), m("lin-4", "linux", 4)], page: 1, page_size: 100, total: 3 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return new Promise(() => {});
+    }));
+    renderPage();
+    const select = (await screen.findByLabelText("Computer")) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(4));
+    const cards = screen.getByLabelText("Graphics cards") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "win-2" } });
+    fireEvent.change(cards, { target: { value: "1" } });
+    expect(screen.getByTestId("windows-host-all-cards").textContent).toMatch(/This one has 2: choose 2/);
+    fireEvent.click(screen.getByRole("button", { name: "Use 2 graphics cards" }));
+    expect(cards.value).toBe("2");
+    expect(screen.queryByTestId("windows-host-all-cards")).toBeNull();
+    fireEvent.change(cards, { target: { value: "0" } }); // none is always allowed
+    expect(screen.queryByTestId("windows-host-all-cards")).toBeNull();
+    fireEvent.change(select, { target: { value: "win-1" } }); // a one-card Windows PC: 1 is right
+    fireEvent.change(cards, { target: { value: "1" } });
+    expect(screen.queryByTestId("windows-host-all-cards")).toBeNull();
+    fireEvent.change(cards, { target: { value: "2" } });
+    expect(screen.getByRole("button", { name: "Use 1 graphics card" })).toBeTruthy();
+    fireEvent.change(select, { target: { value: "lin-4" } }); // Linux picks cards by number: no rule
+    expect(screen.queryByTestId("windows-host-all-cards")).toBeNull();
+  });
 });
 

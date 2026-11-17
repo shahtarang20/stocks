@@ -135,7 +135,7 @@ def test_no_graphics_card_fails_that_check_but_the_container_still_runs_without_
 def test_a_card_is_passed_to_the_test_container():
     _, wsl = checks()
     argv = wsl.ran("docker", "run")[0]
-    assert argv[argv.index("--gpus") + 1] == "all"  # in WSL 2 Docker supports only `--gpus all` (the system sees one card)
+    assert argv[argv.index("--gpus") + 1] == "all"  # in WSL 2 Docker supports only `--gpus all` (every card the PC has)
 
 
 # ---- the two checks that only matter on Windows ----------------------------------------------------------------------------

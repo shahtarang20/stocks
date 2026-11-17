@@ -440,9 +440,10 @@ export default function ProviderOnboardingPage() {
                   lead: "Linux.",
                   text: (
                     <>
-                      Our setup guide is written for Ubuntu 22.04 or 24.04. Mac is not supported. Windows PCs
-                      with an NVIDIA card are planned but cannot be installed yet. When they can, they will
-                      only take ordinary jobs (no private jobs) and NVIDIA cards only. See{" "}
+                      Our setup guide is written for Ubuntu 22.04 or 24.04. Mac is not supported. A Windows 11
+                      PC with a GeForce or RTX card is an experimental option in step 3. It can be used once the
+                      Windows installer is published, takes container rentals only (no Kits or ordinary jobs) and
+                      gives a rental all of its cards together. The items below are for Linux. See{" "}
                       <Link className="underline underline-offset-2" href="/share/windows">what a Windows PC would need</Link>.
                     </>
                   ),

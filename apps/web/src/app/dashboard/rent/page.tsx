@@ -34,6 +34,7 @@ import {
   inputProblems,
   priceBelow,
   rentalErrorText,
+  windowsAllCardsText,
   suggestInputPath,
   webViewAvailable,
   WINDOWS_HOST_LABEL,
@@ -267,10 +268,13 @@ export default function RentPage() {
                 {WINDOWS_HOST_WARNING}
               </p>
             ) : null}
-            {chosenMachine?.host_os === "windows" && Number(form.gpuCount) > 1 ? (
-              <p role="alert" className="text-sm text-danger" data-testid="windows-host-one-gpu">
-                {rentalErrorText("windows_host_offers_one_gpu")}
-              </p>
+            {chosenMachine?.host_os === "windows" && Number(form.gpuCount) > 0 && Number(form.gpuCount) !== chosenMachine.gpu_count ? (
+              <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-danger" data-testid="windows-host-all-cards">
+                <span>{windowsAllCardsText(chosenMachine.gpu_count)}</span>
+                <Button type="button" variant="outline" size="sm" onClick={() => set("gpuCount", String(chosenMachine.gpu_count))}>
+                  {chosenMachine.gpu_count > 0 ? `Use ${chosenMachine.gpu_count} graphics ${chosenMachine.gpu_count === 1 ? "card" : "cards"}` : "Use 0 graphics cards"}
+                </Button>
+              </div>
             ) : null}
             {tooLow && chosenMachine ? (
               <p role="status" className="text-sm text-warning">

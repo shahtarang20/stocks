@@ -178,7 +178,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               <legend className="text-sm font-medium">I want to</legend>
               {[
                 ["customer", "Rent a GPU", "Run your work on a graphics card (GPU) from someone else's computer."],
-                ["host", "Share my computer", "Let others use my computer's GPU and earn credits. Today this needs a Linux computer with an NVIDIA or AMD graphics card. Windows PCs with an NVIDIA card are planned, for ordinary jobs only, and are not available yet. See the setup steps after you sign up."],
+                ["host", "Share my computer", "Let others use my computer's GPU and earn credits. Today this needs a Linux computer with an NVIDIA or AMD graphics card. A Windows 11 PC with a GeForce or RTX card is an experimental option for container rentals only, and is not available to install yet. See the setup steps after you sign up."],
               ].map(([value, title, hint]) => (
                 <label
                   key={value}

@@ -64,7 +64,7 @@ describe("buildWindowsInstallCommand", () => {
     expect(text.indexOf("rental check")).toBeLessThan(text.indexOf("rental on"));
     expect(text.indexOf("rental on")).toBeLessThan(text.indexOf("service start"));
     expect(text.indexOf("enroll --server")).toBeLessThan(text.indexOf("rental check"));
-    expect(text).toContain("still works for ordinary jobs"); // a failing test never stops the install
+    expect(text).toContain("customers cannot rent it until the problem is fixed"); // a failing test never stops the install
     expect(buildWindowsInstallCommand({ ...base, allowRental: false })).not.toContain("rental");
   });
 
@@ -127,10 +127,10 @@ describe("the Windows install text matches the installer and the code", () => {
     expect(consent).toMatch(/asks Windows not to put the PC to sleep/);
   });
 
-  it("says that rental needs the host's own opt-in, that the host can see the customer's files, and that Windows gives one card", () => {
+  it("says that rental needs the host's own opt-in, that the host can see the customer's files, and that Windows gives all its cards", () => {
     const text = WINDOWS_RENTAL_CONSENT_POINTS.join(" ");
     expect(text).toMatch(/can see the customer's files/);
-    expect(text).toMatch(/one graphics card/);
+    expect(text).toMatch(/all of the PC's graphics cards/);
     expect(text).toMatch(/restart or hibernate/);
   });
 

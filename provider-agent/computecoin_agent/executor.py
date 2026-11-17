@@ -439,7 +439,8 @@ def build_gpu_argv(
     """Docker GPU argv for the vendor.
 
     - NVIDIA: byte-identical ``['--gpus', str(gpu_count)]``, except inside WSL (a Windows host's Linux system), where Docker supports
-      only ``--gpus all`` (NVIDIA's CUDA-on-WSL guide) and the system sees one card, so it is ``['--gpus', 'all']``.
+      only ``--gpus all`` (NVIDIA's CUDA-on-WSL guide: a card cannot be picked by number), so it is ``['--gpus', 'all']`` and the container gets every card the PC has.
+      The server only gives a Windows host a rental that asks for none of its cards or all of them.
     - AMD (D6): ``/dev/kfd`` plus ONLY the render nodes of the GPUs given (from detection, which
       resolves each GPU's own node), and the numeric GIDs owning those devices. Never the whole
       /dev/dri, never a guessed node, never --privileged / --ipc=host / seccomp=unconfined /

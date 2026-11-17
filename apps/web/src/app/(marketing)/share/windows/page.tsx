@@ -99,13 +99,14 @@ export default function ShareWindowsPage() {
           <h2>What Windows PCs can and cannot do</h2>
           <ul>
             <li>
-              <strong>Ordinary jobs only.</strong> Windows PCs only take jobs in the standard locked
-              container. They do not take private jobs, bring-your-own-container jobs, or jobs that need
-              several computers working together. We cannot promise a customer that you could not see their
-              data, so those jobs are not sent to Windows PCs.
+              <strong>Container rentals only (experimental).</strong> A Windows PC offers container rental: a
+              customer runs their own image on it, in a terminal or JupyterLab. It does not take Kits,
+              ordinary jobs, private jobs or jobs that need several computers working together. A rental gets all of the PC&apos;s
+              graphics cards together, and it needs Windows 11. The customer&apos;s code runs on your PC inside a locked
+              container, so it is untrusted code. Use a PC that holds nothing you could not afford to lose.
             </li>
             <li>
-              <strong>NVIDIA only.</strong> AMD graphics cards are only supported on Linux for now.
+              <strong>NVIDIA GeForce or RTX only.</strong> AMD and Intel cards, data-centre cards and cards in TCC mode are not supported on Windows. AMD is supported on Linux.
             </li>
             <li>
               <strong>Your PC comes first.</strong> By default the program does not start new jobs while you

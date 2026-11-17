@@ -51,6 +51,7 @@ import {
   HOST_RENTAL_WINDOWS_RESTART,
   WINDOWS_HOST_LABEL,
   WINDOWS_HOST_WARNING,
+  windowsAllCardsText,
 } from "./rental";
 import type { RentalTemplate } from "./sessions";
 
@@ -898,11 +899,13 @@ describe("rental on Windows (experimental) matches the code", () => {
     expect(repo("provider-agent/computecoin_agent/windows/rental_check_windows.py")).toMatch(/WSL2_VERSION = 2/);
     expect(text).toMatch(/Windows 11 \(Windows 10 cannot run/);
     expect(text).toMatch(/data-centre cards and cards in TCC mode do not work/);
-    expect(text).toMatch(/one graphics card/);
-    expect(WINDOWS_HOST_WARNING).toMatch(/one graphics card at most/);
+    expect(text).toMatch(/all of the PC's graphics cards together/);
+    expect(WINDOWS_HOST_WARNING).toMatch(/all of the PC's graphics cards together/);
     expect(repo("provider-agent/computecoin_agent/windows/runtime/requirements_check.py")).toMatch(/min_windows_build: int = 22000/);
-    expect(repo("apps/api/app/services/rental.py")).toContain("windows_host_offers_one_gpu");
-    expect(rentalErrorText("windows_host_offers_one_gpu")).toMatch(/only one graphics card/);
+    expect(repo("apps/api/app/services/rental.py")).toContain("windows_host_rents_all_cards");
+    expect(rentalErrorText("windows_host_rents_all_cards")).toMatch(/all of its graphics cards together, or none/);
+    expect(windowsAllCardsText(2)).toMatch(/This one has 2: choose 2 \(or 0 for none\)/);
+    expect(windowsAllCardsText(0)).toMatch(/no graphics card. Choose 0/);
     expect(rentalErrorText("windows_host_takes_rentals_only")).toMatch(/not Kits/);
   });
 });

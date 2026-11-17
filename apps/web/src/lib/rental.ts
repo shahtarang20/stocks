@@ -501,7 +501,7 @@ export function rentalErrorText(code: string | null): string | null {
     too_many_inputs: `You chose too many files. The most is ${RENTAL_LIMITS.maxInputs}.`,
     invalid_command: "The start command is not valid. Use plain words separated by spaces.",
     sessions_not_available_for_private_tiers: "Container rental cannot use the private tiers.",
-    windows_host_offers_one_gpu: "A Windows computer can give a rental only one graphics card. Choose 1 (or 0), or pick a Linux computer.",
+    windows_host_rents_all_cards: "A Windows computer gives a rental all of its graphics cards together, or none. Choose the number of cards it shows (or 0), or pick a Linux computer.",
     windows_host_takes_rentals_only: "A Windows computer only takes container rentals, not Kits. Pick another computer.",
   };
   return map[base] ?? null;
@@ -596,10 +596,16 @@ export const HOST_RENTAL_NEEDS: { lead: string; text: string }[] = [
   { lead: "A steady internet connection.", text: "Your computer only connects out. You do not need to open any ports on your router. The customer's image is downloaded from a public site such as Docker Hub." },
 ];
 
+/** Said to a customer who picked a Windows computer but a card count it cannot give (it gives all of its cards, or none). */
+export function windowsAllCardsText(cards: number): string {
+  if (cards <= 0) return "This Windows computer has no graphics card. Choose 0 graphics cards, or pick another computer.";
+  return `A Windows computer gives a rental all of its graphics cards together. This one has ${cards}: choose ${cards} (or 0 for none), or pick a Linux computer.`;
+}
+
 /** What a customer is told before renting from a Windows PC (experimental). */
 export const WINDOWS_HOST_LABEL = "Windows PC (experimental)";
 export const WINDOWS_HOST_WARNING =
-  "This host is a Windows PC, and Windows rentals are experimental. Your container runs inside a Linux system on that PC, so only Linux images work, you get one graphics card at most, the first start can take longer, and the rental can be cut off if the PC goes to sleep or restarts. Save your results often, or pick a Linux computer for the steadiest option.";
+  "This host is a Windows PC, and Windows rentals are experimental. Your container runs inside a Linux system on that PC, so only Linux images work, you get all of the PC's graphics cards together (or none), the first start can take longer, and the rental can be cut off if the PC goes to sleep or restarts. Save your results often, or pick a Linux computer for the steadiest option.";
 
 /** The Windows restart command a host runs after turning rental on or off (an administrator PowerShell). */
 export const HOST_RENTAL_WINDOWS_RESTART = "Restart-Service ComputeCoinAgent";
@@ -619,8 +625,8 @@ export const HOST_RENTAL_WINDOWS: { lead: string; text: string }[] = [
     text: "The Windows installer is not published yet, so for now the Windows option on the setup page has nothing to install. Rental on Windows is only for hosts who already run the Windows agent. Linux is the recommended choice.",
   },
   {
-    lead: "Only rentals, one card each.",
-    text: "A Windows host takes customers' own containers and nothing else: it is never handed a Kit session. Each rental gets one graphics card (the Linux system sees one card at a time), even if the PC has more. It is shown to customers as a Windows PC.",
+    lead: "Only rentals, all cards together.",
+    text: "A Windows host takes customers' own containers and nothing else: it is never handed a Kit session. Each rental gets all of the PC's graphics cards together, or none, because Docker in the Linux system cannot pick a card by number. A PC with two cards is rented as two cards, one customer at a time. It is shown to customers as a Windows PC.",
   },
   {
     lead: "Run these in an administrator PowerShell.",

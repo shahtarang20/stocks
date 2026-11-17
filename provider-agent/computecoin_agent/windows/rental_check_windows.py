@@ -181,7 +181,7 @@ def run_windows_checks(
                 "--security-opt", "no-new-privileges", "--user", "65534:65534", "--pids-limit", "256", "--memory", "1024m",
                 "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m"]
         if gpus:
-            argv += ["--gpus", "all"]  # in WSL 2 Docker supports only `--gpus all` (NVIDIA's CUDA-on-WSL guide); the system sees one card
+            argv += ["--gpus", "all"]  # in WSL 2 Docker supports only `--gpus all` (NVIDIA's CUDA-on-WSL guide): the test container sees every card
         argv += ["--mount", f"type=bind,source={scratch},target=/workspace", "--workdir", "/workspace", image,
                  "sh", "-c", (f"{'nvidia-smi -L && ' if gpus else ''}touch /workspace/.check && echo {OK_MARK}")]
         try:

@@ -199,7 +199,7 @@ const NOT_OFFERED: Item[] = [
   },
   {
     name: "Windows or Mac hosts today",
-    text: "Hosting is for Linux. A Windows PC with an NVIDIA card is planned for ordinary jobs only (never private jobs). Mac is not supported.",
+    text: "Hosting is for Linux. A Windows 11 PC with a GeForce or RTX card is an experimental option for container rentals only, and cannot be installed until the Windows installer is published. Mac is not supported.",
   },
   {
     name: "AMD graphics cards",

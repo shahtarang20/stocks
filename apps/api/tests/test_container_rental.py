@@ -1062,17 +1062,56 @@ async def _set_gpu_count(machine_id, n):
         await db.commit()
 
 
-async def test_a_rental_aimed_at_a_windows_host_may_ask_for_at_most_one_card(client, rental_on, monkeypatch):
-    """NVIDIA's CUDA-on-WSL guide: Docker in WSL 2 supports only `--gpus all`, and the Linux system sees one GPU."""
+async def test_a_rental_aimed_at_a_windows_host_must_ask_for_all_its_cards_or_none(client, rental_on, monkeypatch):
+    """NVIDIA's CUDA-on-WSL guide: Docker in WSL 2 supports only `--gpus all`, so a Windows host gives a rental every card it has, never some."""
     monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
     win = await _machine(client, "rt-win5-host@example.com", hostname="win5")
     await _set_flags(win["machine_id"], True, os_name="windows")
     await _set_gpu_count(win["machine_id"], 4)
     h = await _login(client, "rt-win5@example.com")
-    two = await _create(client, h, machine_id=win["machine_id"], gpu_count=2)
-    assert two.status_code == 422 and two.json()["detail"] == "windows_host_offers_one_gpu"
+    for n in (1, 2, 3, 5):
+        bad = await _create(client, h, machine_id=win["machine_id"], gpu_count=n)
+        assert bad.status_code == 422 and bad.json()["detail"] == "windows_host_rents_all_cards", n
+    for n in (0, 4):
+        assert (await _create(client, h, machine_id=win["machine_id"], gpu_count=n)).status_code == 201, n
+
+
+async def test_a_windows_host_with_one_card_still_rents_that_one_card(client, rental_on, monkeypatch):
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win5b-host@example.com", hostname="win5b")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    await _set_gpu_count(win["machine_id"], 1)
+    h = await _login(client, "rt-win5b@example.com")
     for n in (0, 1):
         assert (await _create(client, h, machine_id=win["machine_id"], gpu_count=n)).status_code == 201, n
+    assert (await _create(client, h, machine_id=win["machine_id"], gpu_count=2)).json()["detail"] == "windows_host_rents_all_cards"
+
+
+async def test_a_windows_host_with_no_card_cannot_be_asked_for_one(client, rental_on, monkeypatch):
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win5c-host@example.com", hostname="win5c")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    await _set_gpu_count(win["machine_id"], 0)
+    h = await _login(client, "rt-win5c@example.com")
+    assert (await _create(client, h, machine_id=win["machine_id"], gpu_count=1)).json()["detail"] == "windows_host_rents_all_cards"
+    assert (await _create(client, h, machine_id=win["machine_id"], gpu_count=0)).status_code == 201
+
+
+async def test_a_windows_host_is_only_handed_a_rental_that_asks_for_none_or_all_of_its_cards(client, rental_on, monkeypatch):
+    """A rental aimed at nobody in particular: a two-card Windows PC passes over one that asks for 1 card (it would get both), takes 0 and 2."""
+    monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
+    win = await _machine(client, "rt-win5d-host@example.com", hostname="win5d")
+    await _set_flags(win["machine_id"], True, os_name="windows")
+    await _set_gpu_count(win["machine_id"], 2)
+    h = await _login(client, "rt-win5d@example.com")
+    one = (await _create(client, h, gpu_count=1)).json()["id"]
+    assert (await _claim_session(client, win)).json() == {"session": None}
+    assert (await _row(one)).status == "pending"  # still waiting for a host that can give exactly one card
+    two = (await _create(client, h, gpu_count=2)).json()["id"]
+    assert (await _claim_session(client, win)).json()["session"]["id"] == two
+    lin = await _machine(client, "rt-win5d-lin@example.com", hostname="win5dl")
+    await _set_gpu_count(lin["machine_id"], 2)
+    assert (await _claim_session(client, lin)).json()["session"]["id"] == one  # a Linux host picks cards by number, so it can
 
 
 async def test_a_linux_host_still_takes_a_rental_for_several_cards(client, rental_on):
@@ -1082,7 +1121,7 @@ async def test_a_linux_host_still_takes_a_rental_for_several_cards(client, renta
     assert (await _create(client, h, machine_id=lin["machine_id"], gpu_count=2)).status_code == 201
 
 
-async def test_a_windows_host_is_never_given_a_multi_card_rental_even_when_none_was_aimed_at_it(client, rental_on, monkeypatch):
+async def test_a_windows_host_is_never_given_part_of_its_cards_even_when_none_was_aimed_at_it(client, rental_on, monkeypatch):
     monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", True)
     win = await _machine(client, "rt-win7-win@example.com", hostname="win7")
     await _set_flags(win["machine_id"], True, os_name="windows")
@@ -1091,10 +1130,10 @@ async def test_a_windows_host_is_never_given_a_multi_card_rental_even_when_none_
     await _set_gpu_count(lin["machine_id"], 4)
     h = await _login(client, "rt-win7@example.com")
     sid = (await _create(client, h, gpu_count=2)).json()["id"]
-    assert (await _claim_session(client, win)).json() == {"session": None}  # skipped for the Windows host
-    assert (await _claim_session(client, lin)).json()["session"]["id"] == sid  # a Linux host with enough cards takes it
-    one = (await _create(client, h, gpu_count=1)).json()["id"]
-    assert (await _claim_session(client, win)).json()["session"]["id"] == one  # and a one-card rental still goes to the Windows host
+    assert (await _claim_session(client, win)).json() == {"session": None}  # 2 of its 4 would really be all 4: skipped for the Windows host
+    assert (await _claim_session(client, lin)).json()["session"]["id"] == sid  # a Linux host picks cards by number, so it takes it
+    four = (await _create(client, h, gpu_count=4)).json()["id"]
+    assert (await _claim_session(client, win)).json()["session"]["id"] == four  # a rental for all four goes to the Windows host
 
 
 async def test_a_kit_session_aimed_at_a_windows_host_is_refused_up_front_not_left_waiting(client, rental_on, monkeypatch):
@@ -1177,16 +1216,16 @@ async def test_only_the_pilot_windows_machine_is_listed_and_handed_a_rental_whil
     assert (await _claim_session(client, other)).json() == {"session": None}
 
 
-async def test_the_pilot_machine_still_gets_one_card_and_never_a_kit_session(client, rental_on, monkeypatch):
+async def test_the_pilot_machine_rents_all_its_cards_and_never_a_kit_session(client, rental_on, monkeypatch):
     monkeypatch.setattr(settings, "WINDOWS_RENTAL_ENABLED", False)
     pilot = await _machine(client, "rt-pil3-host@example.com", hostname="pil3")
     await _set_flags(pilot["machine_id"], True, os_name="windows")
     await _set_gpu_count(pilot["machine_id"], 4)
     monkeypatch.setattr(settings, "WINDOWS_RENTAL_MACHINE_IDS", pilot["machine_id"])
     h = await _login(client, "rt-pil3@example.com")
-    two = await _create(client, h, machine_id=pilot["machine_id"], gpu_count=2)
-    assert two.status_code == 422 and two.json()["detail"] == "windows_host_offers_one_gpu"
-    assert (await _create(client, h, machine_id=pilot["machine_id"], gpu_count=1)).status_code == 201
+    some = await _create(client, h, machine_id=pilot["machine_id"], gpu_count=2)
+    assert some.status_code == 422 and some.json()["detail"] == "windows_host_rents_all_cards"
+    assert (await _create(client, h, machine_id=pilot["machine_id"], gpu_count=4)).status_code == 201
 
 
 # ---- pure helpers -----------------------------------------------------------------------------------------------------------

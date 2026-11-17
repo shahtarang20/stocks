@@ -228,12 +228,17 @@ async def check_target_machine(
     caps = host_capabilities(machine)
     flags = caps.flags
     if caps.is_windows:
-        # A Windows host runs customers' own containers inside a WSL 2 Linux system and nothing else: never a Kit session, and one card
-        # at a time (NVIDIA's CUDA-on-WSL guide: Docker there supports only `--gpus all`, and the Linux system sees one GPU).
+        # A Windows host runs customers' own containers inside a WSL 2 Linux system and nothing else: never a Kit session. NVIDIA's CUDA-on-WSL guide:
+        # Docker there supports only `--gpus all` (a card cannot be picked by number), so a rental that asks for any card gets ALL of them. It is
+        # therefore refused up front unless it asks for exactly the number of cards the PC has (or for none).
         if not rental:
             raise RentalError("windows_host_takes_rentals_only")
-        if gpu_count > 1:
-            raise RentalError("windows_host_offers_one_gpu")
+        if gpu_count > 0:
+            from app.models.provider import HardwareInventory
+
+            host_cards = (await db.execute(select(HardwareInventory.gpu_count).where(HardwareInventory.machine_id == machine_id))).scalar() or 0
+            if gpu_count != host_cards:
+                raise RentalError("windows_host_rents_all_cards")
     if require_flag and "container_rental" not in flags:
         raise RentalError("machine_not_available_for_rental")
     if needs_egress and "egress_proxy" not in flags:

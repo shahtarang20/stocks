@@ -1,7 +1,7 @@
 """Is this process running inside WSL (a Linux system on Windows)? Used where Docker behaves differently there.
 
 NVIDIA's CUDA-on-WSL guide (read 2026-11-17): in WSL 2 Docker supports ONLY ``--gpus all``, so a GPU cannot be chosen by count or by index.
-WSL gives the Linux system one GPU at a time, so ``all`` is exactly one card.
+Docker there cannot pick a card by number, so ``all`` means every card the PC has: the server therefore only hands a Windows host a rental that asks for none of its cards or all of them.
 
 Detection never raises. The kernel string of a WSL 2 system contains both "microsoft" and "WSL" (for example ``5.15.153.1-microsoft-standard-WSL2``),
 and WSL sets ``WSL_DISTRO_NAME`` for every program it starts.

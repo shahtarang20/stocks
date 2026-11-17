@@ -13,6 +13,8 @@ import {
   HOST_RENTAL_TROUBLE,
   HOST_RENTAL_WHAT_HAPPENS,
   HOST_RENTAL_WHO,
+  HOST_RENTAL_WINDOWS,
+  HOST_RENTAL_WINDOWS_RESTART,
   HOST_RENTAL_WORKING,
 } from "@/lib/rental";
 
@@ -195,6 +197,21 @@ export function HostRentalGuide({ headingLevel = 3 }: { headingLevel?: 3 | 4 }) 
             </li>
           ))}
         </ul>
+      </details>
+
+      <details className="rounded-md border border-border px-4 py-3" data-testid="hrg-windows">
+        <summary className="cursor-pointer font-medium marker:text-muted-foreground">On Windows (experimental)</summary>
+        <ul className="mt-3 space-y-2.5">
+          {HOST_RENTAL_WINDOWS.map((d) => (
+            <li key={d.lead} className="text-muted-foreground">
+              <span className="font-medium text-foreground">{d.lead}</span> {d.text}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-xs text-muted-foreground">
+          After <Code>{HOST_RENTAL_COMMANDS.on}</Code> or <Code>{HOST_RENTAL_COMMANDS.off}</Code>, restart the agent with{" "}
+          <Code>{HOST_RENTAL_WINDOWS_RESTART}</Code> (not the Linux command above).
+        </p>
       </details>
 
       <section aria-labelledby="hrg-off">

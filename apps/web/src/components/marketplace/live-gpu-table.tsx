@@ -33,6 +33,7 @@ import {
   type MarketplaceSearchParams,
 } from "@/lib/api";
 import { formatMbAsGb, formatRelativeTime } from "@/lib/utils";
+import { WINDOWS_HOST_LABEL, WINDOWS_HOST_WARNING } from "@/lib/rental";
 
 const selectClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-base text-foreground sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
@@ -423,6 +424,11 @@ export function LiveGpuTable() {
                           className="text-[10px] px-1.5 py-0"
                         >
                           Container rental
+                        </Badge>
+                      ) : null}
+                      {m.host_os === "windows" ? (
+                        <Badge variant="neutral" title={WINDOWS_HOST_WARNING} className="text-[10px] px-1.5 py-0">
+                          {WINDOWS_HOST_LABEL}
                         </Badge>
                       ) : null}
                     </div>

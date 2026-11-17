@@ -10,6 +10,8 @@ import {
   HOST_RENTAL_RISKS,
   HOST_RENTAL_TROUBLE,
   HOST_RENTAL_WHO,
+  HOST_RENTAL_WINDOWS,
+  HOST_RENTAL_WINDOWS_RESTART,
 } from "@/lib/rental";
 
 afterEach(() => cleanup());
@@ -116,6 +118,23 @@ describe("HostRentalGuide", () => {
     const steps = screen.getByRole("heading", { name: /turn it on, in this order/i }).closest("section")!;
     expect(steps.firstElementChild?.tagName).toBe("H3");
     expect(steps.contains(quick)).toBe(true);
+  });
+
+  it("has a folded, plainly experimental Windows section with its own restart command", () => {
+    render(<HostRentalGuide />);
+    const box = screen.getByTestId("hrg-windows") as HTMLDetailsElement;
+    expect(box.open).toBe(false);
+    expect(within(box).getByText("On Windows (experimental)")).toBeTruthy();
+    for (const d of HOST_RENTAL_WINDOWS) expect(within(box).getByText(d.lead)).toBeTruthy();
+    expect(box.textContent).toMatch(/installer is not published yet/);
+    expect(box.textContent).toContain(HOST_RENTAL_WINDOWS_RESTART);
+    expect(box.textContent).toMatch(/never handed a Kit session/);
+  });
+
+  it("no longer says a Windows computer simply cannot offer rental, and sends the reader to the Windows section", () => {
+    render(<HostRentalGuide />);
+    expect(document.body.textContent).not.toMatch(/Windows and Mac computers cannot offer container rental/);
+    expect(document.body.textContent).toMatch(/Windows is experimental/);
   });
 });
 

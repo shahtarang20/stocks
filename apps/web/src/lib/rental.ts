@@ -501,6 +501,8 @@ export function rentalErrorText(code: string | null): string | null {
     too_many_inputs: `You chose too many files. The most is ${RENTAL_LIMITS.maxInputs}.`,
     invalid_command: "The start command is not valid. Use plain words separated by spaces.",
     sessions_not_available_for_private_tiers: "Container rental cannot use the private tiers.",
+    windows_host_offers_one_gpu: "A Windows computer can give a rental only one graphics card. Choose 1 (or 0), or pick a Linux computer.",
+    windows_host_takes_rentals_only: "A Windows computer only takes container rentals, not Kits. Pick another computer.",
   };
   return map[base] ?? null;
 }
@@ -586,12 +588,48 @@ export const HOST_RENTAL_COMMANDS = {
 
 /** What a host's computer needs before container rental can work. */
 export const HOST_RENTAL_NEEDS: { lead: string; text: string }[] = [
-  { lead: "A Linux computer.", text: "Ubuntu 22.04 or 24.04. Windows and Mac computers cannot offer container rental." },
+  { lead: "A Linux computer.", text: "Ubuntu 22.04 or 24.04. Mac computers cannot offer container rental. Windows is experimental: see \"On Windows (experimental)\" below." },
   { lead: "An NVIDIA graphics card that works.", text: "Running nvidia-smi in a terminal must list it. AMD cards are not supported for container rental." },
   { lead: "Docker, and the NVIDIA Container Toolkit.", text: "Use the normal Docker Engine. Docker Desktop is not supported for container rental yet. The toolkit lets Docker use your graphics card inside a container." },
   { lead: "The ComputeCoin agent, version 0.2.0 or newer,", text: "already connected to your account (steps 1 to 4 on this page)." },
   { lead: "Some free disk space.", text: "Each rental gets a private work folder on your disk, limited in size (50 GB by default). It is deleted when the rental ends." },
   { lead: "A steady internet connection.", text: "Your computer only connects out. You do not need to open any ports on your router. The customer's image is downloaded from a public site such as Docker Hub." },
+];
+
+/** What a customer is told before renting from a Windows PC (experimental). */
+export const WINDOWS_HOST_LABEL = "Windows PC (experimental)";
+export const WINDOWS_HOST_WARNING =
+  "This host is a Windows PC, and Windows rentals are experimental. Your container runs inside a Linux system on that PC, so only Linux images work, you get one graphics card at most, the first start can take longer, and the rental can be cut off if the PC goes to sleep or restarts. Save your results often, or pick a Linux computer for the steadiest option.";
+
+/** The Windows restart command a host runs after turning rental on or off (an administrator PowerShell). */
+export const HOST_RENTAL_WINDOWS_RESTART = "Restart-Service ComputeCoinAgent";
+
+/** Rental on Windows, for hosts: experimental, and what it needs. */
+export const HOST_RENTAL_WINDOWS: { lead: string; text: string }[] = [
+  {
+    lead: "What it is.",
+    text: "On a Windows PC, customers' containers run inside the ComputeCoin Linux system (WSL2) that the Windows agent manages. They cannot see your Windows drives. It is experimental and has not been proven on many real PCs.",
+  },
+  {
+    lead: "What the PC needs.",
+    text: "Windows 11 (Windows 10 cannot run the Linux system's service manager, which needs Windows 11), virtualization switched on in the BIOS, a GeForce or RTX card in its normal mode (data-centre cards and cards in TCC mode do not work on Windows), an NVIDIA driver for Windows (535.86 or newer, the Linux system uses it), and the ComputeCoin Windows agent already connected to your account. AMD and Intel cards are not supported. The PC must stay on while you host.",
+  },
+  {
+    lead: "The Windows agent.",
+    text: "The Windows installer is not published yet, so for now the Windows option on the setup page has nothing to install. Rental on Windows is only for hosts who already run the Windows agent. Linux is the recommended choice.",
+  },
+  {
+    lead: "Only rentals, one card each.",
+    text: "A Windows host takes customers' own containers and nothing else: it is never handed a Kit session. Each rental gets one graphics card (the Linux system sees one card at a time), even if the PC has more. It is shown to customers as a Windows PC.",
+  },
+  {
+    lead: "Run these in an administrator PowerShell.",
+    text: "First computecoin-agent rental check, which also proves your Windows C: drive is hidden from the Linux system. Then computecoin-agent rental on, which turns on both of the Windows switches, then Restart-Service ComputeCoinAgent. computecoin-agent rental status shows both switches, and computecoin-agent rental off turns rental off again.",
+  },
+  {
+    lead: "The platform must allow it too.",
+    text: "Windows rentals are off for the whole platform until the site's owner switches them on, so a Windows host may be listed without taking rentals yet.",
+  },
 ];
 
 /** A note for computers with no graphics card: they can still offer rentals that need none. */
@@ -664,6 +702,22 @@ export const HOST_RENTAL_TROUBLE: { problem: string; fix: string }[] = [
   {
     problem: "The test in step 1 shows FAIL.",
     fix: "Read the line under it, because it says what to do. Common causes are Docker not installed or not running, your user not allowed to use Docker, the NVIDIA toolkit missing, or too little free disk space. A computer with no graphics card shows one FAIL for the card, which is expected for rentals that need none.",
+  },
+  {
+    problem: "The test says my graphics-card driver is too old.",
+    fix: "Update the NVIDIA driver to 535.86 or newer, restart the computer and run the test again. The test picks its image to match your driver, so a driver anywhere from 535 up is fine.",
+  },
+  {
+    problem: "I just installed the NVIDIA driver and the test cannot find the card.",
+    fix: "Restart the computer first. If Secure Boot is switched on, it can block a freshly installed driver: turn Secure Boot off in the BIOS settings, or sign the driver, then run the test again.",
+  },
+  {
+    problem: "The card worked, then stopped working inside Docker.",
+    fix: "This is a known Docker issue after Docker or the system reloads (the message says \"Failed to initialize NVML\"). Restart Docker with: sudo systemctl restart docker, then run the test again. If it keeps coming back, see the NVIDIA Container Toolkit troubleshooting page.",
+  },
+  {
+    problem: "The installer says my computer has both an NVIDIA and an AMD graphics device.",
+    fix: "A laptop with an AMD processor and an NVIDIA card shows both. The installer uses the NVIDIA card and says so, and nothing else is needed. To use the AMD card instead, run the install again with --gpu-vendor amd.",
   },
   {
     problem: "A rental starts and then fails.",
@@ -801,6 +855,7 @@ export const CUSTOMER_RENTAL_IMAGE_HELP: { lead: string; text: string }[] = [
 export const CUSTOMER_RENTAL_TEAMS: { lead: string; text: string }[] = [
   { lead: "Pin your image.", text: "Build your image, push it to a public place (Docker Hub or ghcr.io) and use its @sha256: address. Everyone then runs exactly the same thing, and nothing changes under you." },
   { lead: "Keep secrets out.", text: "Anyone can download a public image, and the host can read your files. Do not put keys, tokens or private models in the image or the workspace." },
+  { lead: "Windows computers (experimental).", text: "Some hosts are Windows PCs, marked in the list. Your Linux image runs inside a Linux system on that PC, but the PC can go to sleep or restart, which cuts the rental off, and the first start can take longer. Save results often, or choose a Linux computer." },
   { lead: "Know the limits.", text: "Per rental: up to 8 graphics cards, 256 GB of memory, 64 processor cores, a 100 GB workspace and 24 hours. A host may limit memory, cores and workspace below what you ask for. At most 3 rentals can run at once on one account, and up to 16 files can be brought in per rental." },
   { lead: "Web programs.", text: "For your own web program, give the port it listens on inside the container (127.0.0.1 is enough). The start command is plain words separated by spaces, with no quotes." },
   { lead: "Every rental starts clean.", text: "Keep your code in the image or bring it in as files, and save results to /workspace/results every time." },

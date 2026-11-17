@@ -34,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { HelpTip } from "@/components/ui/help-tip";
 import { MachineStatusBadge } from "@/components/provider/machine-status-badge";
 import { HostRentalGuide } from "@/components/provider/host-rental-guide";
+import { WindowsInstallPanel } from "@/components/provider/windows-install-panel";
 import {
   Dialog,
   DialogContent,
@@ -157,6 +158,8 @@ export default function ProviderOnboardingPage() {
   const [label, setLabel] = useState("");
   // Ticked: the one-line install also turns container rental on (and tests the computer). Off unless the host asks.
   const [allowRental, setAllowRental] = useState(false);
+  // Which kind of computer the install step is for. Linux is the default and the recommended choice; Windows is experimental.
+  const [platform, setPlatform] = useState<"linux" | "windows">("linux");
   // The one-click button: create a token, then copy one finished line that carries it.
   const [pendingCopy, setPendingCopy] = useState(false);
   const [oneClickNote, setOneClickNote] = useState<"copied" | "manual" | null>(null);
@@ -642,7 +645,31 @@ sudo usermod -aG render,video $USER`}
               )}
             </div>
 
+            <fieldset className="space-y-1.5">
+              <legend className="mb-1 text-sm font-medium">Which kind of computer are you connecting?</legend>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="platform" checked={platform === "linux"} onChange={() => setPlatform("linux")} />
+                  Linux (recommended)
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" name="platform" checked={platform === "windows"} onChange={() => setPlatform("windows")} />
+                  Windows 11 (experimental)
+                </label>
+              </div>
+            </fieldset>
+
             {/* 3c: run enroll */}
+            {platform === "windows" ? (
+              <WindowsInstallPanel
+                msiUrl={process.env.NEXT_PUBLIC_WINDOWS_AGENT_MSI_URL}
+                sha256={process.env.NEXT_PUBLIC_WINDOWS_AGENT_MSI_SHA256}
+                server={API_BASE_URL}
+                token={newToken?.enrollment_token}
+                allowRental={allowRental}
+                onAllowRentalChange={setAllowRental}
+              />
+            ) : (
             <div className="space-y-3">
               <h3 className="text-sm font-semibold">3c. Install and connect (one line)</h3>
               <p className="text-sm text-muted-foreground">
@@ -783,6 +810,7 @@ sudo usermod -aG render,video $USER`}
                 </div>
               </details>
             </div>
+            )}
 
             {/* Existing tokens list. */}
             <div className="space-y-3">

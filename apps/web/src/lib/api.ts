@@ -231,6 +231,8 @@ export interface MarketplaceMachine {
   host_kind?: "dedicated" | "shared" | "unspecified" | string;
   /** True when the host has opted in to container rental (customers may bring their own code). Absent on older APIs. */
   container_rental?: boolean;
+  /** The host's operating system as it reports it: "linux", "windows" or null. A label, not a proof. Absent on older APIs. */
+  host_os?: "linux" | "windows" | string | null;
   [key: string]: unknown;
 }
 

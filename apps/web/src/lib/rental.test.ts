@@ -47,6 +47,10 @@ import {
   CUSTOMER_RENTAL_IMAGE_HELP,
   CUSTOMER_RENTAL_TEAMS,
   CUSTOMER_RENTAL_WHO,
+  HOST_RENTAL_WINDOWS,
+  HOST_RENTAL_WINDOWS_RESTART,
+  WINDOWS_HOST_LABEL,
+  WINDOWS_HOST_WARNING,
 } from "./rental";
 import type { RentalTemplate } from "./sessions";
 
@@ -852,3 +856,79 @@ describe("the customer guide for every kind of customer", () => {
     expect(Number(RENTAL_DEFAULTS.maxPrice) * (30 / 60)).toBe(0.5);
   });
 });
+
+
+describe("rental on Windows (experimental) matches the code", () => {
+  const text = HOST_RENTAL_WINDOWS.map((d) => d.text).join(" ");
+
+  it("tells a Windows host to restart the service by the name the Windows agent really registers", () => {
+    const service = repo("provider-agent/computecoin_agent/windows/service.py");
+    expect(service).toContain('SERVICE_NAME = "ComputeCoinAgent"');
+    expect(HOST_RENTAL_WINDOWS_RESTART).toBe("Restart-Service ComputeCoinAgent");
+    expect(text).toContain(HOST_RENTAL_WINDOWS_RESTART);
+  });
+
+  it("names only commands the agent has, and the two Windows switches really exist", () => {
+    expect(text).toContain("computecoin-agent rental check");
+    expect(text).toContain("computecoin-agent rental on");
+    expect(text).toContain("computecoin-agent rental status");
+    expect(text).toContain("computecoin-agent rental off");
+    const cli = repo("provider-agent/computecoin_agent/cli.py");
+    expect(cli).toMatch(/windows_rental_enabled/);
+    expect(cli).toMatch(/Restart-Service ComputeCoinAgent/);
+    expect(repo("provider-agent/computecoin_agent/config.py")).toMatch(/windows_rental_enabled: bool = False/);
+  });
+
+  it("says what the platform really enforces: a Windows host is never given a Kit session, and the platform switch is off by default", () => {
+    expect(text).toMatch(/never handed a Kit session/);
+    expect(repo("apps/api/app/services/sessions.py")).toMatch(/caps\.is_windows/);
+    expect(repo("apps/api/app/core/config.py")).toMatch(/WINDOWS_RENTAL_ENABLED: bool = False/);
+    expect(text).toMatch(/off for the whole platform until the site's owner switches them on/);
+  });
+
+  it("gives customers one label and one warning, and the warning says what really limits a Windows rental", () => {
+    expect(WINDOWS_HOST_LABEL).toBe("Windows PC (experimental)");
+    expect(WINDOWS_HOST_WARNING).toMatch(/only Linux images work/);
+    expect(WINDOWS_HOST_WARNING).toMatch(/sleep or restarts/);
+    expect(CUSTOMER_RENTAL_TEAMS.map((t) => t.lead)).toContain("Windows computers (experimental).");
+  });
+
+  it("states the requirements the Windows runtime really checks (WSL 2, the managed Linux system)", () => {
+    expect(text).toMatch(/WSL2/);
+    expect(repo("provider-agent/computecoin_agent/windows/rental_check_windows.py")).toMatch(/WSL2_VERSION = 2/);
+    expect(text).toMatch(/Windows 11 \(Windows 10 cannot run/);
+    expect(text).toMatch(/data-centre cards and cards in TCC mode do not work/);
+    expect(text).toMatch(/one graphics card/);
+    expect(WINDOWS_HOST_WARNING).toMatch(/one graphics card at most/);
+    expect(repo("provider-agent/computecoin_agent/windows/runtime/requirements_check.py")).toMatch(/min_windows_build: int = 22000/);
+    expect(repo("apps/api/app/services/rental.py")).toContain("windows_host_offers_one_gpu");
+    expect(rentalErrorText("windows_host_offers_one_gpu")).toMatch(/only one graphics card/);
+    expect(rentalErrorText("windows_host_takes_rentals_only")).toMatch(/not Kits/);
+  });
+});
+
+describe("the GPU troubleshooting the host guide gives matches the agent and the installer", () => {
+  const trouble = HOST_RENTAL_TROUBLE.map((t) => `${t.problem} ${t.fix}`).join(" ");
+
+  it("covers the driver, the fresh install, the NVML failure and the two-brand laptop", () => {
+    expect(trouble).toMatch(/graphics-card driver is too old/);
+    expect(trouble).toMatch(/Secure Boot/);
+    expect(trouble).toMatch(/Failed to initialize NVML/);
+    expect(trouble).toMatch(/both an NVIDIA and an AMD graphics device/);
+  });
+
+  it("asks for the same minimum driver as the check, the setup page and the Windows text", () => {
+    const check = repo("provider-agent/computecoin_agent/rental_check.py");
+    expect(check).toMatch(/MIN_DRIVER_MAJOR = 535\b/);
+    expect(trouble).toContain("535.86");
+    expect(repo("apps/web/src/app/provider/onboarding/page.tsx")).toContain("NVIDIA driver 535.86 or newer");
+    expect(HOST_RENTAL_WINDOWS.map((d) => d.text).join(" ")).toContain("535.86 or newer");
+  });
+
+  it("only mentions the installer option and the restart command that exist", () => {
+    expect(repo("apps/web/public/install.sh")).toContain("--gpu-vendor)");
+    expect(trouble).toContain("--gpu-vendor amd");
+    expect(trouble).toContain("sudo systemctl restart docker");
+  });
+});
+

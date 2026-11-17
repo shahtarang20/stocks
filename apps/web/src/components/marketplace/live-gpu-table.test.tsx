@@ -122,4 +122,22 @@ describe("Marketplace computers table", () => {
     expect((document.getElementById("f-kind") as HTMLSelectElement).value).toBe("");
     expect((document.getElementById("f-vram") as HTMLSelectElement).value).toBe("");
   });
+
+  it("marks a Windows host, explains it, and says nothing for a Linux host", async () => {
+    searchMachines.mockResolvedValue({
+      items: [
+        { ...machine, machine_id: "m-win", gpu_model: "RTX 3060", host_os: "windows", container_rental: true },
+        { ...machine, machine_id: "m-lin", gpu_model: "RTX 4090", host_os: "linux", container_rental: true },
+        { ...machine, machine_id: "m-old", gpu_model: "RTX 2080" },
+      ],
+      page: 1, page_size: 20, total: 3,
+    });
+    renderTable();
+    await screen.findByText("RTX 3060");
+    const badges = screen.getAllByText("Windows PC (experimental)");
+    expect(badges).toHaveLength(1);
+    expect(badges[0].getAttribute("title")).toMatch(/Windows rentals are experimental/);
+    expect(badges[0].closest("tr")?.textContent).toContain("RTX 3060");
+  });
 });
+

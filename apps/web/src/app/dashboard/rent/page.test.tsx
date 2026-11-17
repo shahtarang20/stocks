@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("next/navigation", () => ({
@@ -103,4 +103,33 @@ describe("Rent page: graphics cards", () => {
     expect(await screen.findByText(/Please confirm your email address to bring in your files/)).toBeTruthy();
     expect(document.body.textContent).toMatch(/You can still start the rental without them\./);
   });
+
+  it("labels a Windows computer in the list and warns before a customer rents it", async () => {
+    const m = (id: string, os: string | null) => ({
+      machine_id: id, gpu_model: "RTX 3060", gpu_vendor: "nvidia", gpu_runtime: "cuda", gpu_count: 1, vram_mb: 12288, cpu_model: null, cpu_cores: 8,
+      ram_mb: 16384, region: null, verification_status: "detected", price_per_hour: "0.50", currency: "credits", supported_workloads: [],
+      available_slots: 1, max_concurrent_jobs: 1, reliability: { completed_jobs: 0, success_rate: null }, last_heartbeat_at: new Date().toISOString(),
+      host_kind: "shared", container_rental: true, host_os: os,
+    });
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes("/v1/marketplace/machines")) {
+        return Promise.resolve(new Response(JSON.stringify({ items: [m("win-1", "windows"), m("lin-1", "linux")], page: 1, page_size: 100, total: 2 }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }));
+      }
+      return new Promise(() => {});
+    }));
+    renderPage();
+    const select = (await screen.findByLabelText("Computer")) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(3));
+    const labels = Array.from(select.options).map((o) => o.textContent ?? "");
+    expect(labels.filter((t) => t.includes("Windows PC (experimental)"))).toHaveLength(1);
+    expect(screen.queryByTestId("windows-host-warning")).toBeNull();
+    fireEvent.change(select, { target: { value: "lin-1" } });
+    expect(screen.queryByTestId("windows-host-warning")).toBeNull();
+    fireEvent.change(select, { target: { value: "win-1" } });
+    expect(screen.getByTestId("windows-host-warning").textContent).toMatch(/Windows rentals are experimental/);
+    expect(screen.getByTestId("windows-host-warning").textContent).toMatch(/only Linux images work/);
+  });
 });
+

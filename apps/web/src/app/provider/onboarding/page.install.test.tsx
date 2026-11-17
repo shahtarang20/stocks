@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -88,6 +88,42 @@ describe("host setup page: the optional rental tick-box", () => {
   it("says plainly what ticking it does", () => {
     renderPage();
     expect(screen.getByText(/also turns container rental on and tests the\s+computer/)).toBeTruthy();
+  });
+});
+
+describe("host setup page: Linux or Windows", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("starts on Linux, the recommended choice, with the Linux line and the one-click button", () => {
+    renderPage();
+    expect((screen.getByRole("radio", { name: /Linux \(recommended\)/ }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("radio", { name: /Windows 11 \(experimental\)/ }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText("Install and connect (Linux)")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create token and copy the install command" })).toBeTruthy();
+    expect(screen.queryByTestId("windows-install")).toBeNull();
+  });
+
+  it("shows the Windows panel instead, and says the installer is not published when its address is not set", () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("radio", { name: /Windows 11 \(experimental\)/ }));
+    expect(screen.getByTestId("windows-install")).toBeTruthy();
+    expect(screen.getByTestId("windows-not-published")).toBeTruthy();
+    expect(screen.queryByText("Install and connect (Linux)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create token and copy the install command" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /Linux \(recommended\)/ }));
+    expect(screen.getByText("Install and connect (Linux)")).toBeTruthy();
+    expect(screen.queryByTestId("windows-install")).toBeNull();
+  });
+
+  it("shows the Windows command (after the consent box) once the installer's address and checksum are set", () => {
+    vi.stubEnv("NEXT_PUBLIC_WINDOWS_AGENT_MSI_URL", "https://github.com/acme/stocks/releases/download/agent-v0.2.1/ComputeCoinAgent-0.2.1.msi");
+    vi.stubEnv("NEXT_PUBLIC_WINDOWS_AGENT_MSI_SHA256", "b".repeat(64));
+    renderPage();
+    fireEvent.click(screen.getByRole("radio", { name: /Windows 11 \(experimental\)/ }));
+    expect(screen.queryByTestId("windows-not-published")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Invoke-WebRequest/);
+    fireEvent.click(screen.getByRole("checkbox", { name: /I have read this/ }));
+    expect(document.body.textContent).toMatch(/Invoke-WebRequest -Uri 'https:\/\/github\.com\/acme\/stocks/);
   });
 });
 

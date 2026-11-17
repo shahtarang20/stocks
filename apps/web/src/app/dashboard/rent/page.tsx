@@ -36,6 +36,8 @@ import {
   rentalErrorText,
   suggestInputPath,
   webViewAvailable,
+  WINDOWS_HOST_LABEL,
+  WINDOWS_HOST_WARNING,
   type FormErrors,
   type RentalForm,
 } from "@/lib/rental";
@@ -50,7 +52,8 @@ function machineLabel(m: MarketplaceMachine): string {
   const card = `${m.gpu_model ?? "CPU-only"}${m.gpu_count > 1 ? ` ×${m.gpu_count}` : ""}`;
   const memory = m.gpu_model ? ` · ${formatMbAsGb(m.vram_mb)} memory` : "";
   const region = m.region ? ` · ${m.region}` : "";
-  return `${card}${memory} · ${m.price_per_hour} ${CREDITS_LABEL} per hour${region}`;
+  const windows = m.host_os === "windows" ? ` · ${WINDOWS_HOST_LABEL}` : "";
+  return `${card}${memory} · ${m.price_per_hour} ${CREDITS_LABEL} per hour${region}${windows}`;
 }
 
 function FieldError({ id, text }: { id: string; text?: string }) {
@@ -259,6 +262,16 @@ export default function RentPage() {
               </p>
               <FieldError id="machine-e" text={errors.machine} />
             </div>
+            {chosenMachine?.host_os === "windows" ? (
+              <p role="status" className="text-sm text-warning" data-testid="windows-host-warning">
+                {WINDOWS_HOST_WARNING}
+              </p>
+            ) : null}
+            {chosenMachine?.host_os === "windows" && Number(form.gpuCount) > 1 ? (
+              <p role="alert" className="text-sm text-danger" data-testid="windows-host-one-gpu">
+                {rentalErrorText("windows_host_offers_one_gpu")}
+              </p>
+            ) : null}
             {tooLow && chosenMachine ? (
               <p role="status" className="text-sm text-warning">
                 This computer asks {chosenMachine.price_per_hour} {CREDITS_LABEL} per hour, which is more than the most you said you will pay, so it will not pick up your rental.

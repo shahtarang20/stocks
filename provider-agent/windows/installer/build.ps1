@@ -73,7 +73,9 @@ if ($payloadFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
   # A payload inside the repository is where a stray secret or certificate would end up committed (L7).
   Write-Warning 'PayloadDir is inside the repository. Keep build output and the certificate OUTSIDE it.'
 }
-$secretLike = Get-ChildItem -LiteralPath $payloadFull -Recurse -File -Include '*.pfx', '*.p12', '*.pem', '*.key', 'agent.toml', '*.secret' -ErrorAction SilentlyContinue
+# certifi's cacert.pem is the PUBLIC certificate bundle every HTTPS library ships; it is not a secret and the agent's own dependencies include it.
+$secretLike = Get-ChildItem -LiteralPath $payloadFull -Recurse -File -Include '*.pfx', '*.p12', '*.pem', '*.key', 'agent.toml', '*.secret' -ErrorAction SilentlyContinue |
+  Where-Object { $_.FullName -notmatch '\\site-packages\\certifi\\cacert\.pem$' }
 if ($secretLike) { Fail ("PayloadDir contains files that look like secrets: " + (($secretLike | Select-Object -First 5 -ExpandProperty Name) -join ', ')) 2 }
 
 # ---- signing configuration (checked BEFORE building, so a long build is not wasted) ------------------------------------

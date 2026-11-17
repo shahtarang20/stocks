@@ -1,0 +1,155 @@
+# Builds the ComputeCoin Windows agent installer (an MSI) on a real Windows runner and checks what can be checked without a GPU or WSL2.
+# UNSIGNED and for CHECKING ONLY: it is uploaded as a build artifact, never published, and never put in an update manifest. A signed release
+# needs the owner's code-signing certificate (see docs/operations/windows-installer.md).
+#
+# What it proves: the portable Python imports the agent and pywin32; the requirements checker runs under it and says "not met" on a runner that
+# has no WSL2 GPU (exit code 3); WiX builds the package; the files are in it; and the installer REFUSES to install without the consent flag and on
+# a computer that does not meet the requirements, leaving nothing behind.
+# What it cannot prove: WSL2 with a graphics card, the managed Linux system, or a rental. Those need a real Windows 11 PC with an NVIDIA card
+# (docs/operations/windows-rental-test-checklist.md).
+name: Windows installer (unsigned build check)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-installer.yml"
+      - "provider-agent/windows/**"
+      - "provider-agent/pyproject.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and check the unsigned MSI
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+      # The portable ("embeddable") Python the installer carries. Pinned by version and SHA-256 so the build always uses exactly these bytes.
+      PY_EMBED_VERSION: "3.12.8"
+      PY_EMBED_SHA256: "8d3f33be9eb810f23c102f08475af2854e50484b8e4e06275e937be61ce3d2fb"
+      WIX_VERSION: "4.0.5"
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the payload (portable Python with the agent and its Windows dependencies)
+        run: |
+          trap { Write-Host "::error title=Payload build failed::$($_.Exception.Message)"; exit 1 }
+          $ErrorActionPreference = 'Stop'
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          $pyDir = Join-Path $payload 'python'
+          New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'python-embed.zip'
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$($env:PY_EMBED_VERSION)/python-$($env:PY_EMBED_VERSION)-embed-amd64.zip" -OutFile $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:PY_EMBED_SHA256) { throw "The portable Python does not match its pinned SHA-256 (got $hash)." }
+          Expand-Archive -LiteralPath $zip -DestinationPath $pyDir -Force
+          $site = Join-Path $pyDir 'Lib\site-packages'
+          New-Item -ItemType Directory -Force -Path $site | Out-Null
+          python -m pip install --upgrade pip
+          python -m pip install --target $site --no-compile ./provider-agent
+          if ($LASTEXITCODE -ne 0) { throw 'pip could not install the agent into the payload.' }
+          # The portable Python reads its search path from python312._pth: add the packages folder, and turn on site so the .pth files pywin32 ships are read.
+          $pth = Join-Path $pyDir 'python312._pth'
+          $lines = @(Get-Content -LiteralPath $pth | Where-Object { $_ -notmatch '^\s*#?\s*import site\s*$' })
+          Set-Content -LiteralPath $pth -Value ($lines + 'Lib\site-packages' + 'import site') -Encoding ascii
+          Copy-Item provider-agent/windows/installer/msi_actions.py $payload
+          Copy-Item provider-agent/windows/installer/consent.txt $payload
+          "PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: The portable Python can import the agent and pywin32, and the requirements checker runs under it
+        run: |
+          trap { Write-Host "::error title=Payload check failed::$($_.Exception.Message)"; exit 1 }
+          $ErrorActionPreference = 'Stop'
+          $py = Join-Path $env:PAYLOAD 'python\python.exe'
+          & $py -I -c "import computecoin_agent, win32serviceutil, win32api, win32crypt, pywintypes; print('imports ok', computecoin_agent.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw 'The portable Python cannot import the agent and pywin32 (see the log).' }
+          & $py -I -m computecoin_agent --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'computecoin-agent --help failed under the portable Python.' }
+          # A hosted runner has no WSL2 GPU, so "a requirement is not met" (exit code 3) is the RIGHT answer, and its report must be readable JSON.
+          $report = & $py -I -m computecoin_agent.windows.runtime.requirements_check --json --install-dir (Join-Path $env:RUNNER_TEMP 'cc-data') 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $report
+          if ($code -ne 3) { throw "The requirements checker exited with $code on a runner without a GPU; it should say 'not met' (3)." }
+          $null = $report | ConvertFrom-Json
+
+      - name: Install WiX
+        run: |
+          trap { Write-Host "::error title=WiX install failed::$($_.Exception.Message)"; exit 1 }
+          $ErrorActionPreference = 'Stop'
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $HOME '.dotnet\tools')
+          & (Join-Path $HOME '.dotnet\tools\wix.exe') extension add -g "WixToolset.UI.wixext/$($env:WIX_VERSION)"
+          if ($LASTEXITCODE -ne 0) { throw 'wix could not add the UI extension.' }
+
+      - name: Build the MSI (unsigned)
+        run: |
+          trap { Write-Host "::error title=MSI build failed::$($_.Exception.Message)"; exit 1 }
+          $ErrorActionPreference = 'Stop'
+          $version = (Select-String -Path provider-agent/pyproject.toml -Pattern '^version = "(\d+\.\d+\.\d+)"').Matches[0].Groups[1].Value
+          $out = Join-Path $env:RUNNER_TEMP 'msi-out'
+          & provider-agent/windows/installer/build.ps1 -Version $version -PayloadDir $env:PAYLOAD -OutDir $out -Unsigned
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
+          "MSI_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: The MSI holds the payload, and refuses to install without consent or on an unsupported computer
+        run: |
+          trap { Write-Host "::error title=MSI check failed::$($_.Exception.Message)"; exit 1 }
+          $ErrorActionPreference = 'Stop'
+          $msiFile = Get-ChildItem -LiteralPath $env:MSI_OUT -Filter 'ComputeCoinAgent-*-UNSIGNED.msi' | Select-Object -First 1
+          if (-not $msiFile) { throw 'No unsigned MSI was produced.' }
+          $msi = $msiFile.FullName
+          Write-Host ("MSI: {0} ({1:N1} MB) sha256 {2}" -f $msiFile.Name, ($msiFile.Length / 1MB), (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant())
+          # 1. Unpack it without installing: the portable Python and the install script must be inside.
+          $extract = Join-Path $env:RUNNER_TEMP 'msi-extract'
+          $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$extract`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec could not unpack the MSI (exit code $($p.ExitCode))." }
+          foreach ($name in @('python.exe', 'msi_actions.py', 'consent.txt')) {
+            if (-not (Get-ChildItem -LiteralPath $extract -Recurse -Filter $name -ErrorAction SilentlyContinue)) { throw "The MSI does not contain $name." }
+          }
+          # 2. Without LicenseAccepted=1 the installer must refuse (the consent rule).
+          $log1 = Join-Path $env:RUNNER_TEMP 'msi-noconsent.log'
+          $p1 = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/l*v', "`"$log1`"") -Wait -PassThru
+          if ($p1.ExitCode -eq 0) { throw 'The MSI installed without the consent flag.' }
+          # 3. With consent, a runner that is not a Windows 11 PC with WSL2 and a GPU must be refused, and nothing may be left behind.
+          $log2 = Join-Path $env:RUNNER_TEMP 'msi-unsupported.log'
+          $p2 = Start-Process msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', 'LicenseAccepted=1', '/l*v', "`"$log2`"") -Wait -PassThru
+          if ($p2.ExitCode -eq 0) { throw 'The MSI installed on a computer that does not meet the requirements.' }
+          if (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'ComputeCoin')) { throw 'A refused install left the program folder behind.' }
+          if (Get-Service -Name 'ComputeCoinAgent' -ErrorAction SilentlyContinue) { throw 'A refused install left the service behind.' }
+          Write-Host "Refused as expected: without consent (exit $($p1.ExitCode)), unsupported computer (exit $($p2.ExitCode))."
+
+      - name: Put the MSI log where it can be read when a step fails
+        if: failure()
+        run: |
+          foreach ($f in @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Filter 'msi-*.log' -ErrorAction SilentlyContinue)) {
+            $tail = (Get-Content -LiteralPath $f.FullName -Tail 60) -join "`n"
+            $esc = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=MSI log $($f.Name) (end)::$esc"
+          }
+
+      - name: Keep the unsigned MSI and the logs for a week (for checking only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComputeCoinAgent-UNSIGNED-msi
+          path: |
+            ${{ runner.temp }}/msi-out/*.msi
+            ${{ runner.temp }}/msi-*.log
+          if-no-files-found: ignore
+          retention-days: 7

@@ -31,10 +31,11 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of ComputeCoin Agent is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Windows 10 (build 19041) or later is needed for WSL2 with GPU compute. The requirements checker gives the exact
-         verdict; this is only a coarse floor so the installer fails early on an unsupported system. TODO(verify-docs): the
-         VersionNT / BuildNumber properties and the minimum build (owner decision, plan section 9). -->
-    <Launch Condition="Installed OR (VersionNT64 &gt;= 603)" Message="ComputeCoin Agent needs a 64-bit version of Windows 10 or later." />
+    <!-- Windows 11 (build 22000) or later. Read 2026-11-17: Microsoft's wsl-config page says the [boot] setting (systemd, which the managed Linux
+         system needs) "is only available on Windows 11 and Server 2022", so this agent cannot run on Windows 10. The requirements checker gives the
+         exact verdict (computecoin_agent.windows.runtime.requirements_check, min_windows_build 22000); this is only a coarse floor so the installer
+         fails early on an unsupported system. TODO(verify-docs): the VersionNT64 and WindowsBuild installer properties. -->
+    <Launch Condition="Installed OR (VersionNT64 &gt;= 603 AND WindowsBuild &gt;= 22000)" Message="ComputeCoin Agent needs 64-bit Windows 11 or later." />
 
     <!-- CONSENT (X14). Interactive installs show consent.rtf as the licence page of WixUI_Minimal; the box must be ticked.
          A silent install (winget, msiexec /qn) shows no page, so it must say LicenseAccepted=1 on the command line, which

@@ -302,7 +302,14 @@ jobs:
         run: |
           python -m pip install -U pip
           pip install -e ".[dev]"
-          pytest -q -ra --junitxml=../junit-provider-agent.xml
+          $report = Join-Path $env:RUNNER_TEMP "pytest-provider-agent.out"
+          pytest -q --tb=short -rfE --junitxml=../junit-provider-agent.xml 2>&1 | Tee-Object -FilePath $report
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # Job logs need a login to read; annotations do not. Put the failing test names where anyone can read them.
+            python (Join-Path $env:GITHUB_WORKSPACE "scripts/annotate_failures.py") $report "Windows provider-agent"
+          }
+          exit $code
 
       # ---- Python SDK (paths, UTF-8, canonical JSON, files written by PowerShell) ----
       - name: Python SDK tests

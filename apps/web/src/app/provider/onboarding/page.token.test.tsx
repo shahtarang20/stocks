@@ -9,7 +9,8 @@ vi.mock("@/lib/auth-context", () => ({ useAuth: () => auth }));
 
 import OnboardingPage from "./page";
 
-const TOKEN = "enr_Ab1-_cdEFgh2345ijKLmnOP6789qrSTuvWXyz0123456";
+// An obviously fake, low-entropy value that still has the real token's shape (letters, digits, "-" and "_"), so a secret scanner does not take it for a key.
+const TOKEN = "enr_FAKE-TEST_FAKE-TEST_FAKE-TEST_FAKE-TEST"; // gitleaks:allow
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
 beforeEach(() => {

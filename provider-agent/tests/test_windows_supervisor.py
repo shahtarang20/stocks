@@ -495,9 +495,113 @@ def test_launcher_removes_only_matching_containers_through_argv_without_a_shell(
     sv.WslRunnerLauncher(sv.SupervisorSettings(), run=run).stop_job_containers()
     listing, removal = calls
     assert "name=ccoin-job-" in listing and "name=ccoin-proxy-" in listing
+    assert "name=ccoin-sess-" in listing  # a rental whose runner was killed must not keep running on the owner's card
     assert removal[-3:] == ["-f", "0123456789ab", "fedcba987654"]  # the junk line was dropped, never executed
     assert all(isinstance(a, list) for a in calls)
 
 
 def test_launcher_without_a_runner_does_nothing():
     sv.WslRunnerLauncher(sv.SupervisorSettings()).stop_job_containers()  # run=None: no error
+
+
+# --------------------------------------------------------------------------- the Windows drive and the hard-stop temperature (rentals included)
+class _FakeTimer:
+    """Stands in for the "kill if the polite stop did not work" timer, so no real thread waits in a test."""
+
+    def __init__(self, interval, fn):
+        self.interval, self.fn, self.daemon = interval, fn, False
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        pass
+
+
+def _interrupts(client):
+    return [d for t, d in client.sent if t == "interrupt"]
+
+
+def test_a_nearly_full_windows_drive_stops_new_work_and_clears_when_space_returns():
+    free = {"gb": 100.0}
+    sup = make(host_disk_free_gb=lambda: free["gb"], timer_factory=_FakeTimer)
+    online(sup)
+    free["gb"] = 10.0  # under the 20 GB line, over the 5 GB stop line
+    sup.tick()
+    assert sup.availability() == "throttled" and sup.snapshot()["detail"]["code"] == "host_disk_low"
+    free["gb"] = 100.0
+    sup.tick()
+    assert sup.availability() == "online"
+
+
+def test_a_critically_full_drive_interrupts_the_running_job_or_rental_once_and_asks_politely():
+    free = {"gb": 100.0}
+    sup = make(host_disk_free_gb=lambda: free["gb"], timer_factory=_FakeTimer)
+    online(sup)
+    sup._on_message(cc.ControlMessage("job_started", {"job_id": "rental-1", "active_jobs": 1}))
+    client = FakeClient.instances[-1]
+    free["gb"] = 2.0
+    for _ in range(4):
+        sup.tick()
+    sent = _interrupts(client)
+    assert len(sent) == 1 and sent[0]["reason"] == "host_disk_low"  # one request, not one per tick
+
+
+def test_a_full_drive_with_nothing_running_interrupts_nothing():
+    free = {"gb": 100.0}
+    sup = make(host_disk_free_gb=lambda: free["gb"], timer_factory=_FakeTimer)
+    online(sup)
+    free["gb"] = 1.0
+    sup.tick()
+    assert _interrupts(FakeClient.instances[-1]) == [] and sup.availability() == "throttled"
+
+
+@pytest.mark.parametrize("probe", [lambda: None, lambda: -1, lambda: "lots", lambda: True, lambda: (_ for _ in ()).throw(OSError("no drive"))])
+def test_an_unreadable_drive_gives_no_opinion_and_never_blocks_or_stops_anything(probe):
+    sup = make(host_disk_free_gb=probe, timer_factory=_FakeTimer)
+    online(sup)
+    sup._on_message(cc.ControlMessage("job_started", {"job_id": "j", "active_jobs": 1}))
+    sup.tick()
+    assert sup.availability() == "online" and _interrupts(FakeClient.instances[-1]) == []
+
+
+def test_without_a_probe_the_drive_is_never_checked():
+    sup = make(timer_factory=_FakeTimer)
+    online(sup)
+    assert sup.availability() == "online"
+
+
+def test_the_hard_stop_temperature_interrupts_the_running_job_even_if_the_runner_does_not_act():
+    temp = {"v": 60.0}
+    guard = ThermalGuard(85, 80, 95, sampler=lambda: [_sample(temp=temp["v"])])
+    sup = make(guard=guard, timer_factory=_FakeTimer)
+    online(sup)
+    sup._on_message(cc.ControlMessage("job_started", {"job_id": "rental-1", "active_jobs": 1}))
+    client = FakeClient.instances[-1]
+    sup.tick()
+    assert _interrupts(client) == []
+    temp["v"] = 97.0
+    for _ in range(3):
+        sup.tick()
+    sent = _interrupts(client)
+    assert len(sent) == 1 and sent[0]["reason"] == "gpu_hard_stop"
+
+
+def test_a_merely_warm_gpu_stops_new_work_but_does_not_interrupt_a_running_job():
+    temp = {"v": 60.0}
+    guard = ThermalGuard(85, 80, 95, sampler=lambda: [_sample(temp=temp["v"])])
+    sup = make(guard=guard, timer_factory=_FakeTimer)
+    online(sup)
+    sup._on_message(cc.ControlMessage("job_started", {"job_id": "j", "active_jobs": 1}))
+    temp["v"] = 88.0
+    sup.tick()
+    assert sup.availability() == "throttled" and _interrupts(FakeClient.instances[-1]) == []
+
+
+def test_the_drive_limits_default_to_20_and_5_gb_and_must_make_sense():
+    st = sv.SupervisorSettings()
+    assert (st.host_disk_min_free_gb, st.host_disk_stop_free_gb) == (20.0, 5.0)
+    assert sv.SupervisorSettings.from_dict({"host_disk_min_free_gb": 50, "host_disk_stop_free_gb": 10}).host_disk_stop_free_gb == 10
+    for bad in ({"host_disk_stop_free_gb": 30}, {"host_disk_stop_free_gb": -1}):
+        with pytest.raises(ValueError):
+            sv.SupervisorSettings.from_dict(bad)

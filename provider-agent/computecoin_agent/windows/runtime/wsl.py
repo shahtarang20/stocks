@@ -9,11 +9,14 @@ Rules (X11, never shell strings):
   :func:`assert_no_shell`, so a future edit cannot smuggle one in;
 * file content is written through stdin (``tee``), not through ``echo`` or redirection.
 
-TODO(verify-docs) (X11) for every flag below, against Microsoft's current ``wsl.exe`` command reference
-(https://learn.microsoft.com/windows/wsl/basic-commands): ``--import <Distro> <InstallLocation> <TarFile> --version 2``,
-``--unregister``, ``--terminate``, ``--list --verbose``, ``--version``, ``--manage <Distro> --resize`` (needs a recent
-WSL release), ``--manage <Distro> --set-sparse``, ``--distribution``, ``--user``, ``--exec``, and the ``WSL_UTF8``
-environment variable that switches management output from UTF-16LE to UTF-8. None of it was checked or run.
+Documentation status (X11), checked 2026-11-17 against https://learn.microsoft.com/windows/wsl/basic-commands (page dated 2025-12-01):
+READ AND MATCHING: ``--import <Distro> <InstallLocation> <FileName>`` with ``--version`` and ``--vhd`` options, ``--list --verbose`` (shows the
+state and the WSL version of each distribution), ``--version``, ``--terminate``, ``--unregister``, ``--shutdown``, ``--update``,
+``--set-version <Distro> 2``, ``--distribution`` and ``--user``.
+NOT ON THAT PAGE, so still unverified (they exist in ``wsl --help`` but this was not checked): ``--exec`` (that it runs the program with no shell),
+``--manage <Distro> --resize`` and ``--set-sparse``, the ``WSL_UTF8`` variable, the UTF-16 encoding of the management output, the exact columns
+and default marker of ``--list --verbose`` (the parser accepts the usual layout and skips anything else), and the output format of ``--version``.
+Run on a real PC before relying on them: ``scripts/windows/rental-test-kit.ps1``.
 """
 
 from __future__ import annotations

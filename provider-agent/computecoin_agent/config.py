@@ -244,6 +244,9 @@ class AgentConfig(BaseSettings):
     # host that never turns it on serves Kits and practice jobs only. `serve_sessions` makes the installed agent also serve
     # interactive sessions (Kit sessions are safe; rentals still need the opt-in above).
     allow_container_rental: bool = False
+    # EXPERIMENTAL. On a Windows host, container rental also needs this second switch: the rental service then runs inside the managed
+    # WSL2 Linux system and takes container rentals only (never Kit sessions). `computecoin-agent rental on` sets both on Windows.
+    windows_rental_enabled: bool = False
     serve_sessions: bool = True
     rental_root: Optional[str] = None  # where rental workspaces live (default: <data dir>/rental)
     rental_max_workspace_gb: int = 50  # the host's own cap, applied over what a customer asks for

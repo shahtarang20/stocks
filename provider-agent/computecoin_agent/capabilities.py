@@ -108,8 +108,11 @@ def compute_capabilities(
     if container and getattr(cfg, "cpu_only_kits_enabled", False):
         flags.add("cpu_capable")
     # The host's own opt-in to run a customer's own container (container rental). Only a literal True counts, never a
-    # truthy look-alike, and never on Windows.
-    if container and not windows and getattr(cfg, "allow_container_rental", False) is True:
+    # truthy look-alike. A Windows host needs its second, experimental switch too (windows_rental_enabled).
+    rental_ok = getattr(cfg, "allow_container_rental", False) is True and (
+        not windows or getattr(cfg, "windows_rental_enabled", False) is True
+    )
+    if container and rental_ok:
         flags.add("container_rental")
 
     if not windows:
@@ -126,7 +129,8 @@ def compute_capabilities(
         if getattr(cfg, "multinode_network", None) and getattr(cfg, "multinode_network_firewalled", False) and container:
             flags.add("multi_node")
 
-    flags -= WINDOWS_FORBIDDEN_FLAGS if windows else set()
+    if windows:
+        flags -= WINDOWS_FORBIDDEN_FLAGS - ({"container_rental"} if rental_ok else set())
     return [f for f in KNOWN_CAPABILITY_FLAGS if f in flags]
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tomllib
 import types
 
@@ -12,6 +13,10 @@ from typer.testing import CliRunner
 
 from computecoin_agent import cli, config as config_mod
 from computecoin_agent.config import AgentConfig
+
+pytestmark = pytest.mark.skipif(
+    sys.platform.startswith("win"), reason="the Linux behaviour of `rental`; the Windows behaviour is tested in test_windows_rental_check.py"
+)
 
 
 @pytest.fixture

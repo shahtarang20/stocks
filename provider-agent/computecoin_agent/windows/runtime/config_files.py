@@ -22,6 +22,13 @@ memory or CPU key. The module therefore:
 TODO(verify-docs) (X11): ``.wslconfig`` and ``wsl.conf`` keys and sections
 (https://learn.microsoft.com/windows/wsl/wsl-config), systemd cgroup v2 controllers available in the WSL2 kernel,
 Docker ``cgroup-parent`` with the systemd cgroup driver, and the daemon.json keys below.
+
+Documentation status, READ 2026-11-17 (learn.microsoft.com/windows/wsl/wsl-config, page dated 2026-10-16): ``[automount] enabled=false`` means drives are
+not mounted automatically (the page does not say ``/mnt/c`` is absent, so ``rental check`` looks inside it); ``[interop] enabled`` (default true)
+decides whether Windows processes can be launched, and the page's own example says false for both interop keys "will block the launch of Windows
+processes"; ``appendWindowsPath`` defaults to true; ``[boot] systemd=true`` is "only available on Windows 11 and Server 2022" (so this runtime needs
+Windows 11); ``[user] default=`` sets the user; a change applies after every instance of the distribution has stopped (``wsl --shutdown`` is the
+fast path, about 8 seconds). ``.wslconfig`` ``[wsl2]``: ``memory`` defaults to 50% of Windows memory, ``processors`` to all, ``swap`` to 25% of memory.
 """
 
 from __future__ import annotations

@@ -434,10 +434,12 @@ def build_gpu_argv(
     render_nodes: Optional[list[str]] = None,
     render_gid: Optional[int] = None,
     video_gid: Optional[int] = None,
+    in_wsl: Optional[bool] = None,
 ) -> list[str]:
     """Docker GPU argv for the vendor.
 
-    - NVIDIA: byte-identical ``['--gpus', str(gpu_count)]``.
+    - NVIDIA: byte-identical ``['--gpus', str(gpu_count)]``, except inside WSL (a Windows host's Linux system), where Docker supports
+      only ``--gpus all`` (NVIDIA's CUDA-on-WSL guide) and the system sees one card, so it is ``['--gpus', 'all']``.
     - AMD (D6): ``/dev/kfd`` plus ONLY the render nodes of the GPUs given (from detection, which
       resolves each GPU's own node), and the numeric GIDs owning those devices. Never the whole
       /dev/dri, never a guessed node, never --privileged / --ipc=host / seccomp=unconfined /
@@ -445,7 +447,9 @@ def build_gpu_argv(
     """
     vendor = (gpu_vendor or "nvidia").lower().strip()
     if vendor == "nvidia":
-        return ["--gpus", str(gpu_count)]
+        from .platform.wsl_env import running_in_wsl
+
+        return ["--gpus", "all" if (running_in_wsl() if in_wsl is None else in_wsl) else str(gpu_count)]
     if vendor != "amd":
         raise ExecutorError(f"Unsupported gpu_vendor: {gpu_vendor!r}")
 

@@ -35,7 +35,10 @@ Exec = Callable[[Sequence[str]], RunResult]
 
 @dataclass(frozen=True)
 class Thresholds:
-    min_windows_build: int = 19044  # Windows 10 21H2. TODO(verify-docs): exact minimum for WSL2 GPU compute
+    # Windows 11. Read 2026-11-17: Microsoft's wsl-config page says the [boot] setting (systemd, which this runtime needs: health.py checks
+    # systemd is PID 1, the resource slice and Docker's systemd cgroup driver) "is only available on Windows 11 and Server 2022". NVIDIA's
+    # CUDA-on-WSL guide alone would allow Windows 10 21H2 (build 19044), but this runtime cannot run there.
+    min_windows_build: int = 22000
     min_wsl_version: str = "2.0.0"  # the signed manifest's min_wsl_version is authoritative at provisioning time
     min_nvidia_driver: str = "535.0"  # TODO(verify-docs): owner decision; CUDA-on-WSL needs a WSL-capable Windows driver
     min_free_disk_gb: float = 60.0
@@ -207,8 +210,8 @@ def check_requirements(probes: Probes, thresholds: Thresholds = Thresholds()) ->
                                "Run the check again from a normal Windows session."))
     elif ver[0] < 10 or ver[2] < t.min_windows_build:
         out.append(Requirement("windows_version", "Windows version", FAIL,
-                               f"Windows build {ver[2]} is too old for GPU sharing (build {t.min_windows_build} or newer is needed).",
-                               "Install the latest Windows updates, or upgrade to Windows 10 21H2 or newer, or Windows 11.",
+                               f"Windows build {ver[2]} is too old for GPU sharing (build {t.min_windows_build}, which is Windows 11, or newer is needed).",
+                               "Install the latest Windows updates, or upgrade to Windows 11. Windows 10 cannot run the Linux system's service manager that sharing needs.",
                                f"{ver[0]}.{ver[1]}.{ver[2]} edition={edition}"))
     else:
         out.append(Requirement("windows_version", "Windows version", PASS, "Your Windows version is supported.",

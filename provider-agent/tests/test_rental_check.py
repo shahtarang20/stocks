@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import subprocess
 import types
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -196,3 +198,77 @@ def test_the_image_option_cannot_inject_a_docker_flag(bad):
 def test_an_unknown_action_still_says_what_is_allowed():
     res = CliRunner().invoke(cli.app, ["rental", "explode"])
     assert res.exit_code == 2 and "'check'" in res.output
+
+
+# ---- the driver decides the test image (535 is what the setup page asks for; 550 is what the newest image needs) ------------
+class DriverDocker(Docker):
+    def __init__(self, driver, **kw):
+        super().__init__(**kw)
+        self.driver = driver
+
+    def __call__(self, argv, timeout):
+        if argv[0] == "nvidia-smi" and any("driver_version" in a for a in argv):
+            self.calls.append(list(argv))
+            return types.SimpleNamespace(returncode=0 if self.driver is not None else 1, stdout=self.driver or "", stderr="")
+        return super().__call__(argv, timeout)
+
+
+@pytest.mark.parametrize("driver,image", [
+    ("550.120", "nvidia/cuda:12.4.1-base-ubuntu22.04"), ("560.35.03", "nvidia/cuda:12.4.1-base-ubuntu22.04"),
+    ("545.29.06", "nvidia/cuda:12.2.2-base-ubuntu22.04"), ("535.86.10", "nvidia/cuda:12.2.2-base-ubuntu22.04"),
+])
+def test_the_test_image_is_the_newest_one_the_hosts_driver_can_run(tmp_path, driver, image):
+    checks, d = go(tmp_path, DriverDocker(driver))
+    assert by(checks)["NVIDIA driver"].status == rc.PASS and driver in by(checks)["NVIDIA driver"].detail
+    assert image in next(c for c in d.calls if c[:2] == ["docker", "run"])
+    assert by(checks)["Test container"].status == rc.PASS
+
+
+def test_a_driver_older_than_the_page_asks_for_fails_with_what_to_do(tmp_path):
+    checks, d = go(tmp_path, DriverDocker("525.147.05"))
+    drv = by(checks)["NVIDIA driver"]
+    assert drv.status == rc.FAIL and "535.86" in drv.fix and "525.147.05" in drv.detail
+    assert rc.summarize(checks)[0] == 1
+
+
+def test_an_unreadable_driver_says_nothing_extra_and_uses_the_535_image(tmp_path):
+    checks, d = go(tmp_path, DriverDocker(None))
+    assert "NVIDIA driver" not in by(checks)
+    assert "nvidia/cuda:12.2.2-base-ubuntu22.04" in next(c for c in d.calls if c[:2] == ["docker", "run"])
+
+
+def test_an_image_the_host_names_is_used_as_given_whatever_the_driver(tmp_path):
+    mine = "docker.io/library/python@sha256:" + "b" * 64
+    checks, d = go(tmp_path, DriverDocker("550.120"), image=mine)
+    run = next(c for c in d.calls if c[:2] == ["docker", "run"])
+    assert mine in run and not any(a.startswith("nvidia/cuda:") for a in run)
+
+
+def test_driver_helpers_read_only_real_versions():
+    assert rc.driver_major("550.120") == 550 and rc.driver_major(" 535.86.10\nsecond card") == 535 and rc.driver_major("472.12") == 472
+    for bad in (None, "", "NVIDIA GeForce RTX 3060, 12288 MiB", "N/A", "12.4", "abc.123"):
+        assert rc.driver_major(bad) is None
+    assert rc.pick_check_image(None) == rc.FALLBACK_CHECK_IMAGE == "nvidia/cuda:12.2.2-base-ubuntu22.04"
+    assert rc.pick_check_image("999.1") == rc.CHECK_IMAGE
+
+
+def test_the_setup_page_and_the_check_ask_for_the_same_driver_and_cuda_generation():
+    page = (Path(__file__).resolve().parents[2] / "apps/web/src/app/provider/onboarding/page.tsx").read_text()
+    assert f"NVIDIA driver {rc.MIN_DRIVER_MAJOR}." in page
+    page_image = re.search(r"nvidia/cuda:(\d+\.\d+)", page).group(1)
+    assert rc.FALLBACK_CHECK_IMAGE.split(":")[1].startswith(page_image)  # both are the CUDA 12.2 generation
+
+
+def test_failure_messages_name_the_real_cause():
+    why, fix = rc._explain_failure("nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.4, please update your driver", gpus=True, image="x")
+    assert "driver is too old" in why and "535.86" in fix and "toolkit" not in fix.lower()
+    why, fix = rc._explain_failure("Failed to initialize NVML: Unknown Error", gpus=True, image="x")
+    assert "stopped answering" in why and "systemctl restart docker" in fix
+    why, fix = rc._explain_failure("docker: could not select device driver with capabilities: [[gpu]]", gpus=True, image="x")
+    assert "NVIDIA Container Toolkit" in fix  # the old advice still applies to the old cause
+
+
+def test_a_missing_card_mentions_secure_boot(tmp_path):
+    checks, _ = go(tmp_path, Docker(smi=(1, "", "NVIDIA-SMI has failed")))
+    assert "Secure Boot" in by(checks)["Graphics card"].fix and "restart" in by(checks)["Graphics card"].fix
+

@@ -440,7 +440,11 @@ class SleepInhibitor:
 
     ``SetThreadExecutionState`` with ``ES_CONTINUOUS`` is per THREAD and lasts until that thread clears it or exits, so one
     dedicated thread owns the request. The display may still turn off. A user pressing Sleep, closing a laptop lid or a
-    forced policy still suspends the machine: this only removes the idle timeout. TODO(verify-docs): for a service,
+    forced policy still suspends the machine: this only removes the idle timeout. READ 2026-11-17
+(learn.microsoft.com/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate): ES_CONTINUOUS is 0x80000000, ES_SYSTEM_REQUIRED 0x1, ES_DISPLAY_REQUIRED
+0x2; the state is the thread's and stays until the next call that uses ES_CONTINUOUS; failure returns NULL; and Microsoft says it "cannot be used to
+prevent the user from putting the computer to sleep" (lid, power button), which matches this class. Not stated there: what happens when the thread
+exits, so one long-lived thread owns the request, as below. TODO(verify-docs): for a service,
     ``PowerCreateRequest`` / ``PowerSetRequest`` is Microsoft's recommended alternative; decide with the supervisor owner.
     """
 

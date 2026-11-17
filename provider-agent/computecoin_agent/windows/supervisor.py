@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -72,6 +73,14 @@ class SupervisorSettings:
     control_host: str = "127.0.0.1"
     control_port: int = 47821
     allow_private_control_address: bool = False
+    # EXPERIMENTAL: the runner also serves container rentals (the customer's own image) and nothing else. Set by the service from the host's
+    # own opt-in (allow_container_rental and windows_rental_enabled), not by hand.
+    serve_rentals: bool = False
+    # The Windows drive that holds the Linux system's virtual disk. The checks inside the Linux system see only that virtual disk, never the
+    # free space of this drive, which the disk can grow into until it is full. Below the first number no new job or rental is taken; below the
+    # second a running one is interrupted (politely, then by force).
+    host_disk_min_free_gb: float = 20.0
+    host_disk_stop_free_gb: float = 5.0
     tick_seconds: float = 2.0
     drain_grace_seconds: float = 20.0
     stop_grace_seconds: float = 10.0
@@ -113,8 +122,16 @@ class SupervisorSettings:
         for name in ("tick_seconds", "drain_grace_seconds", "stop_grace_seconds", "kill_wait_seconds", "interrupt_grace_seconds", "snapshot_max_age_seconds"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} must be > 0")
+        if not 0 <= self.host_disk_stop_free_gb <= self.host_disk_min_free_gb:
+            raise ValueError("host_disk_stop_free_gb must be between 0 and host_disk_min_free_gb")
         if self.max_restarts < 0 or not self.restart_backoff_seconds:
             raise ValueError("max_restarts must be >= 0 and restart_backoff_seconds non-empty")
+
+
+def serve_rentals_enabled(config: Any) -> bool:
+    """True only when the host turned on BOTH of its own switches for container rental on Windows (``allow_container_rental`` and the
+    experimental ``windows_rental_enabled``). Only a literal True counts, never a truthy look-alike."""
+    return getattr(config, "allow_container_rental", False) is True and getattr(config, "windows_rental_enabled", False) is True
 
 
 # --------------------------------------------------------------------------- #
@@ -159,6 +176,8 @@ class WslRunnerLauncher:
         ]
         if self._s.allow_private_control_address:
             program.append("--control-allow-private")
+        if self._s.serve_rentals is True:
+            program.append("--serve-rentals")
         assert_no_shell(program)
         return argv_exec(self._s.distro, program, user=self._s.runner_user)
 
@@ -190,10 +209,11 @@ class WslRunnerLauncher:
                 raise ControlChannelError("could not provision the control token in the runtime distro")
 
     def stop_job_containers(self) -> None:
-        """Best effort: remove every job container (and egress proxy) still running in the distro.
+        """Best effort: remove every job container, rental container (``ccoin-sess-``) and egress proxy still running in the distro.
 
         Terminating the runner kills ``wsl.exe`` and the agent inside, but a customer's container is a separate process
-        tree under Docker: it would keep running (and keep the owner's GPU busy) after the server re-queued the job.
+        tree under Docker: it would keep running (and keep the owner's GPU busy) after the server re-queued the job. A
+        rental container is the same: the runner that served it is gone, so nothing is connected to it any more.
         Never raises: a failure here must not stop the runner from being restarted.
         """
         if self._run is None:
@@ -203,7 +223,7 @@ class WslRunnerLauncher:
         try:
             listed = self._run(argv_exec(
                 self._s.distro,
-                ["docker", "ps", "-aq", "--filter", "name=ccoin-job-", "--filter", "name=ccoin-proxy-"],
+                ["docker", "ps", "-aq", "--filter", "name=ccoin-job-", "--filter", "name=ccoin-sess-", "--filter", "name=ccoin-proxy-"],
                 user="root",
             ))
             ids = [w for w in str(getattr(listed, "stdout", "") or "").split() if re.fullmatch(r"[0-9a-f]{12,64}", w)]
@@ -286,7 +306,10 @@ class Supervisor:
         update_runner: Optional[Callable[[threading.Event], None]] = None,
         on_shutdown: Sequence[Callable[[], None]] = (),
         timer_factory: Callable[..., Any] = threading.Timer,
+        host_disk_free_gb: Optional[Callable[[], Optional[float]]] = None,
     ) -> None:
+        self._host_disk_probe = host_disk_free_gb  # free GB on the Windows drive that holds the Linux system; None = no opinion
+        self._host_free_gb: Optional[float] = None
         self._base_url, self._machine_id, self._secret = base_url, machine_id, machine_secret
         self._token = token
         self._s = settings
@@ -500,6 +523,8 @@ class Supervisor:
         thermal = self._thermal_check()
         if thermal in ("throttled", "hard_stop", "sensor_lost"):
             causes["throttled"] = "gpu_" + thermal
+        if self._host_disk_low():
+            causes.setdefault("throttled", "host_disk_low")
         if self._update_gate is not None:
             try:
                 if not self._update_gate.may_claim():  # below the forced-update floor, updating, or a failed rollback
@@ -526,8 +551,42 @@ class Supervisor:
             return "ok"  # ThermalGuard's own rule: an unreadable sensor never blocks
 
     # -- one pass of the main loop ------------------------------------------------------------------------------ #
+    def _sample_host_disk(self) -> None:
+        """Free space on the Windows drive. An unreadable drive gives no opinion (it never blocks and never stops anything by itself)."""
+        probe = self._host_disk_probe
+        value: Optional[float] = None
+        if probe is not None:
+            try:
+                got = probe()
+                if isinstance(got, (int, float)) and not isinstance(got, bool) and got >= 0:
+                    value = float(got)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("host disk probe failed: %s", type(exc).__name__)
+        with self._lock:
+            self._host_free_gb = value
+
+    def _host_disk_low(self) -> bool:
+        with self._lock:
+            free = self._host_free_gb
+        return free is not None and free < self._s.host_disk_min_free_gb
+
+    def _protect_host(self) -> None:
+        """A second line of protection for the owner's PC, independent of the runner: a nearly full Windows drive, or a GPU at its hard-stop
+        temperature, interrupts the running job or rental (politely first; if it is still running ``interrupt_grace_seconds`` later, or the runner
+        cannot be reached, the runner is killed and every customer container, rentals included, is removed). One request at a time."""
+        with self._lock:
+            free, waiting = self._host_free_gb, self._interrupt_timer is not None
+        if waiting:
+            return
+        if free is not None and free < self._s.host_disk_stop_free_gb:
+            self.abort_running_job("host_disk_low")
+        elif self._thermal_check() == "hard_stop":
+            self.abort_running_job("gpu_hard_stop")
+
     def tick(self) -> None:
         self._sample()
+        self._sample_host_disk()
+        self._protect_host()
         self._manage_runner()
         self._recompute()
         self._push_availability()
@@ -880,6 +939,8 @@ def build_supervisor(
     if not config.has_machine_credential():
         raise RuntimeError("machine is not enrolled: run `computecoin-agent service enroll --token ... --server ...` first")
     settings = SupervisorSettings.load(layout.supervisor_file)
+    # Container rental on this Windows host needs BOTH of the host's own switches; only a literal True counts.
+    settings.serve_rentals = serve_rentals_enabled(config)
     token = ensure_control_token(store)
     if launcher_factory is None:
         from .runtime.wsl import subprocess_runner
@@ -955,6 +1016,7 @@ def build_supervisor(
         update_gate=update_gate,
         update_runner=update_runner,
         on_shutdown=[governance.close] if governance is not None else [],
+        host_disk_free_gb=lambda: shutil.disk_usage(str(layout.root)).free / 1024**3,
     )
     holder["sup"] = sup
     sup.set_thermal_guard(ThermalGuard.from_config(config, sampler=sup.thermal_sampler))

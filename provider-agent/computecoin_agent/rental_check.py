@@ -11,6 +11,7 @@ Docker at all.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -24,6 +25,42 @@ from .rental import FREE_DISK_MARGIN, GIB, RentalError, Workspace, assert_rental
 # image a host intends to serve) to also prove that image can be pulled.
 CHECK_IMAGE = "nvidia/cuda:12.4.1-base-ubuntu22.04"
 CHECK_TIMEOUT_SECONDS = 900  # the first run pulls the image
+
+# The setup page asks for NVIDIA driver 535.86 or newer, so the check must not fail a host on 535 to 549 with an image that needs 550.
+# It picks the newest CUDA base image the host's driver can run (driver floors: CUDA 12.4 needs 550, CUDA 12.2 needs 535). An unreadable
+# driver version falls back to the 535 image, the one that matches what the page asks for. `--image` always wins.
+MIN_DRIVER_MAJOR = 535
+CHECK_IMAGES = ((550, CHECK_IMAGE), (535, "nvidia/cuda:12.2.2-base-ubuntu22.04"))
+FALLBACK_CHECK_IMAGE = "nvidia/cuda:12.2.2-base-ubuntu22.04"
+
+
+def driver_major(text: Optional[str]) -> Optional[int]:
+    """The major number of an NVIDIA driver version such as ``550.120`` (first line only), or None when it is not one."""
+    first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+    m = re.match(r"^\s*(\d{3,4})\.\d+", first)
+    return int(m.group(1)) if m else None
+
+
+def pick_check_image(driver_text: Optional[str]) -> str:
+    major = driver_major(driver_text)
+    if major is None:
+        return FALLBACK_CHECK_IMAGE
+    for floor, image in CHECK_IMAGES:
+        if major >= floor:
+            return image
+    return FALLBACK_CHECK_IMAGE  # below every floor: the "driver" check fails first and says what to do
+
+
+def driver_check(driver_text: Optional[str]) -> Optional["Check"]:
+    """The driver line of the report, or None when the version could not be read (the report then says nothing rather than guess)."""
+    major = driver_major(driver_text)
+    if major is None:
+        return None
+    version = (driver_text or "").strip().splitlines()[0].strip()
+    if major < MIN_DRIVER_MAJOR:
+        return Check("NVIDIA driver", FAIL, f"Driver {version} is older than the {MIN_DRIVER_MAJOR} that container rental needs.",
+                     "Update the NVIDIA driver (535.86 or newer), restart the computer and run this check again.")
+    return Check("NVIDIA driver", PASS, f"Driver {version}.")
 OK_MARK = "CHECK-OK"
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
@@ -78,6 +115,7 @@ def run_checks(
     free_bytes: Optional[Callable[[str], int]] = None,
 ) -> list[Check]:
     """All the checks, in order. Never raises."""
+    chosen_image = image  # an image the host named is always used as given
     image = image or CHECK_IMAGE
     out: list[Check] = []
     free_bytes = free_bytes or (lambda p: shutil.disk_usage(p).free)
@@ -114,9 +152,17 @@ def run_checks(
             gpus = [ln.strip() for ln in _out(res).splitlines() if ln.strip()]
     if gpus:
         out.append(Check("Graphics card", PASS, f"{len(gpus)} found: " + "; ".join(gpus[:4]) + (" ..." if len(gpus) > 4 else "")))
+        drv = _run(runner, ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"])
+        driver_text = _out(drv) if getattr(drv, "returncode", 1) == 0 else None
+        line = driver_check(driver_text)
+        if line is not None:
+            out.append(line)
+        if chosen_image is None:
+            image = pick_check_image(driver_text)
     else:
         out.append(Check("Graphics card", FAIL, "No NVIDIA graphics card answered (nvidia-smi).",
-                         "Install the NVIDIA driver so that nvidia-smi lists your card. AMD cards are not supported for rentals."))
+                         "Install the NVIDIA driver so that nvidia-smi lists your card, then restart the computer. If you just installed it and Secure "
+                         "Boot is on, the driver may be blocked: turn Secure Boot off or sign the driver. AMD cards are not supported for rentals."))
 
     # 5. disk
     root_parent = root if os.path.isdir(root) else (os.path.dirname(root.rstrip(os.sep)) or ".")
@@ -182,6 +228,13 @@ def run_checks(
 
 def _explain_failure(text: str, *, gpus: bool, image: str) -> tuple[str, str]:
     t = text.lower()
+    if "unsatisfied condition" in t or "cuda>=" in t or "driver version is insufficient" in t or "requirement error" in t:
+        return ("The graphics-card driver is too old for the test image.",
+                "Update the NVIDIA driver (535.86 or newer), restart the computer and run this check again.")
+    if "failed to initialize nvml" in t:
+        return ("The graphics card stopped answering inside Docker containers (a known Docker issue after Docker or the system reloads).",
+                "Restart Docker (sudo systemctl restart docker) and run this check again. If it keeps coming back, see the NVIDIA Container "
+                "Toolkit troubleshooting page for 'Failed to initialize NVML: Unknown Error'.")
     if "could not select device driver" in t or ("nvidia" in t and "runtime" in t) or ("gpu" in t and "driver" in t):
         return ("Docker cannot give a container the graphics card.",
                 "Install the NVIDIA Container Toolkit and register it with Docker (sudo nvidia-ctk runtime configure --runtime=docker), "

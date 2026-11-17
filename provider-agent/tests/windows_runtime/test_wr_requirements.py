@@ -82,3 +82,13 @@ def test_json_shape_is_stable_for_the_website():
     assert d["schema"] == 1 and d["ok"] is False
     assert set(d["results"][0]) == {"id", "title", "status", "message", "fix", "detail"}
     assert "FAIL" in check_requirements(probes(virtualization=lambda: False)).summary()
+
+
+def test_windows_10_is_refused_because_the_managed_linux_system_needs_systemd_and_microsoft_says_that_is_windows_11():
+    # Microsoft's wsl-config page (read 2026-11-17): the [boot] setting "is only available on Windows 11 and Server 2022".
+    for build in (19044, 19045, 21999):
+        r = by_id(check_requirements(probes(windows_version=lambda b=build: (10, 0, b))))["windows_version"]
+        assert r.status == FAIL and "Windows 11" in r.message and "Windows 11" in r.fix, build
+    for build in (22000, 22621, 22631, 26100):
+        assert by_id(check_requirements(probes(windows_version=lambda b=build: (10, 0, b))))["windows_version"].status == PASS, build
+

@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -326,9 +327,15 @@ class SessionAgent:
         thermal_guard: Any = None,
         claim_gate: Optional[Callable[[], bool]] = None,
         upload: Optional[Callable[..., dict[str, Any]]] = None,
+        rentals_only: bool = False,
+        activity: Any = None,
     ) -> None:
         self.api, self.executor, self._run, self._clock = api, executor, runner, clock
         self._ws_connect = ws_connect
+        # A Windows host's runner takes container rentals and nothing else. `activity` (job_started / job_finished) lets a supervisor
+        # count a rental as a running job, so an update or a drain waits for it.
+        self._rentals_only = rentals_only is True
+        self._activity = activity
         self._endpoint_factory = endpoint_factory or self._default_endpoint
         self.workdir = workdir
         self._dirs: dict[str, str] = {}
@@ -610,6 +617,28 @@ class SessionAgent:
         if os.path.exists(run.workspace.top):
             logging.getLogger(__name__).warning("a rental workspace could not be fully deleted: %s", run.workspace.top)
 
+    _SESSION_CONTAINER_RE = re.compile(r"^ccoin-sess-[0-9a-fA-F-]{8,64}$")
+
+    def remove_orphan_containers(self) -> int:
+        """At the start of the session service: remove session containers (rentals and Kit sessions) that no running part of THIS process
+        owns. A crash or a restart of the agent kills the process that served them but not the container, which would otherwise keep
+        running, keep the owner's graphics card busy and keep the customer's code alive with nobody connected. Only names of the exact
+        form ``ccoin-sess-<id>`` are touched (docker's own name filter matches anywhere in a name, so the names are checked again).
+        Returns how many were removed; nothing is removed when Docker cannot be asked."""
+        res = self._run(["docker", "ps", "-a", "--filter", "name=ccoin-sess-", "--format", "{{.Names}}"])
+        if getattr(res, "returncode", 1) != 0:
+            return 0
+        removed = 0
+        for name in (getattr(res, "stdout", "") or "").split():
+            if not self._SESSION_CONTAINER_RE.fullmatch(name) or name[len("ccoin-sess-"):] in self._runs:
+                continue
+            done = self._run(["docker", "rm", "-f", name])
+            if getattr(done, "returncode", 1) == 0:
+                removed += 1
+        if removed:
+            logging.getLogger(__name__).warning("removed %d session container(s) left behind by an earlier run of the agent", removed)
+        return removed
+
     def cleanup_stale(self) -> int:
         """At start: delete rental folders whose container no longer exists (a crashed agent leaves them). Folders of live rentals, and
         anything when Docker cannot be asked, are left alone."""
@@ -636,11 +665,14 @@ class SessionAgent:
         rental = bool(claim.get("rental"))
         monitor: Optional[asyncio.Task] = None
         try:
+            if self._rentals_only and not rental:
+                raise SessionAgentError("this computer only takes container rentals")
             if rental:
                 self._interrupt_events[sid] = interrupts.REGISTRY.register(sid)  # `computecoin-agent pause` stops rentals too
                 await asyncio.to_thread(self.prepare_rental, claim)
             await asyncio.to_thread(self.start_container, claim)
             started = True
+            self._tell_activity("job_started", sid)
             await asyncio.to_thread(self.api.post, f"/{sid}/started")
             if rental:
                 monitor = asyncio.create_task(self._monitor(claim))
@@ -674,6 +706,8 @@ class SessionAgent:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await monitor
             abort = self._aborts.get(sid)
+            if started:
+                self._tell_activity("job_finished", sid, "failed" if (failed or abort) else "succeeded")
             try:
                 await asyncio.to_thread(self.stop_container, claim)
             finally:
@@ -685,6 +719,19 @@ class SessionAgent:
                         # Saved AFTER the session is ended, so the time spent saving is never billed (the upload routes accept it
                         # for the export window). Never after a miner was found, and never when nothing ever started.
                         await asyncio.to_thread(self.finish_rental, claim, bool(started and abort != "miner_detected"))
+
+    def _tell_activity(self, event: str, sid: str, status: str = "") -> None:
+        """Tell the supervisor's counter a rental started or finished. Never raises: a counter must not break a rental."""
+        target = self._activity
+        if target is None:
+            return
+        try:
+            if event == "job_started":
+                target.job_started(sid)
+            else:
+                target.job_finished(sid, status)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("activity report failed: %s", type(exc).__name__)
 
     async def _serve_socket(self, claim: dict[str, Any], static_key: X25519PrivateKey, token: str, deadline: float) -> str:
         sid = str(claim["id"])
@@ -800,6 +847,10 @@ def run_forever(api: SessionApi, executor: DockerExecutor, *, poll_seconds: floa
                 sleeper: Callable[[float], None] = time.sleep, agent: Optional[SessionAgent] = None) -> None:
     agent = agent or SessionAgent(api, executor)
     try:
+        agent.remove_orphan_containers()  # containers a crashed or restarted agent left running (before the folders: a folder is stale once its container is gone)
+    except Exception as exc:  # noqa: BLE001 - housekeeping must never stop the loop
+        logging.getLogger(__name__).warning("orphan container cleanup: %s", type(exc).__name__)
+    try:
         agent.cleanup_stale()  # rental folders a crashed agent left behind
     except Exception as exc:  # noqa: BLE001 - housekeeping must never stop the loop
         logging.getLogger(__name__).warning("rental cleanup: %s", type(exc).__name__)
@@ -839,6 +890,9 @@ def start_background_sessions(
     api: Optional[SessionApi] = None,
     executor: Optional[DockerExecutor] = None,
     run_loop: Optional[Callable[..., None]] = None,
+    rentals_only: bool = False,
+    activity: Any = None,
+    extra_gate: Optional[Callable[[], bool]] = None,
 ) -> Optional["threading.Thread"]:
     """Serve interactive sessions from inside ``computecoin-agent start``, in a background thread. Returns the thread, or None when sessions
     are not served here (turned off in the settings, a Windows host, or no usable container engine).
@@ -868,13 +922,15 @@ def start_background_sessions(
             return False
         if owner is not None and owner.availability() != "online":
             return False
+        if extra_gate is not None and not extra_gate():
+            return False  # a supervisor's drain, stop or "not online" (the Windows runner)
         return True
 
     # The per-session scratch folder follows the host's `work_dir` setting (default /tmp). A container engine that runs in a virtual
     # machine (Docker Desktop) cannot see /tmp, so its host points `work_dir` at a folder the engine can share.
     work_dir = getattr(config, "work_dir", None)
     agent = SessionAgent(api, executor, rental=RentalSettings.from_config(config), thermal_guard=thermal_guard, claim_gate=gate,
-                         workdir=work_dir if isinstance(work_dir, str) and work_dir else "/tmp")
+                         rentals_only=rentals_only, activity=activity, workdir=work_dir if isinstance(work_dir, str) and work_dir else "/tmp")
     loop = run_loop or run_forever
 
     def target() -> None:

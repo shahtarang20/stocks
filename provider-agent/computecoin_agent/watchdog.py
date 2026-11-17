@@ -36,8 +36,9 @@ logger = logging.getLogger(__name__)
 
 #: Containers the agent starts for customers' work: jobs, sessions, services, and the egress proxy of a job.
 CONTAINER_PREFIXES = ("ccoin-job-", "ccoin-sess-", "ccoin-proxy-", "cc-svc-")
-#: What a restarting ``start`` clears. Sessions and services are NOT here: the separate ``sessions`` command owns the
-#: ccoin-sess- containers and may be running right now. (The heat watchdog still removes all of them: that is an emergency.)
+#: What a restarting ``start`` clears. Sessions and services are NOT here: the session service clears its OWN leftovers when it starts
+#: (``SessionAgent.remove_orphan_containers``), and a Windows supervisor removes them when it kills the runner. (The heat watchdog still
+#: removes all of them: that is an emergency.)
 STARTUP_REAP_PREFIXES = ("ccoin-job-", "ccoin-proxy-")
 NETWORK_PREFIX = "ccoin-net-"
 _ID_RE = re.compile(r"^[0-9a-f]{12,64}$")

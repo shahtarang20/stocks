@@ -203,6 +203,11 @@ def work(
     control_allow_private: bool = typer.Option(
         False, "--control-allow-private", help="Allow HOST to be a private address (the WSL2 distro address) instead of loopback.",
     ),
+    serve_rentals: bool = typer.Option(
+        False, "--serve-rentals",
+        help="Also serve container rentals (the customer's own image) from this runner, and nothing else. Used by the Windows "
+             "supervisor for a host that opted in; the supervisor's start, drain and stop apply to rentals too. EXPERIMENTAL.",
+    ),
 ) -> None:
     """Run the claim -> execute -> result loop.
 
@@ -260,11 +265,31 @@ def work(
     else:
         thermal_guard = ThermalGuard.from_config(config)  # B6: no new claim while the GPU is at its temperature cap
 
+    if serve_rentals:
+        _serve_rentals_from_runner(config, thermal_guard, control, typer.echo)
+
     try:
         _work_poll(base_url, config, n, interval, _emit, private_tier, thermal_guard, control)
     finally:
         if control_server is not None:
             control_server.close()
+
+
+def _serve_rentals_from_runner(config, thermal_guard, control, emit) -> None:
+    """Start the rentals-only session service next to the job loop (the Windows runner). The flag itself is the host's opt-in (the
+    supervisor passes it only when the host turned rental on), so rental is switched on for this process. Rentals count as running jobs
+    for the supervisor, and are claimed only while it allows claims (started, not draining, online)."""
+    from .session_agent import start_background_sessions
+
+    rental_config = config.model_copy(update={"allow_container_rental": True})
+    thread = start_background_sessions(
+        rental_config,
+        thermal_guard=thermal_guard,
+        rentals_only=True,
+        activity=control,
+        extra_gate=control.may_claim if control is not None else None,
+    )
+    emit("container rental: serving rentals only" if thread is not None else "container rental: not started (no usable container engine)")
 
 
 def _work_poll(base_url, config, n, interval, _emit, private_tier, thermal_guard, control) -> None:
@@ -324,6 +349,9 @@ def rental(
         typer.echo("Say 'on', 'off', 'status' or 'check'.")
         raise typer.Exit(code=2)
     from .config import update_config_file
+    from .platform import PLATFORM_WINDOWS, get_platform
+
+    on_windows = get_platform().name == PLATFORM_WINDOWS  # EXPERIMENTAL: the rental runs inside the managed Linux system
 
     if action == "check":
         from .rental import RentalSettings
@@ -333,8 +361,16 @@ def rental(
             typer.echo("That image name is not valid.")
             raise typer.Exit(code=2)
         config = AgentConfig.load()
-        settings = RentalSettings.from_config(config)
         typer.echo("Checking this computer for container rental (the first run may pull a small image; this can take a few minutes)...\n")
+        if on_windows:
+            from .windows.rental_check_windows import default_wsl, run_windows_checks
+
+            code, text = summarize(run_windows_checks(
+                rental_on=config.allow_container_rental is True, windows_switch_on=config.windows_rental_enabled is True,
+                wsl=default_wsl(), image=image, egress_proxy_image=config.egress_proxy_image))
+            typer.echo(text)
+            raise typer.Exit(code=code)
+        settings = RentalSettings.from_config(config)
         code, text = summarize(run_checks(allowed=settings.allowed, root=settings.root, image=image,
                                           egress_proxy_image=config.egress_proxy_image))
         typer.echo(text)
@@ -342,6 +378,12 @@ def rental(
 
     if action == "status":
         config = AgentConfig.load()
+        if on_windows:
+            both = config.allow_container_rental is True and config.windows_rental_enabled is True
+            typer.echo(f"container rental (Windows, experimental): {'ON' if both else 'off'}"
+                       f" | opted in: {'yes' if config.allow_container_rental is True else 'no'}"
+                       f" | Windows switch: {'yes' if config.windows_rental_enabled is True else 'no'}")
+            return
         typer.echo(f"container rental: {'ON' if config.allow_container_rental is True else 'off'}"
                    f" | serving interactive sessions: {'yes' if config.serve_sessions else 'no'}")
         return
@@ -351,12 +393,21 @@ def rental(
             "It shares this computer's kernel, so it is weaker protection than Kits. Customers are told not to use private data, and the\n"
             "workspace is deleted when a rental ends. Use a computer that holds nothing you cannot afford to lose."
         )
+    updates: dict[str, bool] = {"allow_container_rental": action == "on"}
+    if on_windows:
+        updates["windows_rental_enabled"] = action == "on"  # both switches move together; either one off keeps rentals off
+        if action == "on":
+            typer.echo(
+                "On Windows this is EXPERIMENTAL: customers' containers run inside the ComputeCoin Linux system (WSL2). Run\n"
+                "'computecoin-agent rental check' first; it also proves your Windows C: drive is hidden from that system."
+            )
     try:
-        path = update_config_file({"allow_container_rental": action == "on"})
+        path = update_config_file(updates)
     except ValueError as exc:
         typer.echo(f"Could not change the setting: {exc}")
         raise typer.Exit(code=1)
-    typer.echo(f"container rental is now {'ON' if action == 'on' else 'off'} (saved in {path}). Restart the agent for it to take effect.")
+    restart = "Restart the agent service (in an administrator PowerShell: Restart-Service ComputeCoinAgent)" if on_windows else "Restart the agent"
+    typer.echo(f"container rental is now {'ON' if action == 'on' else 'off'} (saved in {path}). {restart} for it to take effect.")
 
 
 @app.command()

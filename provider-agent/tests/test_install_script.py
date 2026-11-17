@@ -286,15 +286,25 @@ def test_without_root_a_real_run_stops_at_once_and_a_dry_run_does_not(ready):
     assert ready.run("--dry-run", "--token", TOKEN, "--server", SERVER).returncode == 0
 
 
-def test_both_graphics_brands_are_refused_unless_the_host_chooses(ready):
-    ready.kfd.write_text("")  # an AMD compute device AND an NVIDIA card
-    done = ready.run("--dry-run")
-    assert done.returncode == 1 and "both an NVIDIA and an AMD" in out(done) and "--gpu-vendor nvidia" in out(done)
+def test_both_graphics_brands_pick_the_nvidia_card_and_say_so_unless_the_host_chooses(ready):
+    ready.kfd.write_text("")  # an AMD compute device AND an NVIDIA card (a gaming laptop with an AMD processor)
+    done = ready.run("--dry-run", "--token", TOKEN, "--server", SERVER)
+    assert done.returncode == 0, out(done)
+    assert "both an NVIDIA and an AMD" in out(done) and "Using the NVIDIA card" in out(done) and "--gpu-vendor amd" in out(done)
+    assert "Graphics card: NVIDIA" in out(done) and "Environment=COMPUTECOIN_GPU_VENDOR=nvidia" in out(done)  # and the choice reaches the agent
     chosen = ready.run("--dry-run", "--gpu-vendor", "nvidia", "--token", TOKEN, "--server", SERVER)
     assert chosen.returncode == 0 and "Graphics card: NVIDIA" in out(chosen)
     assert "Environment=COMPUTECOIN_GPU_VENDOR=nvidia" in out(chosen)
+    assert "Using the NVIDIA card" not in out(chosen)  # no warning when the host chose
     amd = ready.run("--dry-run", "--gpu-vendor", "amd")
     assert amd.returncode == 0 and "Graphics card: AMD" in out(amd) and "amdsmi" in out(amd)
+    assert "Using the NVIDIA card" not in out(amd)  # an explicit AMD choice is never overridden
+
+
+def test_an_nvidia_only_computer_is_not_warned_about_two_brands(ready):
+    ready.kfd.unlink(missing_ok=True)
+    nvidia_only = ready.run("--dry-run", "--token", TOKEN, "--server", SERVER)
+    assert nvidia_only.returncode == 0 and "Graphics card: NVIDIA" in out(nvidia_only) and "both an NVIDIA and an AMD" not in out(nvidia_only)
 
 
 def test_no_graphics_card_is_a_warning_not_a_failure(box):

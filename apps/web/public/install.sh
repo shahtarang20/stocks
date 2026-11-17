@@ -321,7 +321,12 @@ preflight() {
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1 </dev/null; then GPU="nvidia"; fi
   if [ -e "$KFD_PATH" ]; then
     if [ "$GPU" = "nvidia" ]; then
-      [ -n "$GPU_VENDOR" ] || die "this computer shows both an NVIDIA and an AMD graphics device. Computecoin allows one brand per computer. If you use the NVIDIA card (an AMD processor's built-in graphics can look like this), run again with --gpu-vendor nvidia; for the AMD card use --gpu-vendor amd."
+      if [ -z "$GPU_VENDOR" ]; then
+        # A gaming laptop with an AMD processor and an NVIDIA card shows both. Container rental and most jobs need the NVIDIA card, so take it
+        # and say so; the host can still choose the AMD card with --gpu-vendor amd. (The agent refuses an unchosen mix, so the choice is passed on.)
+        GPU_VENDOR="nvidia"
+        warn "this computer shows both an NVIDIA and an AMD graphics device (an AMD processor's built-in graphics can look like this). Using the NVIDIA card. If you mean the AMD card instead, run again with --gpu-vendor amd."
+      fi
     else
       GPU="amd"
     fi

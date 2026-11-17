@@ -65,7 +65,7 @@ def test_the_files_it_uses_exist():
 
 def test_it_checks_what_a_runner_can_check_and_says_what_it_cannot():
     run = _run_text()
-    for needed in ("import computecoin_agent, win32serviceutil", "requirements_check --json", "-ne 3", "'/a'", "LicenseAccepted=1",
+    for needed in ("import computecoin_agent, win32serviceutil", "requirements_check", "'--json'", "-ne 3", "'/a'", "LicenseAccepted=1",
                    "left the program folder behind", "left the service behind"):
         assert needed in run, needed
     assert "cannot prove" in TEXT.lower() or "cannot prove: wsl2" in TEXT.lower()
@@ -73,7 +73,10 @@ def test_it_checks_what_a_runner_can_check_and_says_what_it_cannot():
 
 def test_a_failing_step_puts_its_reason_where_anyone_can_read_it():
     run = _run_text()
-    assert run.count("trap {") >= 4 and "::error" in run
+    assert run.count("trap {") >= 3 and "::error" in run
+    # the payload check annotates every stage (notice) and any failure (error), because job logs need a login to read
+    assert "Annotate 'error' 'Payload check failed'" in run and run.count("Annotate 'notice'") >= 3
+    assert "exit 0" in run  # the requirements checker's expected "not met" (3) must not become the step's own exit code
     last = [s for s in STEPS if s.get("if") == "failure()"]
     assert last and "msi-*.log" in last[0]["run"]
 

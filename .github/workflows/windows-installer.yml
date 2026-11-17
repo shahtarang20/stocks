@@ -81,20 +81,43 @@ jobs:
 
       - name: The portable Python can import the agent and pywin32, and the requirements checker runs under it
         run: |
-          trap { Write-Host "::error title=Payload check failed::$($_.Exception.Message)"; exit 1 }
-          $ErrorActionPreference = 'Stop'
-          $py = Join-Path $env:PAYLOAD 'python\python.exe'
-          $out = & $py -I -c "import computecoin_agent, win32serviceutil, win32api, win32crypt, pywintypes; print('imports ok', computecoin_agent.__version__)" 2>&1 | Out-String
-          Write-Host $out
-          if ($LASTEXITCODE -ne 0) { throw ('The portable Python cannot import the agent and pywin32: ' + (($out.Trim() -split "`n") | Select-Object -Last 1).Trim()) }
-          & $py -I -m computecoin_agent --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw 'computecoin-agent --help failed under the portable Python.' }
-          # A hosted runner has no WSL2 GPU, so "a requirement is not met" (exit code 3) is the RIGHT answer, and its report must be readable JSON.
-          $report = & $py -I -m computecoin_agent.windows.runtime.requirements_check --json --install-dir (Join-Path $env:RUNNER_TEMP 'cc-data') 2>&1 | Out-String
-          $code = $LASTEXITCODE
-          Write-Host $report
-          if ($code -ne 3) { throw "The requirements checker exited with $code on a runner without a GPU; it should say 'not met' (3)." }
-          $null = $report | ConvertFrom-Json
+          # Job logs need a login to read; annotations do not. So every stage says what it saw as an annotation, and a failure names its stage.
+          function Annotate([string]$Level, [string]$Title, [string]$Text) {
+            $t = ($Text -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A')
+            if ($t.Length -gt 1800) { $t = $t.Substring(0, 1800) + '...' }
+            Write-Host "::$Level title=$Title::$t"
+          }
+          function Run-Python([string[]]$PyArgs) {
+            # Runs the portable Python and returns @{ Code; Text } without letting its error text end the script.
+            $previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+              $text = & $py @PyArgs 2>&1 | Out-String
+              return @{ Code = $LASTEXITCODE; Text = $text.Trim() }
+            }
+            catch { return @{ Code = 127; Text = $_.Exception.Message } }
+            finally { $ErrorActionPreference = $previous }
+          }
+          $failed = $null
+          try {
+            $py = Join-Path $env:PAYLOAD 'python\python.exe'
+            if (-not (Test-Path -LiteralPath $py)) { throw "python.exe is not in the payload: $py" }
+            $r = Run-Python @('-I', '-c', "import computecoin_agent, win32serviceutil, win32api, win32crypt, pywintypes; print('imports ok', computecoin_agent.__version__)")
+            Annotate 'notice' 'Stage 1 imports' ("exit $($r.Code): " + $r.Text)
+            if ($r.Code -ne 0) { throw ('The portable Python cannot import the agent and pywin32: ' + (($r.Text -split "`n") | Select-Object -Last 1).Trim()) }
+            $r = Run-Python @('-I', '-m', 'computecoin_agent', '--help')
+            Annotate 'notice' 'Stage 2 agent help' ("exit $($r.Code): " + $r.Text)
+            if ($r.Code -ne 0) { throw 'computecoin-agent --help failed under the portable Python.' }
+            # A hosted runner has no WSL2 GPU, so "a requirement is not met" (exit code 3) is the RIGHT answer, and its report must be readable JSON.
+            $r = Run-Python @('-I', '-m', 'computecoin_agent.windows.runtime.requirements_check', '--json', '--install-dir', (Join-Path $env:RUNNER_TEMP 'cc-data'))
+            Annotate 'notice' 'Stage 3 requirements checker' ("exit $($r.Code): " + $r.Text)
+            if ($r.Code -ne 3) { throw "The requirements checker exited with $($r.Code) on a runner without a GPU; it should say 'not met' (3)." }
+            $null = $r.Text | ConvertFrom-Json
+          }
+          catch { $failed = $_.Exception.Message }
+          if ($failed) { Annotate 'error' 'Payload check failed' $failed; exit 1 }
+          $global:LASTEXITCODE = 0   # the checker's "not met" (3) is the expected answer here, not a failure of this step
+          exit 0
 
       - name: Install WiX
         run: |

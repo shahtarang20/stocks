@@ -54,7 +54,12 @@ if you also use WSL for other things, check that file and the Windows user that 
 
 ## 4. Enrol
 
-Create a setup token on the website (**Provider, Add my computer**). It is a one-time code that lasts 1 hour. Then, in an **administrator** PowerShell:
+Create a setup token on the website (**Provider, Add my computer**). It is a one-time code that lasts 1 hour. The page asks "which one are you?" the first time
+(one computer, a server, or many machines) and remembers the answer in your browser only. **One computer** opens the guided view: five steps (pick the computer type, turn on
+hosting, install and connect, set a price, live), each with one big button, and each ticking itself from what the server reports. **Server** and **many machines** open the full
+page with every command; the switch at the top changes view at any time. The page preselects Linux or Windows from your browser as a hint (a Mac is called unsupported;
+you can still pick the computer you really want to share). On Windows the button **Create token and copy the install command** waits until the installer is published and
+you have ticked that you read what it does, then copies one PowerShell block with the token in it. Or by hand, in an **administrator** PowerShell:
 
 ```powershell
 computecoin-agent service enroll --server https://api.computecoin.example --token <your-token>

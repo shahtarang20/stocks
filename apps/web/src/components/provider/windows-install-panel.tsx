@@ -22,6 +22,10 @@ export function WindowsInstallPanel({
   token,
   allowRental,
   onAllowRentalChange,
+  consented: consentedProp,
+  onConsentedChange,
+  oneClick,
+  title = "3c. Install and connect (Windows 11, experimental)",
 }: {
   msiUrl?: string | null;
   sha256?: string | null;
@@ -29,14 +33,23 @@ export function WindowsInstallPanel({
   token?: string | null;
   allowRental: boolean;
   onAllowRentalChange: (value: boolean) => void;
+  /** The "I have read this" tick. Give both to let the page hold it (the one-click button needs it); leave out to keep it inside. */
+  consented?: boolean;
+  onConsentedChange?: (value: boolean) => void;
+  /** The one-click button block, shown under the consent tick. */
+  oneClick?: React.ReactNode;
+  title?: string;
 }) {
-  const [consented, setConsented] = useState(false);
+  const [ownConsent, setOwnConsent] = useState(false);
+  const controlled = consentedProp !== undefined && onConsentedChange !== undefined;
+  const consented = controlled ? consentedProp : ownConsent;
+  const setConsented = controlled ? onConsentedChange : setOwnConsent;
   const published = isWindowsInstallerPublished({ msiUrl, sha256 });
   const prompt = consented ? buildWindowsInstallCommand({ msiUrl, sha256, server, allowRental }) : null;
   const withToken = consented && token ? buildWindowsInstallCommand({ msiUrl, sha256, server, allowRental, token }) : null;
   return (
     <div className="space-y-3" data-testid="windows-install">
-      <h3 className="text-sm font-semibold">3c. Install and connect (Windows 11, experimental)</h3>
+      <h3 className="text-sm font-semibold">{title}</h3>
       <p className="flex items-start gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm">
         <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <span>
@@ -82,6 +95,7 @@ export function WindowsInstallPanel({
             <input type="checkbox" className="mt-1" checked={consented} onChange={(e) => setConsented(e.target.checked)} />
             <span className="font-medium">I have read this, and I am allowed to share this computer.</span>
           </label>
+          {oneClick}
           {!consented ? (
             <p className="text-xs text-muted-foreground">Tick the box above to see the command.</p>
           ) : prompt ? (
@@ -91,7 +105,7 @@ export function WindowsInstallPanel({
                 It asks for your setup token with your typing hidden: paste the token you created in step 3b. When it finishes, open{" "}
                 <strong className="font-medium text-foreground">My computers</strong>: the first start sets up the Linux system and can take several minutes.
               </p>
-              {withToken ? (
+              {withToken && !oneClick ? (
                 <CopyField label="The same, with your token already in it (do not share it)" value={withToken} />
               ) : null}
             </div>

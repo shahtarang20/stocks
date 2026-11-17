@@ -36,6 +36,7 @@ vi.mock("@/lib/auth-context", () => ({
 
 beforeEach(() => {
   cleanup();
+  window.localStorage.clear();
   // No network in unit tests: every request stays pending.
   vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
 });
@@ -56,7 +57,15 @@ describe("axe: zero serious or critical violations", () => {
   it("marketplace", () => check(() => import("@/app/(marketing)/marketplace/gpus/page")));
   it("provider hardware", () => check(() => import("@/app/provider/hardware/page")));
   it("provider usage", () => check(() => import("@/app/provider/usage/page")));
-  it("provider setup guide", () => check(() => import("@/app/provider/onboarding/page")));
+  it("provider setup guide (asking which one you are)", () => check(() => import("@/app/provider/onboarding/page")));
+  it("provider setup guide (Easy, step by step)", () => {
+    window.localStorage.setItem("computecoin.host-setup", JSON.stringify({ persona: "one_pc", mode: "easy" }));
+    return check(() => import("@/app/provider/onboarding/page"));
+  });
+  it("provider setup guide (Advanced, every command)", () => {
+    window.localStorage.setItem("computecoin.host-setup", JSON.stringify({ persona: "server", mode: "advanced" }));
+    return check(() => import("@/app/provider/onboarding/page"));
+  });
   it("help and glossary", () => check(() => import("@/app/(marketing)/help/page")));
   it("become a host (marketing)", () => check(() => import("@/app/(marketing)/providers/page")));
   it("what you can do", () => check(() => import("@/app/(marketing)/what-you-can-do/page")));

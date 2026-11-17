@@ -14,6 +14,7 @@ const TOKEN = "enr_FAKE-TEST_FAKE-TEST_FAKE-TEST_FAKE-TEST"; // gitleaks:allow
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
 beforeEach(() => {
+  window.localStorage.setItem("computecoin.host-setup", JSON.stringify({ persona: "server", mode: "advanced" })); // these tests are about the full page
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/provider/enrollment-tokens") && init?.method === "POST") {
@@ -39,7 +40,7 @@ describe("host setup page: a new setup token", () => {
   it("replaces the placeholder in step 3c as soon as the token is created", async () => {
     renderPage();
     expect(screen.getByText(/Create a token in step 3b first/)).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: /Create setup token/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Create setup token/ }, { timeout: 5000 })); // generous: the whole suite runs in parallel
     await waitFor(() => expect(screen.queryByText(/Create a token in step 3b first/)).toBeNull());
     expect(document.body.textContent).toContain(TOKEN);
     expect(screen.queryByText(/^curl -fsSL .*--token PASTE_YOUR_TOKEN_HERE/)).toBeNull();

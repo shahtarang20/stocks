@@ -10,6 +10,7 @@ import OnboardingPage from "./page";
 
 beforeEach(() => {
   cleanup();
+  window.localStorage.setItem("computecoin.host-setup", JSON.stringify({ persona: "server", mode: "advanced" })); // these tests are about the full page
   vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
 });
 

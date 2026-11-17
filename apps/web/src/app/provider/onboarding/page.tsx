@@ -35,6 +35,9 @@ import { HelpTip } from "@/components/ui/help-tip";
 import { MachineStatusBadge } from "@/components/provider/machine-status-badge";
 import { HostRentalGuide } from "@/components/provider/host-rental-guide";
 import { WindowsInstallPanel } from "@/components/provider/windows-install-panel";
+import { OneClickInstall } from "@/components/provider/one-click-install";
+import { HostWizard } from "@/components/provider/host-wizard";
+import { ModeBar, PersonaCards } from "@/components/provider/host-persona";
 import {
   Dialog,
   DialogContent,
@@ -66,6 +69,19 @@ import { RelativeTime } from "@/components/console/bits";
 import { useToast } from "@/components/console/toast";
 import { formatDateTime } from "@/lib/format";
 import { buildInstallCommand, buildOneClickInstallCommand, buildUnattendedInstallCommand, uninstallCommand } from "@/lib/install-command";
+import { buildWindowsInstallCommand, isWindowsInstallerPublished } from "@/lib/windows-install-command";
+import {
+  defaultModeFor,
+  detectComputerKind,
+  readPrefs,
+  rentalLine,
+  wizardSteps,
+  writePrefs,
+  type ComputerKind,
+  type Persona,
+  type SetupMode,
+  type SetupPrefs,
+} from "@/lib/host-setup";
 
 const TOKEN_STATUS_VARIANT: Record<
   EnrollmentTokenStatus,
@@ -159,7 +175,17 @@ export default function ProviderOnboardingPage() {
   // Ticked: the one-line install also turns container rental on (and tests the computer). Off unless the host asks.
   const [allowRental, setAllowRental] = useState(false);
   // Which kind of computer the install step is for. Linux is the default and the recommended choice; Windows is experimental.
-  const [platform, setPlatform] = useState<"linux" | "windows">("linux");
+  // The browser's own guess (a hint only) and what the host picked. The host's pick always wins.
+  const [detected, setDetected] = useState<ComputerKind>("linux");
+  const [picked, setPicked] = useState<"linux" | "windows" | null>(null);
+  const platform: "linux" | "windows" = picked ?? (detected === "windows" ? "windows" : "linux");
+  const kind: ComputerKind = picked ?? detected;
+  const setPlatform = setPicked;
+  // The Windows "I have read this" tick lives here so the one-click button can wait for it.
+  const [windowsConsented, setWindowsConsented] = useState(false);
+  // What the host chose last time (null: ask). `ready` is false until the browser's own storage has been read.
+  const [prefs, setPrefs] = useState<SetupPrefs | null>(null);
+  const [ready, setReady] = useState(false);
   // The one-click button: create a token, then copy one finished line that carries it.
   const [pendingCopy, setPendingCopy] = useState(false);
   const [oneClickNote, setOneClickNote] = useState<"copied" | "manual" | null>(null);
@@ -227,7 +253,21 @@ export default function ProviderOnboardingPage() {
   const [origin, setOrigin] = useState<string | null>(null);
   useEffect(() => {
     setOrigin(window.location.origin);
+    setDetected(detectComputerKind(window.navigator.userAgent));
+    setPrefs(readPrefs());
+    setReady(true);
   }, []);
+  const choosePersona = (persona: Persona) => {
+    const next: SetupPrefs = { persona, mode: defaultModeFor(persona) };
+    setPrefs(next);
+    writePrefs(next);
+  };
+  const chooseMode = (mode: SetupMode) => {
+    if (!prefs) return;
+    const next: SetupPrefs = { persona: prefs.persona, mode };
+    setPrefs(next);
+    writePrefs(next);
+  };
   const commandInput = {
     origin,
     server: API_BASE_URL,
@@ -238,7 +278,32 @@ export default function ProviderOnboardingPage() {
   // The pasted line has no token in it: the installer asks for it with typing hidden, so it never shows in the list of
   // running programs. The unattended form (token inside) is only for scripts that cannot answer a prompt.
   const installCommand = buildInstallCommand(commandInput);
-  const oneClickCommand = buildOneClickInstallCommand(commandInput);
+  const windowsMsiUrl = process.env.NEXT_PUBLIC_WINDOWS_AGENT_MSI_URL;
+  const windowsSha256 = process.env.NEXT_PUBLIC_WINDOWS_AGENT_MSI_SHA256;
+  const windowsPublished = isWindowsInstallerPublished({ msiUrl: windowsMsiUrl, sha256: windowsSha256 });
+  // Windows: the finished block exists only once the installer is published, the person has read what it does, and a token exists.
+  const oneClickCommand =
+    platform === "windows"
+      ? newToken && windowsConsented
+        ? buildWindowsInstallCommand({ msiUrl: windowsMsiUrl, sha256: windowsSha256, server: API_BASE_URL, allowRental, token: newToken.enrollment_token })
+        : null
+      : buildOneClickInstallCommand(commandInput);
+  const pressOneClick = () => {
+    if (oneClickCommand) {
+      copyOneClick(oneClickCommand);
+    } else {
+      setOneClickNote(null);
+      setPendingCopy(true);
+      if (!createMut.isPending) createMut.mutate();
+    }
+  };
+  const oneClickDisabledReason = !isProvider
+    ? "Finish step 3a first."
+    : platform === "windows" && !windowsPublished
+      ? "The Windows installer is not published yet."
+      : platform === "windows" && !windowsConsented
+        ? "Tick \"I have read this\" above first."
+        : null;
   const copyOneClick = (command: string) => {
     const done = navigator.clipboard?.writeText(command);
     if (!done) return setOneClickNote("manual");
@@ -253,11 +318,63 @@ export default function ProviderOnboardingPage() {
   const unattendedCommand = buildUnattendedInstallCommand(commandInput);
   const removeCommand = uninstallCommand(origin);
 
+  const windowsOneClick = (
+    <OneClickInstall
+      intro="Press the button. It creates a setup token and copies one finished PowerShell block that already has the token in it. Open PowerShell as administrator on the Windows 11 computer you want to share and paste it. Nothing else is asked."
+      command={oneClickCommand}
+      pending={createMut.isPending}
+      note={oneClickNote}
+      disabledReason={oneClickDisabledReason}
+      onPress={pressOneClick}
+      commandLabel="One-click install block (it has your token in it, so do not share it)"
+    />
+  );
+
+  // The Easy view: five steps that tick themselves from what the server reports.
+  const steps = wizardSteps({ kind, isProvider, windowsInstallerReady: windowsPublished, machines });
+  const easyInstall =
+    platform === "windows" ? (
+      <WindowsInstallPanel
+        msiUrl={windowsMsiUrl}
+        sha256={windowsSha256}
+        server={API_BASE_URL}
+        token={newToken?.enrollment_token}
+        allowRental={allowRental}
+        onAllowRentalChange={setAllowRental}
+        consented={windowsConsented}
+        onConsentedChange={setWindowsConsented}
+        oneClick={windowsOneClick}
+        title="Windows 11 (experimental)"
+      />
+    ) : (
+      <OneClickInstall
+        intro="Press the button. It creates a one-time setup token and copies one line that has it in. Open a terminal on the computer you want to share, paste the line, press Enter and type your password when asked."
+        command={oneClickCommand}
+        pending={createMut.isPending}
+        note={oneClickNote}
+        disabledReason={oneClickDisabledReason}
+        onPress={pressOneClick}
+      />
+    );
+  const easyRentalBox =
+    platform === "linux" ? (
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={allowRental} onChange={(e) => setAllowRental(e.target.checked)} />
+        <span className="font-medium">Also let customers run their own code on this computer (container rental)</span>
+      </label>
+    ) : null;
+  const easy = ready && prefs?.mode === "easy";
+  const advanced = ready && prefs?.mode === "advanced";
+
   return (
     <>
       <ConsolePageHeader
         title="Add my computer"
-        description="Six steps to share your computer on ComputeCoin, plus one optional step to let customers run their own code. Do them in order. You can come back to this page at any time."
+        description={
+          easy
+            ? "We guide you one step at a time. Each step ticks itself when it is done. You can come back to this page at any time."
+            : "Six steps to share your computer on ComputeCoin, plus one optional step to let customers run their own code. Do them in order. You can come back to this page at any time."
+        }
         action={
           <Button asChild variant="outline">
             <Link href="/help">Help and glossary</Link>
@@ -284,6 +401,28 @@ export default function ProviderOnboardingPage() {
           </div>
         </div>
 
+        {ready && !prefs ? <PersonaCards onPick={choosePersona} /> : null}
+        {prefs ? <ModeBar persona={prefs.persona} mode={prefs.mode} onMode={chooseMode} onChangePersona={() => setPrefs(null)} /> : null}
+        {easy ? (
+          <HostWizard
+            steps={steps}
+            detected={detected}
+            kind={kind}
+            onPickKind={setPicked}
+            checking={isProvider && machinesQuery.isLoading}
+            onBecomeHost={() => registerMut.mutate()}
+            becomingHost={registerMut.isPending}
+            becomeHostError={
+              registerMut.isError ? (
+                <ErrorNote error={registerMut.error} fallback="We could not turn on hosting. Check your internet connection and try again." />
+              ) : null
+            }
+            installSlot={easyInstall}
+            rentalBox={easyRentalBox}
+            rentalLine={allowRental ? rentalLine(machines, true) : null}
+          />
+        ) : null}
+        {advanced ? (<>
         {/* ---------------------------------------------------------------- */}
         {/* Step 1 — Check your computer                                      */}
         {/* ---------------------------------------------------------------- */}
@@ -662,12 +801,15 @@ sudo usermod -aG render,video $USER`}
             {/* 3c: run enroll */}
             {platform === "windows" ? (
               <WindowsInstallPanel
-                msiUrl={process.env.NEXT_PUBLIC_WINDOWS_AGENT_MSI_URL}
-                sha256={process.env.NEXT_PUBLIC_WINDOWS_AGENT_MSI_SHA256}
+                msiUrl={windowsMsiUrl}
+                sha256={windowsSha256}
                 server={API_BASE_URL}
                 token={newToken?.enrollment_token}
                 allowRental={allowRental}
                 onAllowRentalChange={setAllowRental}
+                consented={windowsConsented}
+                onConsentedChange={setWindowsConsented}
+                oneClick={windowsOneClick}
               />
             ) : (
             <div className="space-y-3">
@@ -694,49 +836,14 @@ sudo usermod -aG render,video $USER`}
                   code&rdquo; first. You can turn it off any time.
                 </p>
               </div>
-              <div className="space-y-2 rounded-md border border-border bg-surface-2/40 p-3" data-testid="one-click">
-                <p className="text-sm">
-                  <span className="font-medium">Easiest.</span>{" "}
-                  <span className="text-muted-foreground">
-                    Press the button. It creates a setup token and copies one finished line that already has the token in it. Paste it in a
-                    terminal on the computer you want to share and type your password when asked. Nothing else is asked.
-                  </span>
-                </p>
-                <Button
-                  type="button"
-                  disabled={!isProvider || createMut.isPending}
-                  onClick={() => {
-                    if (oneClickCommand) {
-                      copyOneClick(oneClickCommand);
-                    } else {
-                      setOneClickNote(null);
-                      setPendingCopy(true);
-                      if (!createMut.isPending) createMut.mutate();
-                    }
-                  }}
-                >
-                  {createMut.isPending ? (
-                    <>
-                      <Loader2 className="animate-spin" /> Creating…
-                    </>
-                  ) : oneClickCommand ? (
-                    "Copy the install command again"
-                  ) : (
-                    "Create token and copy the install command"
-                  )}
-                </Button>
-                {!isProvider ? <p className="text-xs text-muted-foreground">Finish step 3a first.</p> : null}
-                {oneClickCommand ? (
-                  <div className="space-y-1.5">
-                    {oneClickNote === "copied" ? (
-                      <p role="status" className="text-xs text-success">Copied. Paste it in the terminal now. It works once and stops working in about an hour.</p>
-                    ) : oneClickNote === "manual" ? (
-                      <p role="status" className="text-xs text-warning">Your browser did not let us copy it. Press the copy button below.</p>
-                    ) : null}
-                    <CopyField label="One-click install command (it has your token in it, so do not share it)" value={oneClickCommand} />
-                  </div>
-                ) : null}
-              </div>
+              <OneClickInstall
+                intro="Press the button. It creates a setup token and copies one finished line that already has the token in it. Paste it in a terminal on the computer you want to share and type your password when asked. Nothing else is asked."
+                command={oneClickCommand}
+                pending={createMut.isPending}
+                note={oneClickNote}
+                disabledReason={oneClickDisabledReason}
+                onPress={pressOneClick}
+              />
               {installCommand ? (
                 <CopyField label="Install and connect (Linux)" value={installCommand} />
               ) : (
@@ -1135,6 +1242,7 @@ sudo usermod -aG render,video $USER`}
             </div>
           </CardContent>
         </Card>
+        </>) : null}
       </div>
 
       {/* Cancel-token confirmation dialog. */}

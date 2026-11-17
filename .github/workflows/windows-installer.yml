@@ -62,12 +62,19 @@ jobs:
           $site = Join-Path $pyDir 'Lib\site-packages'
           New-Item -ItemType Directory -Force -Path $site | Out-Null
           python -m pip install --upgrade pip
-          python -m pip install --target $site --no-compile ./provider-agent
-          if ($LASTEXITCODE -ne 0) { throw 'pip could not install the agent into the payload.' }
+          # The [windows] extra brings pywin32 (the Windows service, DPAPI and Credential Manager), NVML and the time zone database.
+          python -m pip install --target $site --no-compile "./provider-agent[windows]"
+          if ($LASTEXITCODE -ne 0) { throw 'pip could not install the agent and its Windows packages into the payload.' }
           # The portable Python reads its search path from python312._pth: add the packages folder, and turn on site so the .pth files pywin32 ships are read.
           $pth = Join-Path $pyDir 'python312._pth'
           $lines = @(Get-Content -LiteralPath $pth | Where-Object { $_ -notmatch '^\s*#?\s*import site\s*$' })
-          Set-Content -LiteralPath $pth -Value ($lines + 'Lib\site-packages' + 'import site') -Encoding ascii
+          # pywin32 keeps its modules in win32, win32\lib and Pythonwin and relies on a .pth file for them: list them here too so nothing depends on
+          # that file being read, and put its two DLLs next to python.exe, where Windows always looks for a program's DLLs.
+          $extra = @('Lib\site-packages\win32', 'Lib\site-packages\win32\lib', 'Lib\site-packages\Pythonwin')
+          Set-Content -LiteralPath $pth -Value ($lines + 'Lib\site-packages' + $extra + 'import site') -Encoding ascii
+          $dlls = Join-Path $site 'pywin32_system32'
+          if (-not (Test-Path -LiteralPath $dlls)) { throw 'pywin32 was not installed into the payload (its pywin32_system32 folder is missing).' }
+          Copy-Item -Path (Join-Path $dlls '*.dll') -Destination $pyDir
           Copy-Item provider-agent/windows/installer/msi_actions.py $payload
           Copy-Item provider-agent/windows/installer/consent.txt $payload
           "PAYLOAD=$payload" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -77,8 +84,9 @@ jobs:
           trap { Write-Host "::error title=Payload check failed::$($_.Exception.Message)"; exit 1 }
           $ErrorActionPreference = 'Stop'
           $py = Join-Path $env:PAYLOAD 'python\python.exe'
-          & $py -I -c "import computecoin_agent, win32serviceutil, win32api, win32crypt, pywintypes; print('imports ok', computecoin_agent.__version__)"
-          if ($LASTEXITCODE -ne 0) { throw 'The portable Python cannot import the agent and pywin32 (see the log).' }
+          $out = & $py -I -c "import computecoin_agent, win32serviceutil, win32api, win32crypt, pywintypes; print('imports ok', computecoin_agent.__version__)" 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw ('The portable Python cannot import the agent and pywin32: ' + (($out.Trim() -split "`n") | Select-Object -Last 1).Trim()) }
           & $py -I -m computecoin_agent --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'computecoin-agent --help failed under the portable Python.' }
           # A hosted runner has no WSL2 GPU, so "a requirement is not met" (exit code 3) is the RIGHT answer, and its report must be readable JSON.

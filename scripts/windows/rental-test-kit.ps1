@@ -12,7 +12,7 @@ param(
     [switch]$SkipRentalCheck
 )
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 
 $Distro = 'computecoin'
 $RunnerUser = 'ccrunner'
@@ -40,6 +40,8 @@ function Invoke-Wsl {
     # Runs wsl.exe with a list of arguments (never a joined string) and returns @{ Code; Text }. WSL_UTF8 makes its own messages UTF-8.
     param([string[]]$Arguments, [int]$TimeoutSeconds = 120)
     $env:WSL_UTF8 = '1'
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'   # text a program writes to its error stream is not a failure of this script
     try {
         $out = & wsl.exe @Arguments 2>&1 | Out-String
         return @{ Code = $LASTEXITCODE; Text = ($out -replace "`0", '').Trim() }
@@ -47,6 +49,22 @@ function Invoke-Wsl {
     catch {
         return @{ Code = 127; Text = $_.Exception.GetType().Name }
     }
+    finally { $ErrorActionPreference = $previous }
+}
+
+function Invoke-Native {
+    # Runs any program with a list of arguments and returns @{ Code; Text }. Never throws.
+    param([string]$Path, [string[]]$Arguments = @())
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Path @Arguments 2>&1 | Out-String
+        return @{ Code = $LASTEXITCODE; Text = $out.Trim() }
+    }
+    catch {
+        return @{ Code = 127; Text = $_.Exception.GetType().Name }
+    }
+    finally { $ErrorActionPreference = $previous }
 }
 
 function Invoke-InDistro {
@@ -101,14 +119,14 @@ else {
 # 6. NVIDIA on Windows
 $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($smi) {
-    $q = & $smi.Source --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0 -and $q.Trim()) {
-        Add-Result PASS 'NVIDIA card (Windows)' ($q.Trim() -replace "`r?`n", '; ')
+    $q = Invoke-Native $smi.Source @('--query-gpu=name,driver_version,memory.total', '--format=csv,noheader')
+    if ($q.Code -eq 0 -and $q.Text) {
+        Add-Result PASS 'NVIDIA card (Windows)' ($q.Text -replace "`r?`n", '; ')
         # NVIDIA: GPU compute in WSL works on GeForce and RTX cards in WDDM mode, not on cards in TCC mode or data-centre cards.
-        $mode = & $smi.Source --query-gpu=driver_model.current --format=csv,noheader 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0 -and $mode.Trim()) {
-            if ($mode -match 'TCC') { Add-Result FAIL 'NVIDIA card mode' ($mode.Trim() -replace "`r?`n", '; ') 'Cards in TCC mode do not work in WSL. Use a GeForce or RTX card in WDDM mode.' }
-            else { Add-Result PASS 'NVIDIA card mode' ($mode.Trim() -replace "`r?`n", '; ') }
+        $mode = Invoke-Native $smi.Source @('--query-gpu=driver_model.current', '--format=csv,noheader')
+        if ($mode.Code -eq 0 -and $mode.Text) {
+            if ($mode.Text -match 'TCC') { Add-Result FAIL 'NVIDIA card mode' ($mode.Text -replace "`r?`n", '; ') 'Cards in TCC mode do not work in WSL. Use a GeForce or RTX card in WDDM mode.' }
+            else { Add-Result PASS 'NVIDIA card mode' ($mode.Text -replace "`r?`n", '; ') }
         }
     }
     else { Add-Result FAIL 'NVIDIA card (Windows)' 'nvidia-smi did not answer.' 'Install the current NVIDIA driver for Windows and restart.' }
@@ -145,16 +163,16 @@ else { Add-Result WARN 'Service' 'the ComputeCoinAgent service is not installed.
 
 $agent = Get-Command computecoin-agent -ErrorAction SilentlyContinue
 if ($agent) {
-    $status = & $agent.Source rental status 2>&1 | Out-String
-    Add-Result INFO 'rental status' $status.Trim()
+    $status = Invoke-Native $agent.Source @('rental', 'status')
+    Add-Result INFO 'rental status' $status.Text
     if (-not $SkipRentalCheck) {
         Add-Line ''
         Add-Line 'Running: computecoin-agent rental check (this can take a few minutes the first time)'
         $argsList = @('rental', 'check')
         if ($Image) { $argsList += @('--image', $Image) }
-        $check = & $agent.Source @argsList 2>&1 | Out-String
-        Add-Line $check.Trim()
-        if ($LASTEXITCODE -eq 0) { Add-Result PASS 'rental check' 'passed.' } else { Add-Result FAIL 'rental check' 'did not pass (see above).' }
+        $check = Invoke-Native $agent.Source $argsList
+        Add-Line $check.Text
+        if ($check.Code -eq 0) { Add-Result PASS 'rental check' 'passed.' } else { Add-Result FAIL 'rental check' 'did not pass (see above).' }
     }
 }
 else { Add-Result WARN 'computecoin-agent' 'was not found on this computer.' 'Open a new PowerShell window after installing the Windows agent.' }

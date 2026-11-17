@@ -59,3 +59,10 @@ def test_it_fails_with_a_nonzero_exit_code_and_writes_a_report():
                                   "Docker (inside)", "NVIDIA card (inside)", "Windows drive hidden", "Windows programs blocked", "rental check"])
 def test_every_check_the_guide_talks_about_is_in_the_kit(name):
     assert f"'{name}'" in TEXT
+
+
+def test_it_stops_on_errors_like_every_script_here_and_runs_programs_without_throwing():
+    assert "$ErrorActionPreference = 'Stop'" in TEXT  # the repository convention (tests/windows checks it)
+    assert "function Invoke-Native" in TEXT
+    # a program's own error output must never end the script: programs go through the helpers, not a bare call
+    assert "& $smi.Source" not in TEXT and "& $agent.Source" not in TEXT

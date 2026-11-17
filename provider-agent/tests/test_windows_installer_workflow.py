@@ -113,3 +113,27 @@ def test_the_secret_check_exempts_only_the_public_certificate_bundle():
 @pytest.mark.parametrize("path", [WORKFLOW, INSTALLER / "build.ps1"])
 def test_the_scripts_are_plain_ascii_so_no_console_code_page_can_misread_them(path):
     assert all(ord(c) < 128 for c in path.read_text(encoding="utf-8")), path.name
+
+
+def test_the_payload_gets_the_windows_packages_not_just_the_agent():
+    # The first real build failed because the agent was installed without its [windows] extra, so pywin32 was missing.
+    assert 'pip install --target $site --no-compile "./provider-agent[windows]"' in TEXT
+    assert "pip install --target $site --no-compile ./provider-agent\n" not in TEXT
+
+
+def test_the_portable_python_can_find_pywin32_without_relying_on_a_pth_file():
+    for folder in (r"Lib\site-packages\win32", r"Lib\site-packages\win32\lib", r"Lib\site-packages\Pythonwin"):
+        assert folder in TEXT
+    assert "pywin32_system32" in TEXT and "*.dll" in TEXT  # its two DLLs go next to python.exe
+    # the search-path file must still end with "import site"
+    assert "$extra + 'import site'" in TEXT
+
+
+def test_a_failed_import_check_names_the_real_error():
+    assert "Select-Object -Last 1" in TEXT  # the last line of the traceback goes into the message
+
+
+def test_the_agent_dev_extra_has_what_the_tests_import():
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    dev = pyproject.split("dev = [", 1)[1].split("]", 1)[0]
+    assert re.search(r'"pyyaml==\d+\.\d+\.\d+"', dev, re.IGNORECASE)

@@ -53,7 +53,7 @@
       <Directory Id="INSTALLFOLDER" Name="ComputeCoin" />
     </StandardDirectory>
 
-    <!-- Everything in the payload folder, with its sub-folders. TODO(verify-docs): the v4 <Files> element and its Include glob. -->
+    <!-- Everything in the payload folder, with its sub-folders. Needs WiX 5: the <Files> element does not exist in 4.x (the first real build with 4.0.5 failed with WIX0005 on it). TODO(verify-docs): its Include glob. -->
     <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">
       <Files Include="$(var.PayloadDir)\**" />
     </ComponentGroup>

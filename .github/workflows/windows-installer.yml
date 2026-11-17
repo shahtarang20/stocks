@@ -38,7 +38,8 @@ jobs:
       # The portable ("embeddable") Python the installer carries. Pinned by version and SHA-256 so the build always uses exactly these bytes.
       PY_EMBED_VERSION: "3.12.8"
       PY_EMBED_SHA256: "8d3f33be9eb810f23c102f08475af2854e50484b8e4e06275e937be61ce3d2fb"
-      WIX_VERSION: "4.0.5"
+      # WiX 5: the <Files> element that gathers the payload folder does not exist in 4.x (the 4.0.5 build said WIX0005, unexpected child element).
+      WIX_VERSION: "5.0.2"
     steps:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false

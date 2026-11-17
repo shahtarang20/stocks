@@ -18,7 +18,7 @@ without a recorded run on a clean Windows VM.
 | Guard glue | `.../governance/integration.py` | `GovernedGuard` plugs into the existing `thermal_guard` slot of `poll_loop` and `heartbeat_loop`. |
 | Updater | `provider-agent/computecoin_agent/updater/` | Signed manifest, Ed25519 verify, rings, download, hash, install, health check, rollback, claim gate. |
 | Release API | `apps/api/app/api/routers/agent_releases.py`, `.../services/agent_releases.py`, migration `0042_agent_releases` | Publish, pause, resume, roll back, assign rings; host manifest route. |
-| MSI source | `provider-agent/windows/installer/Package.wxs` | WiX v4 package. |
+| MSI source | `provider-agent/windows/installer/Package.wxs` | WiX package (schema v4 namespace) built with **WiX 5.0.2**: the `<Files>` element needs WiX 5 (4.0.5 refused it, 2026-11-18). |
 | MSI actions | `provider-agent/windows/installer/msi_actions.py` | Service registration, firewall rule, full cleanup. Standard library only, testable on Linux. |
 | Build and sign | `provider-agent/windows/installer/build.ps1` | consent text to RTF, `wix build`, `signtool sign` and `verify`, SHA-256. |
 | Offline manifest signing | `provider-agent/windows/installer/sign_manifest.py` | Hash the signed MSI, sign the update manifest with the update key. |

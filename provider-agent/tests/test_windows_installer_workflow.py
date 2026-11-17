@@ -34,7 +34,7 @@ def test_it_runs_on_a_real_windows_runner_with_read_only_permissions():
 def test_the_portable_python_and_wix_are_pinned_exactly():
     assert re.fullmatch(r"3\.12\.\d+", ENV["PY_EMBED_VERSION"])
     assert re.fullmatch(r"[0-9a-f]{64}", ENV["PY_EMBED_SHA256"])
-    assert re.fullmatch(r"4\.\d+\.\d+", ENV["WIX_VERSION"])
+    assert re.fullmatch(r"5\.\d+\.\d+", ENV["WIX_VERSION"])  # <Files> needs WiX 5 (4.0.5 refused it: WIX0005)
     assert "python-$($env:PY_EMBED_VERSION)-embed-amd64.zip" in TEXT and "https://www.python.org/ftp/python/" in TEXT
     assert "does not match its pinned SHA-256" in TEXT  # the hash is really compared
 

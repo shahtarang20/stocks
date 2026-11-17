@@ -134,8 +134,20 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $version = (Select-String -Path provider-agent/pyproject.toml -Pattern '^version = "(\d+\.\d+\.\d+)"').Matches[0].Groups[1].Value
           $out = Join-Path $env:RUNNER_TEMP 'msi-out'
-          & provider-agent/windows/installer/build.ps1 -Version $version -PayloadDir $env:PAYLOAD -OutDir $out -Unsigned
-          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
+          # Job logs need a login to read, so the build's own output is kept and its end goes into the failure annotation.
+          $previous = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          $buildOutput = & provider-agent/windows/installer/build.ps1 -Version $version -PayloadDir $env:PAYLOAD -OutDir $out -Unsigned 2>&1 | Out-String
+          $buildCode = $LASTEXITCODE
+          $ErrorActionPreference = $previous
+          Write-Host $buildOutput
+          if ($buildCode -ne 0) {
+            $tail = $buildOutput.Trim()
+            if ($tail.Length -gt 1500) { $tail = $tail.Substring($tail.Length - 1500) }
+            $tail = ($tail -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A')
+            Write-Host "::error title=build.ps1 output (end)::$tail"
+            throw "build.ps1 failed with exit code $buildCode."
+          }
           "MSI_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: The MSI holds the payload, and refuses to install without consent or on an unsupported computer
